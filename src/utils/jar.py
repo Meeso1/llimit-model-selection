@@ -46,7 +46,7 @@ class Jar:
             for f in files
         }
 
-    def _get_latest_file(self, name: str) -> str:
+    def get_latest_file_path(self, name: str) -> str:
         files = self._find_files(name)
         if not files:
             raise KeyError(f"No object named '{name}' found")
@@ -78,7 +78,7 @@ class Jar:
         Returns:
             Any: The loaded object.
         """
-        full_path = self._get_latest_file(name)
+        full_path = self.get_latest_file_path(name)
         with open(full_path, "rb") as f:
             return pickle.load(f)
 
@@ -108,7 +108,7 @@ class Jar:
         Args:
             name (str): The name of the object.
         """
-        full_path = self._get_latest_file(name)
+        full_path = self.get_latest_file_path(name)
         os.remove(full_path)
 
     def remove_all_but_latest(self, name: str) -> None:
@@ -118,7 +118,7 @@ class Jar:
         Args:
             name (str): The name of the object.
         """
-        latest = self._get_latest_file(name)
+        latest = self.get_latest_file_path(name)
         files = self._find_files(name)
         for f in files.keys():
             if f != latest:
