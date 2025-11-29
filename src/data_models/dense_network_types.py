@@ -1,0 +1,41 @@
+from dataclasses import dataclass
+import numpy as np
+
+from src.utils.string_encoder import StringEncoder
+from src.data_models.data_models import OutputData
+
+
+@dataclass
+class PreprocessedPromptPair:
+    """A pair of models compared for a prompt with embeddings and winner label."""
+    prompt_embedding: np.ndarray  # [embedding_dim]
+    model_id_a: int
+    model_id_b: int
+    winner_label: int  # 0 for model_a wins, 1 for model_b wins
+
+
+@dataclass
+class PreprocessedTrainingData:
+    """Training data after preprocessing - contains prompt embeddings, model IDs, and encoder."""
+    pairs: list[PreprocessedPromptPair]
+    embedding_dim: int
+    model_encoder: StringEncoder
+
+
+@dataclass
+class PreprocessedInferenceInput:
+    """Preprocessed input for inference - prompt embeddings and model IDs."""
+    prompt_embeddings: np.ndarray  # [n_prompts, embedding_dim]
+    model_ids: list[int]  # List of model IDs to score
+
+
+@dataclass
+class PromptRoutingOutput(OutputData):
+    """Output of dense network model prediction."""
+    _scores: dict[str, np.ndarray]  # model_name -> scores array [n_prompts]
+    
+    @property
+    def scores(self) -> dict[str, np.ndarray]:
+        """Get scores for each model."""
+        return self._scores
+

@@ -1,2 +1,18 @@
+#### Docs
+
 Use contents of `/docs` directory when implementing changes or researching stuff.
 When implementing a new feature or significantly modifying a module, create or update a short markdown note in `docs/` describing the logic, data structures, and usage. This serves as a reference for future context.
+
+**Important**: When changing the implementation of something that is described in the docs, always update the docs to reflect those changes. This includes:
+- API changes (parameter names, types, return values)
+- Behavior changes (how something works internally)
+- Data structure changes (field names, types, relationships)
+- Usage pattern changes (how to use the feature)
+
+Documentation should always be kept in sync with the actual implementation.
+
+#### Code style
+- When a numpy array or torch tensor is an argument or a return value of a function, please annotate it's shape with a comment, of the following form: `[1, n_samples, 2]`. In case of arguments, it's a good idea to put each argument on a new line so that the comment can follow them. Use similar syntax for lists of those objects. Each argument or returned value should have a single shape (not one or the other) - if that's not the case, it might be a sign to modify the logic so that it is (there are exceptions though: in particular, it's possible that some external methods return different shapes of things).
+- It's a good idea to add those comments to parts of the code where there is a lot of tensor/array manipulation, to track shapes and validate that there are no mismatches, etc.
+- Put all public methods before all private methods in a file/class.
+- Use built-in `list`, `dict`, etc. instead of `List`, `Dict` etc. from `Typing`. Also, use `<type> | None` syntax instead of `Optional`.

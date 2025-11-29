@@ -1,5 +1,7 @@
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Literal
+import numpy as np
 
 
 @dataclass
@@ -29,11 +31,21 @@ class TrainingData:
 
 @dataclass
 class InputData:
-    # TODO: Add input data here
-    pass
+    """Model-invariant input data for inference."""
+    prompts: list[str]
+    model_names: list[str]
 
 
-@dataclass
-class OutputData:
-    # TODO: Add output data here
-    pass
+class OutputData(ABC):
+    """Abstract base class for model output data."""
+    
+    @property
+    @abstractmethod
+    def scores(self) -> dict[str, np.ndarray]:
+        """
+        Get scores for each model.
+        
+        Returns:
+            Dictionary mapping model names to score arrays [n_prompts]
+        """
+        pass

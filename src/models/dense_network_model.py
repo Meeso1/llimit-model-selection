@@ -1,0 +1,401 @@
+"""Dense network model for prompt routing."""
+
+from typing import Any
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset
+
+from src.models.model_base import ModelBase
+from src.data_models.data_models import TrainingData, InputData, OutputData
+from src.data_models.dense_network_types import PromptRoutingOutput
+from src.preprocessing.prompt_embedding_preprocessor import PromptEmbeddingPreprocessor
+from src.utils.training_history import TrainingHistory, TrainingHistoryEntry
+from src.utils.wandb_details import WandbDetails
+from src.utils.string_encoder import StringEncoder
+
+
+class DenseNetworkModel(ModelBase):
+    """
+    Dense neural network for routing prompts to LLMs.
+    
+    The model takes a prompt embedding and model ID as input and outputs a score in [-1, 1].
+    During training, it learns to assign higher scores to winning LLMs.
+    """
+
+    def __init__(
+        self,
+        embedding_model_name: str = "all-MiniLM-L6-v2",
+        hidden_dims: list[int] | None = None,
+        model_id_embedding_dim: int = 32,
+        learning_rate: float = 0.001,
+        wandb_details: WandbDetails | None = None,
+    ) -> None:
+        """
+        Initialize the dense network model.
+        
+        Args:
+            embedding_model_name: Name of the sentence transformer model for embeddings
+            hidden_dims: List of hidden layer dimensions (default: [256, 128, 64])
+            model_id_embedding_dim: Dimension for learned model ID embeddings (default: 32)
+            learning_rate: Learning rate for optimizer
+            wandb_details: Weights & Biases configuration
+        """
+        super().__init__(wandb_details)
+        
+        self.embedding_model_name = embedding_model_name
+        self.hidden_dims = hidden_dims if hidden_dims is not None else [256, 128, 64]
+        self.model_id_embedding_dim = model_id_embedding_dim
+        self.learning_rate = learning_rate
+        
+        self.preprocessor = PromptEmbeddingPreprocessor(
+            embedding_model_name=embedding_model_name,
+        )
+        
+        self._network: DenseNetworkModel._DenseNetwork | None = None
+        self._embedding_dim: int | None = None
+        self._model_encoder: StringEncoder | None = None
+        
+        self._history_entries: list[TrainingHistoryEntry] = []
+        
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    @property
+    def network(self) -> "_DenseNetwork":
+        """Get the neural network (must be initialized first)."""
+        if self._network is None:
+            raise RuntimeError("Network not initialized. Train or load a model first.")
+        return self._network
+
+    @property
+    def model_encoder(self) -> StringEncoder:
+        """Get the model encoder (must be initialized first)."""
+        if self._model_encoder is None:
+            raise RuntimeError("Model encoder not initialized. Train or load a model first.")
+        return self._model_encoder
+
+    def _initialize_network(
+        self,
+        embedding_dim: int,
+        num_models: int,
+    ) -> None:
+        """
+        Initialize the neural network with the given dimensions.
+        
+        Args:
+            embedding_dim: Dimension of prompt embeddings
+            num_models: Number of unique models (for embedding layer)
+        """
+        self._embedding_dim = embedding_dim
+        self._network = self._DenseNetwork(
+            prompt_embedding_dim=embedding_dim,
+            num_models=num_models,
+            model_id_embedding_dim=self.model_id_embedding_dim,
+            hidden_dims=self.hidden_dims,
+        ).to(self.device)
+
+    def get_config_for_wandb(self) -> dict[str, Any]:
+        """Get configuration dictionary for Weights & Biases logging."""
+        return {
+            "model_type": "dense_network",
+            "embedding_model_name": self.embedding_model_name,
+            "hidden_dims": self.hidden_dims,
+            "model_id_embedding_dim": self.model_id_embedding_dim,
+            "learning_rate": self.learning_rate,
+            "preprocessor_version": self.preprocessor.version,
+            "embedding_dim": self._embedding_dim,
+            "num_models": self._model_encoder.size if self._model_encoder else None,
+        }
+
+    def train(
+        self,
+        data: TrainingData,
+        epochs: int = 10,
+        batch_size: int = 32,
+    ) -> None:
+        """
+        Train the model on the given data.
+        
+        Args:
+            data: Training data
+            epochs: Number of training epochs
+            batch_size: Batch size for training
+        """
+        self.init_wandb_if_needed()
+        
+        preprocessed_data = self.preprocessor.preprocess(data)
+        self._model_encoder = preprocessed_data.model_encoder
+        
+        if self._network is None:
+            self._initialize_network(
+                embedding_dim=preprocessed_data.embedding_dim,
+                num_models=self._model_encoder.size,
+            )
+        
+        # Prepare data for training
+        # Each comparison pair becomes a training sample with margin ranking loss
+        prompt_embeddings_a_list = []  # [n_pairs, embedding_dim]
+        prompt_embeddings_b_list = []  # [n_pairs, embedding_dim]
+        model_ids_a_list = []  # [n_pairs]
+        model_ids_b_list = []  # [n_pairs]
+        labels_list = []  # [n_pairs] - 1 if a wins, -1 if b wins
+        
+        for pair in preprocessed_data.pairs:
+            prompt_embeddings_a_list.append(torch.from_numpy(pair.prompt_embedding))
+            prompt_embeddings_b_list.append(torch.from_numpy(pair.prompt_embedding))
+            model_ids_a_list.append(pair.model_id_a)
+            model_ids_b_list.append(pair.model_id_b)
+            # label: 1 if model_a should be ranked higher, -1 if model_b should be ranked higher
+            labels_list.append(1.0 if pair.winner_label == 0 else -1.0)
+        
+        prompt_embeddings_a = torch.stack(prompt_embeddings_a_list)  # [n_pairs, embedding_dim]
+        prompt_embeddings_b = torch.stack(prompt_embeddings_b_list)  # [n_pairs, embedding_dim]
+        model_ids_a = torch.tensor(model_ids_a_list, dtype=torch.long)  # [n_pairs]
+        model_ids_b = torch.tensor(model_ids_b_list, dtype=torch.long)  # [n_pairs]
+        labels = torch.tensor(labels_list, dtype=torch.float32)  # [n_pairs]
+        
+        # Create data loader
+        dataset = TensorDataset(
+            prompt_embeddings_a,
+            model_ids_a,
+            prompt_embeddings_b,
+            model_ids_b,
+            labels,
+        )
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        
+        # Setup training
+        optimizer = optim.AdamW(self.network.parameters(), lr=self.learning_rate)
+        # MarginRankingLoss: loss = max(0, -label * (score_a - score_b) + margin)
+        # When label=1, we want score_a > score_b
+        # When label=-1, we want score_b > score_a
+        criterion = nn.MarginRankingLoss(margin=0.1)
+        
+        # Training loop
+        for epoch in range(epochs):
+            self.network.train()
+            total_loss = 0.0
+            n_batches = 0
+            
+            for batch_emb_a, batch_id_a, batch_emb_b, batch_id_b, batch_labels in dataloader:
+                batch_emb_a: torch.Tensor = batch_emb_a.to(self.device)  # [batch_size, embedding_dim]
+                batch_id_a: torch.Tensor = batch_id_a.to(self.device)  # [batch_size]
+                batch_emb_b: torch.Tensor = batch_emb_b.to(self.device)  # [batch_size, embedding_dim]
+                batch_id_b: torch.Tensor = batch_id_b.to(self.device)  # [batch_size]
+                batch_labels: torch.Tensor = batch_labels.to(self.device)  # [batch_size]
+                
+                optimizer.zero_grad()
+                scores_a = self.network(
+                    batch_emb_a,
+                    batch_id_a,
+                )  # [batch_size]
+                scores_b = self.network(
+                    batch_emb_b,
+                    batch_id_b,
+                )  # [batch_size]
+                
+                loss: torch.Tensor = criterion(scores_a, scores_b, batch_labels) # [batch_size]
+                
+                loss.backward()
+                optimizer.step()
+                
+                total_loss += loss.mean().item()
+                n_batches += 1
+            
+            avg_loss = total_loss / n_batches
+            entry = TrainingHistoryEntry(epoch=epoch, total_loss=avg_loss)
+            self._history_entries.append(entry)
+            if self.wandb_details is not None:
+                self.log_to_wandb(entry)
+        
+        self.finish_wandb_if_needed()
+
+    def predict(
+        self,
+        X: InputData,
+        batch_size: int = 32,
+    ) -> OutputData:
+        """
+        Predict scores for the given prompts and models.
+        
+        Args:
+            X: Input data with prompts and model_names
+            batch_size: Batch size for prediction
+            
+        Returns:
+            PromptRoutingOutput with scores for each model
+        """
+        if self._network is None:
+            raise RuntimeError("Model not trained or loaded yet")
+        
+        preprocessed_input = self.preprocessor.preprocess_for_inference(
+            prompts=X.prompts,
+            model_names=X.model_names,
+            model_encoder=self.model_encoder,
+        )
+        
+        prompt_embeddings = torch.from_numpy(preprocessed_input.prompt_embeddings).to(self.device)  # [n_prompts, embedding_dim]
+        model_ids = preprocessed_input.model_ids
+        
+        self.network.eval()
+        scores_dict: dict[str, np.ndarray] = {}
+        
+        with torch.no_grad():
+            for model_id, model_name in zip(model_ids, X.model_names):
+                model_scores = []
+                
+                for i in range(0, len(prompt_embeddings), batch_size):
+                    batch_embeddings = prompt_embeddings[i:i + batch_size]  # [batch_size, embedding_dim]
+                    batch_size_actual = len(batch_embeddings)
+                    
+                    batch_model_ids = torch.full(
+                        (batch_size_actual,),
+                        model_id,
+                        dtype=torch.long,
+                        device=self.device,
+                    )  # [batch_size]
+                    
+                    batch_scores = self.network(
+                        batch_embeddings,
+                        batch_model_ids,
+                    )  # [batch_size]
+                    
+                    # Apply tanh to constrain to [-1, 1]
+                    batch_scores = torch.tanh(batch_scores)  # [batch_size]
+                    model_scores.append(batch_scores)
+                
+                all_scores = torch.cat(model_scores)  # [n_prompts]
+                scores_dict[model_name] = all_scores.cpu().numpy()
+        
+        return PromptRoutingOutput(_scores=scores_dict)
+
+    def get_history(self) -> TrainingHistory:
+        """Get training history."""
+        return TrainingHistory.from_entries(self._history_entries)
+
+    def get_state_dict(self) -> dict[str, Any]:
+        """
+        Get state dictionary for saving the model.
+        
+        Returns:
+            State dictionary containing all model parameters and configuration
+        """
+        if self._network is None:
+            raise RuntimeError("Model not trained or loaded yet")
+        
+        if self._model_encoder is None:
+            raise RuntimeError("Model encoder not initialized")
+        
+        return {
+            "embedding_model_name": self.embedding_model_name,
+            "hidden_dims": self.hidden_dims,
+            "model_id_embedding_dim": self.model_id_embedding_dim,
+            "learning_rate": self.learning_rate,
+            "preprocessor_version": self.preprocessor.version,
+            "embedding_dim": self._embedding_dim,
+            "network_state_dict": self.network.state_dict(),
+            "model_encoder": self._model_encoder.to_dict(),
+            "history_entries": self._history_entries,
+        }
+
+    @classmethod
+    def load_state_dict(cls, state_dict: dict[str, Any]) -> "DenseNetworkModel":
+        """
+        Load model from state dictionary.
+        
+        Args:
+            state_dict: State dictionary from get_state_dict()
+            
+        Returns:
+            Loaded model instance
+        """
+        model = cls(
+            embedding_model_name=state_dict["embedding_model_name"],
+            hidden_dims=state_dict["hidden_dims"],
+            model_id_embedding_dim=state_dict["model_id_embedding_dim"],
+            learning_rate=state_dict["learning_rate"],
+            preprocessor_version=state_dict["preprocessor_version"],
+        )
+        
+        model._model_encoder = StringEncoder.from_dict(state_dict["model_encoder"])
+
+        model._initialize_network(
+            embedding_dim=state_dict["embedding_dim"],
+            num_models=model._model_encoder.size,
+        )
+        model.network.load_state_dict(state_dict["network_state_dict"])
+        
+        model._history_entries = state_dict["history_entries"]
+        
+        return model
+
+    class _DenseNetwork(nn.Module):
+        """
+        Inner PyTorch module implementing the dense neural network.
+        
+        Architecture:
+        - Model ID embedding layer
+        - Concatenation of prompt embedding and model ID embedding
+        - Hidden layers with ReLU activation and dropout
+        - Output layer with single neuron (score)
+        - Tanh applied during prediction to constrain to [-1, 1]
+        """
+
+        def __init__(
+            self,
+            prompt_embedding_dim: int,
+            num_models: int,
+            model_id_embedding_dim: int,
+            hidden_dims: list[int],
+        ) -> None:
+            """
+            Initialize the network.
+            
+            Args:
+                prompt_embedding_dim: Dimension of prompt embeddings
+                num_models: Number of unique models (for embedding layer)
+                model_id_embedding_dim: Dimension of model ID embeddings
+                hidden_dims: List of hidden layer dimensions
+            """
+            super().__init__()
+            
+            self.model_embedding = nn.Embedding(
+                num_embeddings=num_models,
+                embedding_dim=model_id_embedding_dim,
+            )
+            
+            layers = []
+            prev_dim = prompt_embedding_dim + model_id_embedding_dim
+            
+            for hidden_dim in hidden_dims:
+                layers.append(nn.Linear(prev_dim, hidden_dim))
+                layers.append(nn.ReLU())
+                layers.append(nn.Dropout(0.2))
+                prev_dim = hidden_dim
+            
+            layers.append(nn.Linear(prev_dim, 1))
+            
+            self.dense_network = nn.Sequential(*layers)
+
+        def forward(
+            self,
+            prompt_embedding: torch.Tensor,
+            model_id: torch.Tensor,
+        ) -> torch.Tensor:
+            """
+            Forward pass through the network.
+            
+            Args:
+                prompt_embedding: Prompt embeddings  # [batch_size, prompt_embedding_dim]
+                model_id: Model IDs  # [batch_size]
+                
+            Returns:
+                Scores (raw scores, tanh applied separately)  # [batch_size]
+            """
+            model_embedding = self.model_embedding(model_id)  # [batch_size, model_id_embedding_dim]
+            combined = torch.cat([prompt_embedding, model_embedding], dim=-1)  # [batch_size, prompt_embedding_dim + model_id_embedding_dim]
+            output: torch.Tensor = self.dense_network(combined)  # [batch_size, 1]
+            
+            return output.squeeze(-1)  # [batch_size]
+
