@@ -25,6 +25,16 @@ The model is trained using Margin Ranking Loss to ensure winning models get high
 
 This approach allows the model to learn absolute scores for (prompt, model) pairs rather than just pairwise comparisons.
 
+### Training Metrics
+
+During training, both loss and accuracy are computed and logged:
+
+- **Loss**: Margin ranking loss (lower is better)
+- **Accuracy**: Percentage of pairs where the model's prediction matches human evaluation (higher is better)
+  - See `docs/accuracy_metric.md` for detailed explanation
+
+Both train and validation metrics are tracked in the training history and can be logged to Weights & Biases.
+
 ## String Encoder
 
 ### StringEncoder

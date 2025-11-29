@@ -15,6 +15,7 @@ from src.preprocessing.prompt_embedding_preprocessor import PromptEmbeddingPrepr
 from src.utils.training_history import TrainingHistory, TrainingHistoryEntry
 from src.utils.wandb_details import WandbDetails
 from src.utils.string_encoder import StringEncoder
+from src.utils.accuracy import compute_pairwise_accuracy
 
 
 class DenseNetworkModel(ModelBase):
@@ -315,6 +316,7 @@ class DenseNetworkModel(ModelBase):
     ) -> "DenseNetworkModel.EpochResult":
         self.network.train()
         total_loss = 0.0
+        total_accuracy = 0.0
         n_batches = 0
         
         for batch_emb_a, batch_id_a, batch_emb_b, batch_id_b, batch_labels in dataloader:
@@ -340,13 +342,25 @@ class DenseNetworkModel(ModelBase):
             optimizer.step()
             
             total_loss += loss.mean().item()
+            
+            with torch.no_grad():
+                batch_accuracy = compute_pairwise_accuracy(scores_a, scores_b, batch_labels)
+                total_accuracy += batch_accuracy
+            
             n_batches += 1
         
         avg_loss = total_loss / n_batches
+        avg_accuracy = total_accuracy / n_batches
         
-        val_loss = self._perform_validation(val_dataloader, criterion) if val_dataloader is not None else None
+        val_loss, val_accuracy = self._perform_validation(val_dataloader, criterion) if val_dataloader is not None else (None, None)
         
-        entry = TrainingHistoryEntry(epoch=epoch, total_loss=avg_loss, val_loss=val_loss)
+        entry = TrainingHistoryEntry(
+            epoch=epoch,
+            total_loss=avg_loss,
+            val_loss=val_loss,
+            train_accuracy=avg_accuracy,
+            val_accuracy=val_accuracy,
+        )
         self._history_entries.append(entry)
         
         if self.wandb_details is not None:
@@ -358,9 +372,10 @@ class DenseNetworkModel(ModelBase):
         self,
         val_dataloader: DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]],
         criterion: nn.Module,
-    ) -> float:
+    ) -> tuple[float, float]:
         self.network.eval()
         total_loss = 0.0
+        total_accuracy = 0.0
         n_batches = 0
         
         for batch_emb_a, batch_id_a, batch_emb_b, batch_id_b, batch_labels in val_dataloader:
@@ -381,12 +396,15 @@ class DenseNetworkModel(ModelBase):
                 )  # [batch_size]
                 
                 loss: torch.Tensor = criterion(scores_a, scores_b, batch_labels) # [batch_size]
+                batch_accuracy = compute_pairwise_accuracy(scores_a, scores_b, batch_labels)
                 
                 total_loss += loss.mean().item()
+                total_accuracy += batch_accuracy
                 n_batches += 1
         
         avg_loss = total_loss / n_batches
-        return avg_loss
+        avg_accuracy = total_accuracy / n_batches
+        return avg_loss, avg_accuracy
 
     @dataclass
     class EpochResult:
