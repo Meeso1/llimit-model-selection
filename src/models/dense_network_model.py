@@ -112,6 +112,7 @@ class DenseNetworkModel(ModelBase):
     def train(
         self,
         data: TrainingData,
+        val_data: TrainingData | None = None,
         epochs: int = 10,
         batch_size: int = 32,
     ) -> None:
@@ -124,6 +125,7 @@ class DenseNetworkModel(ModelBase):
             batch_size: Batch size for training
         """
         dataloader = self._prepare_dataloader(data, batch_size)
+        val_dataloader = self._prepare_dataloader(val_data, batch_size) if val_data is not None else None
         optimizer = optim.AdamW(self.network.parameters(), lr=self.learning_rate)
         
         # MarginRankingLoss: loss = max(0, -label * (score_a - score_b) + margin)
@@ -131,9 +133,8 @@ class DenseNetworkModel(ModelBase):
         # When label=-1, we want score_b > score_a
         criterion = nn.MarginRankingLoss(margin=0.1)
         
-        # Training loop
         for epoch in range(1, epochs + 1):
-            self._train_epoch(epoch, dataloader, optimizer, criterion)
+            self._train_epoch(epoch, dataloader, val_dataloader, optimizer, criterion)
         
         self.finish_wandb_if_needed()
 
@@ -308,6 +309,7 @@ class DenseNetworkModel(ModelBase):
         self, 
         epoch: int,
         dataloader: DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]],
+        val_dataloader: DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]] | None,
         optimizer: optim.Optimizer,
         criterion: nn.Module,
     ) -> "DenseNetworkModel.EpochResult":
@@ -341,13 +343,50 @@ class DenseNetworkModel(ModelBase):
             n_batches += 1
         
         avg_loss = total_loss / n_batches
-        entry = TrainingHistoryEntry(epoch=epoch, total_loss=avg_loss)
+        
+        val_loss = self._perform_validation(val_dataloader, criterion) if val_dataloader is not None else None
+        
+        entry = TrainingHistoryEntry(epoch=epoch, total_loss=avg_loss, val_loss=val_loss)
         self._history_entries.append(entry)
         
         if self.wandb_details is not None:
             self.log_to_wandb(entry)
         
         return self.EpochResult(epoch=epoch, total_loss=avg_loss)
+
+    def _perform_validation(
+        self,
+        val_dataloader: DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]],
+        criterion: nn.Module,
+    ) -> float:
+        self.network.eval()
+        total_loss = 0.0
+        n_batches = 0
+        
+        for batch_emb_a, batch_id_a, batch_emb_b, batch_id_b, batch_labels in val_dataloader:
+            batch_emb_a: torch.Tensor = batch_emb_a.to(self.device)  # [batch_size, embedding_dim]
+            batch_id_a: torch.Tensor = batch_id_a.to(self.device)  # [batch_size]
+            batch_emb_b: torch.Tensor = batch_emb_b.to(self.device)  # [batch_size, embedding_dim]
+            batch_id_b: torch.Tensor = batch_id_b.to(self.device)  # [batch_size]
+            batch_labels: torch.Tensor = batch_labels.to(self.device)  # [batch_size]
+            
+            with torch.no_grad():
+                scores_a = self.network(
+                    batch_emb_a,
+                    batch_id_a,
+                )  # [batch_size]
+                scores_b = self.network(
+                    batch_emb_b,
+                    batch_id_b,
+                )  # [batch_size]
+                
+                loss: torch.Tensor = criterion(scores_a, scores_b, batch_labels) # [batch_size]
+                
+                total_loss += loss.mean().item()
+                n_batches += 1
+        
+        avg_loss = total_loss / n_batches
+        return avg_loss
 
     @dataclass
     class EpochResult:

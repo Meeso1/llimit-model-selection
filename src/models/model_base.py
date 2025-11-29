@@ -36,7 +36,13 @@ class ModelBase(ABC):
         wandb.log(entry.to_wandb_dict())
 
     @abstractmethod
-    def train(self, data: TrainingData, epochs: int = 10, batch_size: int = 32) -> None:
+    def train(
+        self, 
+        data: TrainingData, 
+        val_data: TrainingData | None = None,
+        epochs: int = 10, 
+        batch_size: int = 32
+    ) -> None:
         # Preprocess data or use cached preprocessed data if available
         # Train model
         pass
