@@ -1,5 +1,6 @@
 """Dense network model for prompt routing."""
 
+from dataclasses import dataclass
 from typing import Any
 import numpy as np
 import torch
@@ -122,92 +123,17 @@ class DenseNetworkModel(ModelBase):
             epochs: Number of training epochs
             batch_size: Batch size for training
         """
-        self.init_wandb_if_needed()
-        
-        preprocessed_data = self.preprocessor.preprocess(data)
-        self._model_encoder = preprocessed_data.model_encoder
-        
-        if self._network is None:
-            self._initialize_network(
-                embedding_dim=preprocessed_data.embedding_dim,
-                num_models=self._model_encoder.size,
-            )
-        
-        # Prepare data for training
-        # Each comparison pair becomes a training sample with margin ranking loss
-        prompt_embeddings_a_list = []  # [n_pairs, embedding_dim]
-        prompt_embeddings_b_list = []  # [n_pairs, embedding_dim]
-        model_ids_a_list = []  # [n_pairs]
-        model_ids_b_list = []  # [n_pairs]
-        labels_list = []  # [n_pairs] - 1 if a wins, -1 if b wins
-        
-        for pair in preprocessed_data.pairs:
-            prompt_embeddings_a_list.append(torch.from_numpy(pair.prompt_embedding))
-            prompt_embeddings_b_list.append(torch.from_numpy(pair.prompt_embedding))
-            model_ids_a_list.append(pair.model_id_a)
-            model_ids_b_list.append(pair.model_id_b)
-            # label: 1 if model_a should be ranked higher, -1 if model_b should be ranked higher
-            labels_list.append(1.0 if pair.winner_label == 0 else -1.0)
-        
-        prompt_embeddings_a = torch.stack(prompt_embeddings_a_list)  # [n_pairs, embedding_dim]
-        prompt_embeddings_b = torch.stack(prompt_embeddings_b_list)  # [n_pairs, embedding_dim]
-        model_ids_a = torch.tensor(model_ids_a_list, dtype=torch.long)  # [n_pairs]
-        model_ids_b = torch.tensor(model_ids_b_list, dtype=torch.long)  # [n_pairs]
-        labels = torch.tensor(labels_list, dtype=torch.float32)  # [n_pairs]
-        
-        # Create data loader
-        dataset = TensorDataset(
-            prompt_embeddings_a,
-            model_ids_a,
-            prompt_embeddings_b,
-            model_ids_b,
-            labels,
-        )
-        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-        
-        # Setup training
+        dataloader = self._prepare_dataloader(data, batch_size)
         optimizer = optim.AdamW(self.network.parameters(), lr=self.learning_rate)
+        
         # MarginRankingLoss: loss = max(0, -label * (score_a - score_b) + margin)
         # When label=1, we want score_a > score_b
         # When label=-1, we want score_b > score_a
         criterion = nn.MarginRankingLoss(margin=0.1)
         
         # Training loop
-        for epoch in range(epochs):
-            self.network.train()
-            total_loss = 0.0
-            n_batches = 0
-            
-            for batch_emb_a, batch_id_a, batch_emb_b, batch_id_b, batch_labels in dataloader:
-                batch_emb_a: torch.Tensor = batch_emb_a.to(self.device)  # [batch_size, embedding_dim]
-                batch_id_a: torch.Tensor = batch_id_a.to(self.device)  # [batch_size]
-                batch_emb_b: torch.Tensor = batch_emb_b.to(self.device)  # [batch_size, embedding_dim]
-                batch_id_b: torch.Tensor = batch_id_b.to(self.device)  # [batch_size]
-                batch_labels: torch.Tensor = batch_labels.to(self.device)  # [batch_size]
-                
-                optimizer.zero_grad()
-                scores_a = self.network(
-                    batch_emb_a,
-                    batch_id_a,
-                )  # [batch_size]
-                scores_b = self.network(
-                    batch_emb_b,
-                    batch_id_b,
-                )  # [batch_size]
-                
-                loss: torch.Tensor = criterion(scores_a, scores_b, batch_labels) # [batch_size]
-                
-                loss.backward()
-                optimizer.step()
-                
-                total_loss += loss.mean().item()
-                n_batches += 1
-            
-            avg_loss = total_loss / n_batches
-            entry = TrainingHistoryEntry(epoch=epoch, total_loss=avg_loss)
-            self._history_entries.append(entry)
-            if self.wandb_details is not None:
-                self.log_to_wandb(entry)
+        for epoch in range(1, epochs + 1):
+            self._train_epoch(epoch, dataloader, optimizer, criterion)
         
         self.finish_wandb_if_needed()
 
@@ -328,6 +254,105 @@ class DenseNetworkModel(ModelBase):
         model._history_entries = state_dict["history_entries"]
         
         return model
+
+    def _prepare_dataloader(
+        self, 
+        data: TrainingData, 
+        batch_size: int
+    ) -> DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]:
+        
+        self.init_wandb_if_needed()
+        
+        preprocessed_data = self.preprocessor.preprocess(data)
+        self._model_encoder = preprocessed_data.model_encoder
+        
+        if self._network is None:
+            self._initialize_network(
+                embedding_dim=preprocessed_data.embedding_dim,
+                num_models=self._model_encoder.size,
+            )
+        
+        # Prepare data for training
+        # Each comparison pair becomes a training sample with margin ranking loss
+        prompt_embeddings_a_list = []  # [n_pairs, embedding_dim]
+        prompt_embeddings_b_list = []  # [n_pairs, embedding_dim]
+        model_ids_a_list = []  # [n_pairs]
+        model_ids_b_list = []  # [n_pairs]
+        labels_list = []  # [n_pairs] - 1 if a wins, -1 if b wins
+        
+        for pair in preprocessed_data.pairs:
+            prompt_embeddings_a_list.append(torch.from_numpy(pair.prompt_embedding))
+            prompt_embeddings_b_list.append(torch.from_numpy(pair.prompt_embedding))
+            model_ids_a_list.append(pair.model_id_a)
+            model_ids_b_list.append(pair.model_id_b)
+            # label: 1 if model_a should be ranked higher, -1 if model_b should be ranked higher
+            labels_list.append(1.0 if pair.winner_label == 0 else -1.0)
+        
+        prompt_embeddings_a = torch.stack(prompt_embeddings_a_list)  # [n_pairs, embedding_dim]
+        prompt_embeddings_b = torch.stack(prompt_embeddings_b_list)  # [n_pairs, embedding_dim]
+        model_ids_a = torch.tensor(model_ids_a_list, dtype=torch.long)  # [n_pairs]
+        model_ids_b = torch.tensor(model_ids_b_list, dtype=torch.long)  # [n_pairs]
+        labels = torch.tensor(labels_list, dtype=torch.float32)  # [n_pairs]
+        
+        dataset = TensorDataset(
+            prompt_embeddings_a,
+            model_ids_a,
+            prompt_embeddings_b,
+            model_ids_b,
+            labels,
+        )
+        
+        return DataLoader(dataset, batch_size=batch_size, shuffle=True)
+
+    def _train_epoch(
+        self, 
+        epoch: int,
+        dataloader: DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]],
+        optimizer: optim.Optimizer,
+        criterion: nn.Module,
+    ) -> "DenseNetworkModel.EpochResult":
+        self.network.train()
+        total_loss = 0.0
+        n_batches = 0
+        
+        for batch_emb_a, batch_id_a, batch_emb_b, batch_id_b, batch_labels in dataloader:
+            batch_emb_a: torch.Tensor = batch_emb_a.to(self.device)  # [batch_size, embedding_dim]
+            batch_id_a: torch.Tensor = batch_id_a.to(self.device)  # [batch_size]
+            batch_emb_b: torch.Tensor = batch_emb_b.to(self.device)  # [batch_size, embedding_dim]
+            batch_id_b: torch.Tensor = batch_id_b.to(self.device)  # [batch_size]
+            batch_labels: torch.Tensor = batch_labels.to(self.device)  # [batch_size]
+            
+            optimizer.zero_grad()
+            scores_a = self.network(
+                batch_emb_a,
+                batch_id_a,
+            )  # [batch_size]
+            scores_b = self.network(
+                batch_emb_b,
+                batch_id_b,
+            )  # [batch_size]
+            
+            loss: torch.Tensor = criterion(scores_a, scores_b, batch_labels) # [batch_size]
+            
+            loss.backward()
+            optimizer.step()
+            
+            total_loss += loss.mean().item()
+            n_batches += 1
+        
+        avg_loss = total_loss / n_batches
+        entry = TrainingHistoryEntry(epoch=epoch, total_loss=avg_loss)
+        self._history_entries.append(entry)
+        
+        if self.wandb_details is not None:
+            self.log_to_wandb(entry)
+        
+        return self.EpochResult(epoch=epoch, total_loss=avg_loss)
+
+    @dataclass
+    class EpochResult:
+        epoch: int
+        total_loss: float
 
     class _DenseNetwork(nn.Module):
         """
