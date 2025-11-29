@@ -1,0 +1,2 @@
+Use contents of `/docs` directory when implementing changes or researching stuff.
+When implementing a new feature or significantly modifying a module, create or update a short markdown note in `docs/` describing the logic, data structures, and usage. This serves as a reference for future context.

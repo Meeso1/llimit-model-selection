@@ -6,7 +6,7 @@ from src.constants import MODELS_JAR_PATH
 from src.utils.jar import Jar
 from src.utils.training_history import TrainingHistory, TrainingHistoryEntry
 from src.utils.wandb_details import WandbDetails
-from src.data_models.data_models import InputData, OutputData, PreprocessedTrainingData
+from src.data_models.data_models import InputData, OutputData, TrainingData
 
 
 class ModelBase(ABC):
@@ -36,7 +36,9 @@ class ModelBase(ABC):
         wandb.log(entry.to_wandb_dict())
 
     @abstractmethod
-    def train(self, data: PreprocessedTrainingData, epochs: int = 10, batch_size: int = 32) -> None:
+    def train(self, data: TrainingData, epochs: int = 10, batch_size: int = 32) -> None:
+        # Preprocess data or use cached preprocessed data if available
+        # Train model
         pass
 
     @abstractmethod
