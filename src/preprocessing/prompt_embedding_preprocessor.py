@@ -80,7 +80,7 @@ class PromptEmbeddingPreprocessor:
             + [entry.model_b for entry in filtered_entries])))
         
         prompts = [entry.user_prompt for entry in filtered_entries]
-        embeddings = self._embed_prompts(prompts)  # [n_prompts, embedding_dim]
+        embeddings = self._embed_prompts(prompts).cpu()  # [n_prompts, embedding_dim]
         
         pairs: list[PreprocessedPromptPair] = []
         for i, entry in enumerate(filtered_entries):
@@ -122,7 +122,7 @@ class PromptEmbeddingPreprocessor:
         Returns:
             PreprocessedInferenceInput with embeddings and model IDs
         """
-        prompt_embeddings = self._embed_prompts(prompts)  # [n_prompts, embedding_dim]
+        prompt_embeddings = self._embed_prompts(prompts).cpu()  # [n_prompts, embedding_dim]
         model_ids = model_encoder.encode(model_names)
         
         return PreprocessedInferenceInput(
