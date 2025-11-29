@@ -315,7 +315,6 @@ class DenseNetworkModel(ModelBase):
             hidden_dims=state_dict["hidden_dims"],
             model_id_embedding_dim=state_dict["model_id_embedding_dim"],
             learning_rate=state_dict["learning_rate"],
-            preprocessor_version=state_dict["preprocessor_version"],
         )
         
         model._model_encoder = StringEncoder.from_dict(state_dict["model_encoder"])
