@@ -36,6 +36,16 @@ The dataset stores conversations as numpy arrays of message dictionaries. Each m
    - Checks for required fields
 4. **Error Handling**: Rows with invalid data are skipped with warnings that include row identifiers for troubleshooting.
 
+## Preprocessing and Caching
+
+After loading, data goes through preprocessing (see `PromptEmbeddingPreprocessor`):
+- Filters out ties and "both_bad" outcomes
+- Embeds prompts using sentence transformers
+- Creates model ID mappings
+- **Caches results** based on dataset signature for reuse
+
+Train/validation splitting happens *after* preprocessing on the preprocessed pairs, ensuring both splits share the same model encoder.
+
 ## Usage
 To load data:
 ```python

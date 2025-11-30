@@ -6,16 +6,20 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, TensorDataset, WeightedRandomSampler
+from collections import Counter
 
 from src.models.model_base import ModelBase
 from src.data_models.data_models import TrainingData, InputData, OutputData
-from src.data_models.dense_network_types import PromptRoutingOutput
+from src.data_models.dense_network_types import PreprocessedTrainingData, PromptRoutingOutput
 from src.preprocessing.prompt_embedding_preprocessor import PromptEmbeddingPreprocessor
 from src.utils.training_history import TrainingHistory, TrainingHistoryEntry
 from src.utils.wandb_details import WandbDetails
 from src.utils.string_encoder import StringEncoder
 from src.utils.accuracy import compute_pairwise_accuracy
+from src.utils.data_split import ValidationSplit, split_preprocessed_data
+from src.models.optimizers.optimizer_spec import OptimizerSpecification
+from src.models.optimizers.adamw_spec import AdamWSpec
 
 
 class DenseNetworkModel(ModelBase):
@@ -31,7 +35,8 @@ class DenseNetworkModel(ModelBase):
         embedding_model_name: str = "all-MiniLM-L6-v2",
         hidden_dims: list[int] | None = None,
         model_id_embedding_dim: int = 32,
-        learning_rate: float = 0.001,
+        optimizer_spec: OptimizerSpecification | None = None,
+        balance_model_samples: bool = True,
         wandb_details: WandbDetails | None = None,
     ) -> None:
         """
@@ -41,7 +46,8 @@ class DenseNetworkModel(ModelBase):
             embedding_model_name: Name of the sentence transformer model for embeddings
             hidden_dims: List of hidden layer dimensions (default: [256, 128, 64])
             model_id_embedding_dim: Dimension for learned model ID embeddings (default: 32)
-            learning_rate: Learning rate for optimizer
+            optimizer_spec: Optimizer specification (default: AdamW with LR 0.001)
+            balance_model_samples: Whether to balance samples by model frequency
             wandb_details: Weights & Biases configuration
         """
         super().__init__(wandb_details)
@@ -49,7 +55,8 @@ class DenseNetworkModel(ModelBase):
         self.embedding_model_name = embedding_model_name
         self.hidden_dims = hidden_dims if hidden_dims is not None else [256, 128, 64]
         self.model_id_embedding_dim = model_id_embedding_dim
-        self.learning_rate = learning_rate
+        self.optimizer_spec = optimizer_spec if optimizer_spec is not None else AdamWSpec(learning_rate=0.001)
+        self.balance_model_samples = balance_model_samples
         
         self.preprocessor = PromptEmbeddingPreprocessor(
             embedding_model_name=embedding_model_name,
@@ -104,7 +111,9 @@ class DenseNetworkModel(ModelBase):
             "embedding_model_name": self.embedding_model_name,
             "hidden_dims": self.hidden_dims,
             "model_id_embedding_dim": self.model_id_embedding_dim,
-            "learning_rate": self.learning_rate,
+            "optimizer_name": self.optimizer_spec.get_optimizer_name(),
+            "optimizer_params": self.optimizer_spec.to_dict(),
+            "balance_model_samples": self.balance_model_samples,
             "preprocessor_version": self.preprocessor.version,
             "embedding_dim": self._embedding_dim,
             "num_models": self._model_encoder.size if self._model_encoder else None,
@@ -113,7 +122,7 @@ class DenseNetworkModel(ModelBase):
     def train(
         self,
         data: TrainingData,
-        val_data: TrainingData | None = None,
+        validation_split: ValidationSplit | None = None,
         epochs: int = 10,
         batch_size: int = 32,
     ) -> None:
@@ -121,13 +130,23 @@ class DenseNetworkModel(ModelBase):
         Train the model on the given data.
         
         Args:
-            data: Training data
+            data: Training data (will be split if validation_split is provided)
+            validation_split: Configuration for train/val split (if None, no validation)
             epochs: Number of training epochs
             batch_size: Batch size for training
         """
-        dataloader = self._prepare_dataloader(data, batch_size)
-        val_dataloader = self._prepare_dataloader(val_data, batch_size) if val_data is not None else None
-        optimizer = optim.AdamW(self.network.parameters(), lr=self.learning_rate)
+        preprocessed_data = self._initialize_and_preprocess(data)
+        
+        preprocessed_train, preprocessed_val = split_preprocessed_data(
+            preprocessed_data,
+            val_fraction=validation_split.val_fraction if validation_split is not None else 0,
+            seed=validation_split.seed if validation_split is not None else 42,
+        )
+        
+        dataloader = self._prepare_dataloader(preprocessed_train, batch_size, use_balancing=True)
+        val_dataloader = self._prepare_dataloader(preprocessed_val, batch_size, use_balancing=False) if preprocessed_val is not None else None
+        optimizer = self.optimizer_spec.create_optimizer(self.network)
+        scheduler = self.optimizer_spec.create_scheduler(optimizer)
         
         # MarginRankingLoss: loss = max(0, -label * (score_a - score_b) + margin)
         # When label=1, we want score_a > score_b
@@ -136,6 +155,9 @@ class DenseNetworkModel(ModelBase):
         
         for epoch in range(1, epochs + 1):
             self._train_epoch(epoch, dataloader, val_dataloader, optimizer, criterion)
+            
+            if scheduler is not None:
+                scheduler.step()
         
         self.finish_wandb_if_needed()
 
@@ -219,7 +241,9 @@ class DenseNetworkModel(ModelBase):
             "embedding_model_name": self.embedding_model_name,
             "hidden_dims": self.hidden_dims,
             "model_id_embedding_dim": self.model_id_embedding_dim,
-            "learning_rate": self.learning_rate,
+            "optimizer_name": self.optimizer_spec.get_optimizer_name(),
+            "optimizer_params": self.optimizer_spec.to_dict(),
+            "balance_model_samples": self.balance_model_samples,
             "preprocessor_version": self.preprocessor.version,
             "embedding_dim": self._embedding_dim,
             "network_state_dict": self.network.state_dict(),
@@ -238,11 +262,17 @@ class DenseNetworkModel(ModelBase):
         Returns:
             Loaded model instance
         """
+        optimizer_spec = OptimizerSpecification.from_serialized(
+            state_dict["optimizer_name"],
+            state_dict["optimizer_params"],
+        )
+        
         model = cls(
             embedding_model_name=state_dict["embedding_model_name"],
             hidden_dims=state_dict["hidden_dims"],
             model_id_embedding_dim=state_dict["model_id_embedding_dim"],
-            learning_rate=state_dict["learning_rate"],
+            optimizer_spec=optimizer_spec,
+            balance_model_samples=state_dict["balance_model_samples"],
         )
         
         model._model_encoder = StringEncoder.from_dict(state_dict["model_encoder"])
@@ -257,12 +287,25 @@ class DenseNetworkModel(ModelBase):
         
         return model
 
-    def _prepare_dataloader(
-        self, 
-        data: TrainingData, 
-        batch_size: int
-    ) -> DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]:
+    def _initialize_and_preprocess(
+        self,
+        data: TrainingData,
+    ) -> PreprocessedTrainingData:
+        """
+        Initialize model from training data.
         
+        This should be called once before training, and handles:
+        - Wandb initialization
+        - Data preprocessing
+        - Model encoder creation
+        - Network initialization
+        
+        Args:
+            data: Training data to initialize from
+            
+        Returns:
+            Preprocessed training data
+        """
         self.init_wandb_if_needed()
         
         preprocessed_data = self.preprocessor.preprocess(data)
@@ -274,6 +317,27 @@ class DenseNetworkModel(ModelBase):
                 num_models=self._model_encoder.size,
             )
         
+        return preprocessed_data
+
+    def _prepare_dataloader(
+        self, 
+        preprocessed_data: PreprocessedTrainingData, 
+        batch_size: int,
+        use_balancing: bool,
+    ) -> DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]:
+        """
+        Prepare dataloader from preprocessed training data.
+        
+        Note: _initialize_and_preprocess() must be called before this method.
+        
+        Args:
+            preprocessed_data: Preprocessed training data
+            batch_size: Batch size
+            use_balancing: Whether to apply sample balancing
+            
+        Returns:
+            DataLoader for training/validation
+        """
         # Prepare data for training
         # Each comparison pair becomes a training sample with margin ranking loss
         prompt_embeddings_a_list = []  # [n_pairs, embedding_dim]
@@ -304,7 +368,64 @@ class DenseNetworkModel(ModelBase):
             labels,
         )
         
-        return DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        # Apply weighted sampling if balancing is enabled
+        sampler = None
+        shuffle = True
+        if self.balance_model_samples and use_balancing:
+            sampler = self._create_balanced_sampler(model_ids_a_list, model_ids_b_list)
+            shuffle = False  # Sampler is mutually exclusive with shuffle
+        
+        return DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            sampler=sampler,
+        )
+
+    def _create_balanced_sampler(
+        self,
+        model_ids_a: list[int],
+        model_ids_b: list[int],
+    ) -> WeightedRandomSampler:
+        """
+        Create a weighted sampler to balance model representation in training.
+        
+        For each pair, we consider both models involved. The weight for a pair
+        is based on the rarest model in that pair.
+        
+        Args:
+            model_ids_a: List of model IDs for position A  # [n_pairs]
+            model_ids_b: List of model IDs for position B  # [n_pairs]
+            
+        Returns:
+            WeightedRandomSampler that balances model representation
+        """
+        # Count how many times each model appears
+        model_counts = Counter()
+        for model_id_a, model_id_b in zip(model_ids_a, model_ids_b):
+            model_counts[model_id_a] += 1
+            model_counts[model_id_b] += 1
+        
+        # Compute weight for each model (inverse frequency)
+        model_weights = {
+            model_id: 1.0 / count
+            for model_id, count in model_counts.items()
+        }
+        
+        # For each pair, assign weight based on the rarest model in the pair
+        # This ensures rare models get more representation
+        sample_weights = []
+        for model_id_a, model_id_b in zip(model_ids_a, model_ids_b):
+            weight = max(model_weights[model_id_a], model_weights[model_id_b])
+            sample_weights.append(weight)
+        
+        sample_weights_tensor = torch.tensor(sample_weights, dtype=torch.float32)
+        
+        return WeightedRandomSampler(
+            weights=sample_weights_tensor,
+            num_samples=len(sample_weights_tensor),
+            replacement=True,
+        )
 
     def _train_epoch(
         self, 

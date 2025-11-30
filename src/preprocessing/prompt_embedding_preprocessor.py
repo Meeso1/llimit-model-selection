@@ -1,5 +1,6 @@
 """Preprocessor for embedding prompts using sentence transformers."""
 
+import hashlib
 import torch
 from sentence_transformers import SentenceTransformer
 
@@ -60,7 +61,7 @@ class PromptEmbeddingPreprocessor:
         Returns:
             Preprocessed training data with embeddings and model encoder
         """
-        cache_key = f"prompt_embedding/{self.version}"
+        cache_key = self._generate_cache_key(data)
         
         if cache_key in self.jar:
             return self.jar.get(cache_key)
@@ -104,6 +105,31 @@ class PromptEmbeddingPreprocessor:
         self.jar.add(cache_key, preprocessed_data)
         
         return preprocessed_data
+
+    def _generate_cache_key(self, data: TrainingData) -> str:
+        """
+        Generate cache key for a dataset.
+        
+        The cache key is based on:
+        - Preprocessor version
+        - Hash of dataset's entries
+        
+        Args:
+            data: Training dataset
+            
+        Returns:
+            Cache key string
+        """
+        # Create a hash based on dataset content
+        # Use session IDs and timestamps as a proxy for dataset identity
+        hasher = hashlib.sha256()
+        hasher.update(str(len(data.entries)).encode())
+        
+        for entry in data.entries:
+            hasher.update(entry.timestamp.encode())
+        
+        dataset_signature = hasher.hexdigest()[:16]
+        return f"prompt_embedding/{self.version}/{dataset_signature}"
 
     def preprocess_for_inference(
         self,

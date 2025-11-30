@@ -67,11 +67,15 @@ The `PromptEmbeddingPreprocessor` handles data preparation for both training and
 
 #### Training Preprocessing
 
-1. **Filtering**: Removes entries with `winner="tie"` or `winner="both_bad"` from training data
-2. **Model Encoding**: Creates and fits a `StringEncoder` with all unique model names from training data
+The preprocessor handles a single dataset at a time:
+
+1. **Filtering**: Removes entries with `winner="tie"` or `winner="both_bad"`
+2. **Model Encoding**: Creates and fits a `StringEncoder` with all unique model names from the dataset
 3. **Embedding**: Uses Sentence Transformers to embed user prompts into fixed-size vectors (returned as numpy arrays)
 4. **Model ID Assignment**: Converts model names to integer IDs using the encoder
-5. **Caching**: Preprocessed data (including the encoder) is cached using the Jar system
+5. **Caching**: Results are cached for reuse (see below)
+
+**Train/Val Split**: The split happens *after* preprocessing on the preprocessed pairs, so both train and val naturally share the same model encoder.
 
 #### Inference Preprocessing
 
@@ -79,17 +83,15 @@ The `PromptEmbeddingPreprocessor` handles data preparation for both training and
 2. **Model ID Encoding**: Converts requested model names to IDs using the saved encoder
 3. **No Caching**: Inference preprocessing is done on-the-fly
 
-#### Cache Structure
+#### Caching
 
-Cache keys follow the format: `prompt_embedding/{version}`
+Preprocessing is cached per dataset. The cache key is based on:
+- Preprocessor version (e.g., "v1")
+- Content signature of the dataset (hash of sample entries)
 
-- `prompt_embedding`: Identifies the preprocessor type
-- `version`: Preprocessor version (currently fixed at "v1")
+When you preprocess the same dataset (even with different train/val splits), the cached results are reused. This significantly speeds up repeated training runs.
 
-The cache is version-based only, not data-specific. This means:
-- When the version changes, preprocessing is re-run
-- The same cache is reused for all training runs with the same version
-- To force re-preprocessing, manually clear the cache or use a different version
+**Cache invalidation**: Changing the dataset content or preprocessor version will trigger re-preprocessing.
 
 ### Embedding Models
 
@@ -108,12 +110,14 @@ Other models can be used by passing `embedding_model_name` to the constructor. P
 
 ```python
 from src.models.dense_network_model import DenseNetworkModel
+from src.models.optimizers.adamw_spec import AdamWSpec
 
 model = DenseNetworkModel(
     embedding_model_name="all-MiniLM-L6-v2",
     hidden_dims=[256, 128, 64],
     model_id_embedding_dim=32,
-    learning_rate=0.001,
+    optimizer_spec=AdamWSpec(learning_rate=0.001, lr_decay_gamma=0.95),
+    balance_model_samples=True,
 )
 ```
 
@@ -121,9 +125,18 @@ model = DenseNetworkModel(
 
 ```python
 from src.data_models.data_models import TrainingData
+from src.utils.data_split import ValidationSplit
 
-# Assuming you have loaded training_data
+# Training without validation
 model.train(training_data, epochs=10, batch_size=32)
+
+# Training with validation split
+model.train(
+    training_data,
+    validation_split=ValidationSplit(val_fraction=0.2, seed=42),
+    epochs=10,
+    batch_size=32,
+)
 ```
 
 ### Prediction
@@ -202,7 +215,10 @@ Unlike pairwise comparison models, this model produces absolute scores for each 
 - `embedding_model_name`: Sentence transformer model name (default: "all-MiniLM-L6-v2")
 - `hidden_dims`: List of hidden layer sizes (default: [256, 128, 64])
 - `model_id_embedding_dim`: Dimension of learned model ID embeddings (default: 32)
-- `learning_rate`: Adam optimizer learning rate (default: 0.001)
+- `optimizer_spec`: Optimizer specification (default: AdamW with LR 0.001)
+  - See `docs/optimizers.md` for details on configuring optimizers and LR decay
+- `balance_model_samples`: Whether to balance model representation (default: True)
+  - See `docs/sample_balancing.md` for details
 
 ### Training Parameters
 
@@ -219,6 +235,32 @@ Fixed at 0.2 in hidden layers to prevent overfitting.
 ### Device Management
 
 The model automatically detects and uses CUDA if available, falling back to CPU otherwise.
+
+### Initialization and Training Flow
+
+Training follows a straightforward flow:
+
+1. **`_initialize_and_preprocess(data)`**: Called once at the start of training
+   - Takes the full training dataset
+   - Initializes Weights & Biases
+   - Preprocesses the entire dataset (embeddings and model encoding)
+   - Creates and stores the model encoder
+   - Initializes neural network with correct dimensions
+   - Returns preprocessed data
+
+2. **Train/Val Split**: After preprocessing, if validation is requested
+   - Uses `split_preprocessed_data()` to split the preprocessed pairs
+   - Both splits share the same model encoder (ensures consistent model IDs)
+   - Splitting happens on preprocessed data, not raw data
+
+3. **`_prepare_dataloader(preprocessed_data, ...)`**: Called for train and val
+   - Takes already-preprocessed data
+   - Converts preprocessed pairs to PyTorch tensors
+   - Creates TensorDataset
+   - Optionally applies balanced sampling (training only)
+   - Returns configured DataLoader
+
+This approach ensures the model encoder is fitted on the full dataset while keeping preprocessing and splitting as separate, simple steps.
 
 ### Network Architecture (Inner Class)
 
@@ -241,6 +283,22 @@ During training, each comparison pair (prompt, model_a, model_b, winner) is conv
 
 This is more data-efficient than creating separate positive/negative examples.
 
+## Optimizer and Training Features
+
+### Configurable Optimizers
+
+The model supports multiple optimizer types (Adam, AdamW, Muon) with configurable parameters including learning rate decay. See `docs/optimizers.md` for:
+- Available optimizer types and their parameters
+- How to configure exponential LR decay
+- Serialization/deserialization for model saving
+
+### Sample Balancing
+
+The model can automatically balance model representation during training to handle dataset imbalance. See `docs/sample_balancing.md` for:
+- How weighted sampling works
+- When to enable/disable balancing
+- Implementation details and limitations
+
 ## Limitations
 
 - Can only score models that were present in the training data (string encoder limitation)
@@ -249,4 +307,4 @@ This is more data-efficient than creating separate positive/negative examples.
 - Single score output (doesn't model uncertainty or provide probability distributions)
 - Model ID embeddings require sufficient training data per model to learn meaningful representations
 - Preprocessing cache is version-based only, not data-specific (manual cache management needed if dataset changes)
-
+- Sample balancing uses inverse frequency weighting and doesn't handle extreme cases (single occurrence)

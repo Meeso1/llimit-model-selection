@@ -1,16 +1,16 @@
 ### TODO:
 - [ ] Must-haves
-    - [ ] Train/Validate split
+    - [x] Train/Validate split
     - [ ] Logging during training
-    - [ ] Configure optimizer
-    - [ ] LR decay
-    - [ ] Handle sample imbalance somehow
+    - [x] Configure optimizer
+    - [x] LR decay
+    - [x] Handle sample imbalance somehow
 - [ ] Improvements
     - [ ] Use ties/both_bad in training
     - [ ] 2-stage training: compute model embeddings based on responses first, then train
 - [ ] Trained model analysis
     - [ ] Average scores - use as accuracy during training/validation
-    - [ ] Percentage of correct predictions for pairs
+    - [x] Percentage of correct predictions for pairs
 - [ ] More simple models
     - [ ] RouteLLM
         - [ ] SW
