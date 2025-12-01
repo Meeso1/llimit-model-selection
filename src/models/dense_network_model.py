@@ -16,6 +16,7 @@ from src.preprocessing.prompt_embedding_preprocessor import PromptEmbeddingPrepr
 from src.utils.training_history import TrainingHistory, TrainingHistoryEntry
 from src.utils.wandb_details import WandbDetails
 from src.utils.string_encoder import StringEncoder
+from src.utils.timer import Timer
 from src.utils.accuracy import compute_pairwise_accuracy
 from src.utils.data_split import ValidationSplit, split_preprocessed_data
 from src.models.optimizers.optimizer_spec import OptimizerSpecification
@@ -38,6 +39,7 @@ class DenseNetworkModel(ModelBase):
         optimizer_spec: OptimizerSpecification | None = None,
         balance_model_samples: bool = True,
         wandb_details: WandbDetails | None = None,
+        print_every: int | None = None,
     ) -> None:
         """
         Initialize the dense network model.
@@ -57,6 +59,7 @@ class DenseNetworkModel(ModelBase):
         self.model_id_embedding_dim = model_id_embedding_dim
         self.optimizer_spec = optimizer_spec if optimizer_spec is not None else AdamWSpec(learning_rate=0.001)
         self.balance_model_samples = balance_model_samples
+        self.print_every = print_every
         
         self.preprocessor = PromptEmbeddingPreprocessor(
             embedding_model_name=embedding_model_name,
@@ -69,6 +72,8 @@ class DenseNetworkModel(ModelBase):
         self._history_entries: list[TrainingHistoryEntry] = []
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        self.last_timer: Timer | None = None
 
     @property
     def network(self) -> "_DenseNetwork":
@@ -135,31 +140,41 @@ class DenseNetworkModel(ModelBase):
             epochs: Number of training epochs
             batch_size: Batch size for training
         """
-        preprocessed_data = self._initialize_and_preprocess(data)
-        
-        preprocessed_train, preprocessed_val = split_preprocessed_data(
-            preprocessed_data,
-            val_fraction=validation_split.val_fraction if validation_split is not None else 0,
-            seed=validation_split.seed if validation_split is not None else 42,
-        )
-        
-        dataloader = self._prepare_dataloader(preprocessed_train, batch_size, use_balancing=True)
-        val_dataloader = self._prepare_dataloader(preprocessed_val, batch_size, use_balancing=False) if preprocessed_val is not None else None
-        optimizer = self.optimizer_spec.create_optimizer(self.network)
-        scheduler = self.optimizer_spec.create_scheduler(optimizer)
-        
-        # MarginRankingLoss: loss = max(0, -label * (score_a - score_b) + margin)
-        # When label=1, we want score_a > score_b
-        # When label=-1, we want score_b > score_a
-        criterion = nn.MarginRankingLoss(margin=0.1)
-        
-        for epoch in range(1, epochs + 1):
-            self._train_epoch(epoch, dataloader, val_dataloader, optimizer, criterion)
+        with Timer("train", verbosity="start+end") as train_timer:
+            self.last_timer = train_timer
+            with Timer("initialize_and_preprocess", verbosity="start+end", parent=train_timer):
+                preprocessed_data = self._initialize_and_preprocess(data)
             
-            if scheduler is not None:
-                scheduler.step()
-        
-        self.finish_wandb_if_needed()
+            with Timer("split_preprocessed_data", verbosity="start+end", parent=train_timer):
+                preprocessed_train, preprocessed_val = split_preprocessed_data(
+                    preprocessed_data,
+                    val_fraction=validation_split.val_fraction if validation_split is not None else 0,
+                    seed=validation_split.seed if validation_split is not None else 42,
+                )
+            
+            with Timer("prepare_dataloaders", verbosity="start+end", parent=train_timer):
+                dataloader = self._prepare_dataloader(preprocessed_train, batch_size, use_balancing=True)
+                val_dataloader = self._prepare_dataloader(preprocessed_val, batch_size, use_balancing=False) if preprocessed_val is not None else None
+                
+            optimizer = self.optimizer_spec.create_optimizer(self.network)
+            scheduler = self.optimizer_spec.create_scheduler(optimizer)
+            
+            # MarginRankingLoss: loss = max(0, -label * (score_a - score_b) + margin)
+            # When label=1, we want score_a > score_b
+            # When label=-1, we want score_b > score_a
+            criterion = nn.MarginRankingLoss(margin=0.1)
+            
+            with Timer("epochs", verbosity="start+end", parent=train_timer) as epochs_timer:
+                for epoch in range(1, epochs + 1):
+                    with Timer(f"epoch_{epoch}", verbosity="start+end", parent=epochs_timer) as epoch_timer:
+                        result = self._train_epoch(epoch, dataloader, val_dataloader, optimizer, criterion, epoch_timer)
+                    
+                    self._log_epoch_result(result)
+                    
+                    if scheduler is not None:
+                        scheduler.step()
+            
+            self.finish_wandb_if_needed()
 
     def predict(
         self,
@@ -179,46 +194,49 @@ class DenseNetworkModel(ModelBase):
         if self._network is None:
             raise RuntimeError("Model not trained or loaded yet")
         
-        preprocessed_input = self.preprocessor.preprocess_for_inference(
-            prompts=X.prompts,
-            model_names=X.model_names,
-            model_encoder=self.model_encoder,
-        )
-        
-        prompt_embeddings = torch.from_numpy(preprocessed_input.prompt_embeddings).to(self.device)  # [n_prompts, embedding_dim]
-        model_ids = preprocessed_input.model_ids
-        
-        self.network.eval()
-        scores_dict: dict[str, np.ndarray] = {}
-        
-        with torch.no_grad():
-            for model_id, model_name in zip(model_ids, X.model_names):
-                model_scores = []
-                
-                for i in range(0, len(prompt_embeddings), batch_size):
-                    batch_embeddings = prompt_embeddings[i:i + batch_size]  # [batch_size, embedding_dim]
-                    batch_size_actual = len(batch_embeddings)
+        with Timer("predict", verbosity="start+end") as predict_timer:
+            self.last_timer = predict_timer
+            with Timer("preprocess_input", verbosity="start+end", parent=predict_timer):
+                preprocessed_input = self.preprocessor.preprocess_for_inference(
+                    prompts=X.prompts,
+                    model_names=X.model_names,
+                    model_encoder=self.model_encoder,
+                )
+            
+            prompt_embeddings = torch.from_numpy(preprocessed_input.prompt_embeddings).to(self.device)  # [n_prompts, embedding_dim]
+            model_ids = preprocessed_input.model_ids
+            
+            self.network.eval()
+            scores_dict: dict[str, np.ndarray] = {}
+            
+            with torch.no_grad():
+                for model_id, model_name in zip(model_ids, X.model_names):
+                    model_scores = []
                     
-                    batch_model_ids = torch.full(
-                        (batch_size_actual,),
-                        model_id,
-                        dtype=torch.long,
-                        device=self.device,
-                    )  # [batch_size]
+                    for i in range(0, len(prompt_embeddings), batch_size):
+                        batch_embeddings = prompt_embeddings[i:i + batch_size]  # [batch_size, embedding_dim]
+                        batch_size_actual = len(batch_embeddings)
+                        
+                        batch_model_ids = torch.full(
+                            (batch_size_actual,),
+                            model_id,
+                            dtype=torch.long,
+                            device=self.device,
+                        )  # [batch_size]
+                        
+                        batch_scores = self.network(
+                            batch_embeddings,
+                            batch_model_ids,
+                        )  # [batch_size]
+                        
+                        # Apply tanh to constrain to [-1, 1]
+                        batch_scores = torch.tanh(batch_scores)  # [batch_size]
+                        model_scores.append(batch_scores)
                     
-                    batch_scores = self.network(
-                        batch_embeddings,
-                        batch_model_ids,
-                    )  # [batch_size]
-                    
-                    # Apply tanh to constrain to [-1, 1]
-                    batch_scores = torch.tanh(batch_scores)  # [batch_size]
-                    model_scores.append(batch_scores)
-                
-                all_scores = torch.cat(model_scores)  # [n_prompts]
-                scores_dict[model_name] = all_scores.cpu().numpy()
-        
-        return PromptRoutingOutput(_scores=scores_dict)
+                    all_scores = torch.cat(model_scores)  # [n_prompts]
+                    scores_dict[model_name] = all_scores.cpu().numpy()
+            
+            return PromptRoutingOutput(_scores=scores_dict)
 
     def get_history(self) -> TrainingHistory:
         """Get training history."""
@@ -244,6 +262,7 @@ class DenseNetworkModel(ModelBase):
             "optimizer_name": self.optimizer_spec.get_optimizer_name(),
             "optimizer_params": self.optimizer_spec.to_dict(),
             "balance_model_samples": self.balance_model_samples,
+            "print_every": self.print_every,
             "preprocessor_version": self.preprocessor.version,
             "embedding_dim": self._embedding_dim,
             "network_state_dict": self.network.state_dict(),
@@ -273,6 +292,7 @@ class DenseNetworkModel(ModelBase):
             model_id_embedding_dim=state_dict["model_id_embedding_dim"],
             optimizer_spec=optimizer_spec,
             balance_model_samples=state_dict["balance_model_samples"],
+            print_every=state_dict["print_every"],
         )
         
         model._model_encoder = StringEncoder.from_dict(state_dict["model_encoder"])
@@ -434,11 +454,13 @@ class DenseNetworkModel(ModelBase):
         val_dataloader: DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]] | None,
         optimizer: optim.Optimizer,
         criterion: nn.Module,
+        timer: Timer,
     ) -> "DenseNetworkModel.EpochResult":
         self.network.train()
         total_loss = 0.0
         total_accuracy = 0.0
         n_batches = 0
+        total_samples = 0
         
         for batch_emb_a, batch_id_a, batch_emb_b, batch_id_b, batch_labels in dataloader:
             batch_emb_a: torch.Tensor = batch_emb_a.to(self.device)  # [batch_size, embedding_dim]
@@ -446,6 +468,8 @@ class DenseNetworkModel(ModelBase):
             batch_emb_b: torch.Tensor = batch_emb_b.to(self.device)  # [batch_size, embedding_dim]
             batch_id_b: torch.Tensor = batch_id_b.to(self.device)  # [batch_size]
             batch_labels: torch.Tensor = batch_labels.to(self.device)  # [batch_size]
+            
+            total_samples += len(batch_emb_a)
             
             optimizer.zero_grad()
             scores_a = self.network(
@@ -458,8 +482,8 @@ class DenseNetworkModel(ModelBase):
             )  # [batch_size]
             
             loss: torch.Tensor = criterion(scores_a, scores_b, batch_labels) # [batch_size]
-            
             loss.backward()
+            
             optimizer.step()
             
             total_loss += loss.mean().item()
@@ -473,7 +497,8 @@ class DenseNetworkModel(ModelBase):
         avg_loss = total_loss / n_batches
         avg_accuracy = total_accuracy / n_batches
         
-        val_loss, val_accuracy = self._perform_validation(val_dataloader, criterion) if val_dataloader is not None else (None, None)
+        with Timer("perform_validation", verbosity="start+end", parent=timer):
+            val_loss, val_accuracy = self._perform_validation(val_dataloader, criterion, timer) if val_dataloader is not None else (None, None)
         
         entry = TrainingHistoryEntry(
             epoch=epoch,
@@ -487,50 +512,76 @@ class DenseNetworkModel(ModelBase):
         if self.wandb_details is not None:
             self.log_to_wandb(entry)
         
-        return self.EpochResult(epoch=epoch, total_loss=avg_loss)
+        return self.EpochResult(
+            epoch=epoch,
+            total_loss=avg_loss,
+            train_accuracy=avg_accuracy,
+            val_loss=val_loss,
+            val_accuracy=val_accuracy,
+        )
 
     def _perform_validation(
         self,
         val_dataloader: DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]],
         criterion: nn.Module,
+        timer: Timer,
     ) -> tuple[float, float]:
         self.network.eval()
         total_loss = 0.0
         total_accuracy = 0.0
         n_batches = 0
+        total_samples = 0
         
         for batch_emb_a, batch_id_a, batch_emb_b, batch_id_b, batch_labels in val_dataloader:
-            batch_emb_a: torch.Tensor = batch_emb_a.to(self.device)  # [batch_size, embedding_dim]
-            batch_id_a: torch.Tensor = batch_id_a.to(self.device)  # [batch_size]
-            batch_emb_b: torch.Tensor = batch_emb_b.to(self.device)  # [batch_size, embedding_dim]
-            batch_id_b: torch.Tensor = batch_id_b.to(self.device)  # [batch_size]
-            batch_labels: torch.Tensor = batch_labels.to(self.device)  # [batch_size]
-            
-            with torch.no_grad():
-                scores_a = self.network(
-                    batch_emb_a,
-                    batch_id_a,
-                )  # [batch_size]
-                scores_b = self.network(
-                    batch_emb_b,
-                    batch_id_b,
-                )  # [batch_size]
+            with Timer(f"batch_{n_batches}", verbosity="start+end", parent=timer):
+                batch_emb_a: torch.Tensor = batch_emb_a.to(self.device)  # [batch_size, embedding_dim]
+                batch_id_a: torch.Tensor = batch_id_a.to(self.device)  # [batch_size]
+                batch_emb_b: torch.Tensor = batch_emb_b.to(self.device)  # [batch_size, embedding_dim]
+                batch_id_b: torch.Tensor = batch_id_b.to(self.device)  # [batch_size]
+                batch_labels: torch.Tensor = batch_labels.to(self.device)  # [batch_size]
                 
-                loss: torch.Tensor = criterion(scores_a, scores_b, batch_labels) # [batch_size]
-                batch_accuracy = compute_pairwise_accuracy(scores_a, scores_b, batch_labels)
+                total_samples += len(batch_emb_a)
                 
-                total_loss += loss.mean().item()
-                total_accuracy += batch_accuracy
-                n_batches += 1
+                with torch.no_grad():
+                    scores_a = self.network(
+                        batch_emb_a,
+                        batch_id_a,
+                    )  # [batch_size]
+                    scores_b = self.network(
+                        batch_emb_b,
+                        batch_id_b,
+                    )  # [batch_size]
+                    
+                    loss: torch.Tensor = criterion(scores_a, scores_b, batch_labels) # [batch_size]
+                    batch_accuracy = compute_pairwise_accuracy(scores_a, scores_b, batch_labels)
+                    
+                    total_loss += loss.mean().item()
+                    total_accuracy += batch_accuracy
+                    n_batches += 1
         
         avg_loss = total_loss / n_batches
         avg_accuracy = total_accuracy / n_batches
         return avg_loss, avg_accuracy
 
+    def _log_epoch_result(self, result: "DenseNetworkModel.EpochResult") -> None:
+        if self.print_every is None:
+            return
+        
+        if not result.epoch % self.print_every == 0:
+            return
+        
+        if result.val_loss is None or result.val_accuracy is None:
+            print(f"Epoch {result.epoch:>4}: loss = {result.total_loss:.4f}, accuracy = {(result.train_accuracy*100):.4f}%")
+        else:
+            print(f"Epoch {result.epoch:>4}: loss = {result.total_loss:.4f}/{result.val_loss:.4f}, accuracy = {(result.train_accuracy*100):.4f}%/{(result.val_accuracy*100):.4f}%")
+
     @dataclass
     class EpochResult:
         epoch: int
         total_loss: float
+        train_accuracy: float
+        val_loss: float | None
+        val_accuracy: float | None
 
     class _DenseNetwork(nn.Module):
         """

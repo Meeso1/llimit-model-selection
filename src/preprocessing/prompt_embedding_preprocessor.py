@@ -13,6 +13,7 @@ from src.data_models.dense_network_types import (
 )
 from src.utils.jar import Jar
 from src.utils.string_encoder import StringEncoder
+from src.utils.timer import Timer
 
 
 class PromptEmbeddingPreprocessor:
@@ -40,6 +41,7 @@ class PromptEmbeddingPreprocessor:
         self.version = "v1"
         self.jar = Jar(str(PREPROCESSED_DATA_JAR_PATH))
         self._model: SentenceTransformer | None = None
+        self.last_timer: Timer | None = None
 
     @property
     def model(self) -> SentenceTransformer:
@@ -61,50 +63,69 @@ class PromptEmbeddingPreprocessor:
         Returns:
             Preprocessed training data with embeddings and model encoder
         """
-        cache_key = self._generate_cache_key(data)
+        with Timer("preprocess", verbosity="start+end") as timer:
+            self.last_timer = timer
+            with Timer("generate_cache_key", verbosity="start+end", parent=timer):
+                cache_key = self._generate_cache_key(data)
+            
+            if cache_key in self.jar:
+                return self.jar.get(cache_key)
+            
+            with Timer("filter_entries", verbosity="start+end", parent=timer):
+                # Filter out ties and both_bad entries
+                filtered_entries = self.filter_out(data).entries
+                
+                if len(filtered_entries) == 0:
+                    raise ValueError("No valid training data after filtering out ties and both_bad")
+            
+            with Timer("fit_model_encoder", verbosity="start+end", parent=timer):
+                model_encoder = StringEncoder()
+                model_encoder.fit(sorted(set(
+                    [entry.model_a for entry in filtered_entries] 
+                    + [entry.model_b for entry in filtered_entries])))
+            
+            with Timer("embed_prompts", verbosity="start+end", parent=timer):
+                prompts = [entry.user_prompt for entry in filtered_entries]
+                embeddings = self._embed_prompts(prompts).cpu()  # [n_prompts, embedding_dim]
+            
+            pairs: list[PreprocessedPromptPair] = []
+            for i, entry in enumerate(filtered_entries):
+                winner_label = 0 if entry.winner == "model_a" else 1
+                pairs.append(
+                    PreprocessedPromptPair(
+                        prompt_embedding=embeddings[i].numpy(),
+                        model_id_a=model_encoder.encode(entry.model_a),
+                        model_id_b=model_encoder.encode(entry.model_b),
+                        winner_label=winner_label,
+                    )
+                )
+            
+            embedding_dim = pairs[0].prompt_embedding.shape[0]
+            preprocessed_data = PreprocessedTrainingData(
+                pairs=pairs,
+                embedding_dim=embedding_dim,
+                model_encoder=model_encoder,
+            )
+            
+            self.jar.add(cache_key, preprocessed_data)
+            
+            return preprocessed_data
+
+    @staticmethod
+    def filter_out(data: TrainingData) -> TrainingData:
+        """
+        Filter out entries with winner="tie" or winner="both_bad".
         
-        if cache_key in self.jar:
-            return self.jar.get(cache_key)
-        
-        # Filter out ties and both_bad entries
-        filtered_entries = [
+        Args:
+            data: Training data
+            
+        Returns:
+            Training data with entries filtered out
+        """
+        return TrainingData(entries=[
             entry for entry in data.entries
             if entry.winner in ["model_a", "model_b"]
-        ]
-        
-        if len(filtered_entries) == 0:
-            raise ValueError("No valid training data after filtering out ties and both_bad")
-        
-        model_encoder = StringEncoder()
-        model_encoder.fit(sorted(set(
-            [entry.model_a for entry in filtered_entries] 
-            + [entry.model_b for entry in filtered_entries])))
-        
-        prompts = [entry.user_prompt for entry in filtered_entries]
-        embeddings = self._embed_prompts(prompts).cpu()  # [n_prompts, embedding_dim]
-        
-        pairs: list[PreprocessedPromptPair] = []
-        for i, entry in enumerate(filtered_entries):
-            winner_label = 0 if entry.winner == "model_a" else 1
-            pairs.append(
-                PreprocessedPromptPair(
-                    prompt_embedding=embeddings[i].numpy(),
-                    model_id_a=model_encoder.encode(entry.model_a),
-                    model_id_b=model_encoder.encode(entry.model_b),
-                    winner_label=winner_label,
-                )
-            )
-        
-        embedding_dim = pairs[0].prompt_embedding.shape[0]
-        preprocessed_data = PreprocessedTrainingData(
-            pairs=pairs,
-            embedding_dim=embedding_dim,
-            model_encoder=model_encoder,
-        )
-        
-        self.jar.add(cache_key, preprocessed_data)
-        
-        return preprocessed_data
+        ])
 
     def _generate_cache_key(self, data: TrainingData) -> str:
         """
@@ -129,7 +150,7 @@ class PromptEmbeddingPreprocessor:
             hasher.update(entry.timestamp.encode())
         
         dataset_signature = hasher.hexdigest()[:16]
-        return f"prompt_embedding/{self.version}/{dataset_signature}"
+        return f"prompt_embedding/{self.version}/{self.embedding_model_name}-{dataset_signature}"
 
     def preprocess_for_inference(
         self,

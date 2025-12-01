@@ -1,7 +1,7 @@
 ### TODO:
-- [ ] Must-haves
+- [x] Must-haves
     - [x] Train/Validate split
-    - [ ] Logging during training
+    - [x] Logging during training
     - [x] Configure optimizer
     - [x] LR decay
     - [x] Handle sample imbalance somehow
