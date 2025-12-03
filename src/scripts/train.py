@@ -9,6 +9,7 @@ from src.models.model_base import ModelBase
 from src.scripts.model_types import DenseNetworkSpecification
 from src.scripts.training_spec import TrainingSpecification
 from src.utils import data_split
+from src.utils.timer import Timer
 
 
 def run_train(args: Any) -> None:
@@ -24,16 +25,23 @@ def run_train(args: Any) -> None:
         with open(spec_file, "r") as f:
             spec = TrainingSpecification.model_validate_json(f.read())
     else:
-        spec = TrainingSpecification.model_validate_json(sys.stdin.read())
+        stdin = sys.stdin.read()
+        spec = TrainingSpecification.model_validate_json(stdin)
     
     train(spec)
 
 
 def train(spec: TrainingSpecification) -> None:
+    Timer.default_verbosity = "none"
+
     model = _create_starting_model(spec)
 
     training_data = _load_lmarena_human_preference()
-    downsampled = data_split.downsample(training_data, spec.data.max_samples, spec.data.seed)
+    if spec.data.max_samples is not None:
+        downsampled = data_split.downsample(training_data, spec.data.max_samples, spec.data.seed)
+        print(f"Downsampled data size: {len(downsampled.entries)}")
+    else:
+        downsampled = training_data
 
     model.train(
         downsampled, 
@@ -73,7 +81,7 @@ def _create_starting_dense_network(training_spec: TrainingSpecification) -> Dens
         model_id_embedding_dim=model_spec.model_id_embedding_dim,
         optimizer_spec=model_spec.optimizer,
         balance_model_samples=True,
-        wandb_details=training_spec.wandb.to_wandb_details(),
+        wandb_details=training_spec.wandb.to_wandb_details() if training_spec.wandb is not None else None,
         print_every=training_spec.log.print_every,
     )
 

@@ -8,6 +8,7 @@ from src.models.dense_network_model import DenseNetworkModel
 from src.models.model_base import ModelBase
 from src.scripts.model_types import ModelType
 from src.constants import INFERENCE_OUTPUTS_PATH
+from src.utils.timer import Timer
 
 
 def run_infer(args: Any) -> None:
@@ -48,14 +49,16 @@ def run_infer(args: Any) -> None:
 def infer(
     model_type: ModelType, 
     model_name: str,
-    requested_model_names: list[str],
+    models_to_score: list[str],
     requested_prompts: list[str], 
     batch_size: int,
     output_path: str,
 ) -> None:
+    Timer.default_verbosity = "none"
+
     model = _load_model(model_type, model_name)
 
-    input_data = InputData(prompts=requested_prompts, model_names=requested_model_names)
+    input_data = InputData(prompts=requested_prompts, model_names=models_to_score)
     result =  model.predict(input_data, batch_size)
 
     result_dict = {model_name: scores.tolist() for model_name, scores in result.scores.items()}

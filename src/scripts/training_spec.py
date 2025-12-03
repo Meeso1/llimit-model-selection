@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field, model_validator
 
-from src.scripts.model_types import ModelSpecBase
+from src.scripts.model_types import ModelSpec
 from src.utils.wandb_details import WandbDetails
 
 
@@ -26,7 +26,7 @@ class ModelSpecification(BaseModel):
         default=None,
         description="If set, load latest model with given name as starting point, and ignore spec",
     )
-    spec: ModelSpecBase | None = Field(
+    spec: ModelSpec | None = Field(
         default=None,
         description="Model-specific specification, used when creating new model (translated to constructor arguments)",
     )
@@ -42,7 +42,7 @@ class ModelSpecification(BaseModel):
 
 
 class DataSpecification(BaseModel):
-    max_samples: int = Field(description="Sample dataset to this size before preprocessing etc. (use provided seed)")
+    max_samples: int | None = Field(default=None, description="Sample dataset to this size before preprocessing etc. (use provided seed)")
     valiation_split: float = Field(description="Data fraction to use as validation set")
     seed: int
 
@@ -55,7 +55,10 @@ class LoggingSpecification(BaseModel):
 
 
 class TrainingSpecification(BaseModel):
-    wandb: WandbDetailsSpecification
+    wandb: WandbDetailsSpecification | None = Field(
+        default=None,
+        description="Wandb details, if None, wandb is not used",
+    )
     model: ModelSpecification
     data: DataSpecification
     log: LoggingSpecification

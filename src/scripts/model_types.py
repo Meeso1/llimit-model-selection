@@ -1,7 +1,7 @@
-from typing import Literal
-from pydantic import BaseModel
+from typing import Literal, Union, Annotated
+from pydantic import BaseModel, Field
 
-from src.models.optimizers.optimizer_spec import OptimizerSpecification
+from src.models.optimizers.optimizer_spec_union import OptimizerSpec
 
 
 ModelType = Literal["dense_network"]
@@ -16,4 +16,7 @@ class DenseNetworkSpecification(ModelSpecBase):
     embedding_model_name: str
     hidden_dims: list[int]
     model_id_embedding_dim: int
-    optimizer: OptimizerSpecification
+    optimizer: OptimizerSpec
+
+
+ModelSpec = Annotated[Union[DenseNetworkSpecification], Field(discriminator="model_type")]
