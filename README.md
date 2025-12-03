@@ -5,6 +5,11 @@
     - [x] Configure optimizer
     - [x] LR decay
     - [x] Handle sample imbalance somehow
+- [ ] QoL
+    - [ ] `save_every` for checkpointing
+    - [ ] Improve logging - also in CLI
+    - [ ] Incorporate timing data into logging
+    - [ ] Allow to pass JSON as stdin for infer
 - [ ] Improvements
     - [ ] Use ties/both_bad in training
     - [ ] 2-stage training: compute model embeddings based on responses first, then train

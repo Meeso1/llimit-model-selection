@@ -9,7 +9,6 @@ from src.models.model_base import ModelBase
 from src.scripts.model_types import DenseNetworkSpecification
 from src.scripts.training_spec import TrainingSpecification
 from src.utils import data_split
-from src.utils.timer import Timer
 
 
 def run_train(args: Any) -> None:
@@ -32,8 +31,6 @@ def run_train(args: Any) -> None:
 
 
 def train(spec: TrainingSpecification) -> None:
-    Timer.default_verbosity = "none"
-
     model = _create_starting_model(spec)
 
     training_data = _load_lmarena_human_preference()
@@ -54,6 +51,8 @@ def train(spec: TrainingSpecification) -> None:
     )
 
     model.save(spec.model.name)
+
+    print(f"Model saved with name: {spec.model.name}")
 
 
 def _create_starting_model(spec: TrainingSpecification) -> ModelBase:

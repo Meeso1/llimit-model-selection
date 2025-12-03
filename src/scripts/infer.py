@@ -8,7 +8,6 @@ from src.models.dense_network_model import DenseNetworkModel
 from src.models.model_base import ModelBase
 from src.scripts.model_types import ModelType
 from src.constants import INFERENCE_OUTPUTS_PATH
-from src.utils.timer import Timer
 
 
 def run_infer(args: Any) -> None:
@@ -19,21 +18,15 @@ def run_infer(args: Any) -> None:
         args: Parsed command line arguments with model_type, model_name, model_names,
               prompts, batch_size, and optional output_path
     """
-    model_type: ModelType = args.model_type
-    model_name: str = args.model_name
+    if "/" not in args.model:
+        raise ValueError("Model must be of the form 'model_type/model_name'")
+
+    model_type, model_name = args.model.split("/")
     models_to_score: list[str] = args.models_to_score
     requested_prompts: list[str] = args.prompts
     batch_size: int = args.batch_size
     
-    # Construct output path
-    if args.output_path:
-        output_path = args.output_path
-    else:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe_model_name = model_name.replace("/", "_").replace("\\", "_")
-        output_filename = f"{timestamp}_{safe_model_name}.json"
-        output_path = str(INFERENCE_OUTPUTS_PATH / output_filename)
-    
+    output_path = args.output_path or _make_default_output_path(model_name)
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     
     infer(
@@ -54,8 +47,6 @@ def infer(
     batch_size: int,
     output_path: str,
 ) -> None:
-    Timer.default_verbosity = "none"
-
     model = _load_model(model_type, model_name)
 
     input_data = InputData(prompts=requested_prompts, model_names=models_to_score)
@@ -66,6 +57,8 @@ def infer(
     with open(output_path, "w") as f:
         json.dump(result_dict, f, indent=4)
 
+    print(f"Inference results saved to: {output_path}")
+
 
 def _load_model(model_type: ModelType, model_name: str) -> ModelBase:
     match model_type:
@@ -73,3 +66,10 @@ def _load_model(model_type: ModelType, model_name: str) -> ModelBase:
             return DenseNetworkModel.load(model_name)
         case unknown:
             raise ValueError(f"Unknown model type: {unknown}")  # pyright: ignore[reportUnreachable]
+
+
+def _make_default_output_path(model_name: str) -> str:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_model_name = model_name.replace("/", "_").replace("\\", "_")
+    output_filename = f"{timestamp}_{safe_model_name}.json"
+    return str(INFERENCE_OUTPUTS_PATH / output_filename)

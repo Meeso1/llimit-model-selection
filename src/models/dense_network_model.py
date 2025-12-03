@@ -166,8 +166,7 @@ class DenseNetworkModel(ModelBase):
             
             with Timer("epochs", verbosity="start+end", parent=train_timer) as epochs_timer:
                 for epoch in range(1, epochs + 1):
-                    with Timer(f"epoch_{epoch}", verbosity="start+end", parent=epochs_timer) as epoch_timer:
-                        result = self._train_epoch(epoch, dataloader, val_dataloader, optimizer, criterion, epoch_timer)
+                    result = self._train_epoch(epoch, dataloader, val_dataloader, optimizer, criterion, epochs_timer)
                     
                     self._log_epoch_result(result)
                     
@@ -454,70 +453,72 @@ class DenseNetworkModel(ModelBase):
         val_dataloader: DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]] | None,
         optimizer: optim.Optimizer,
         criterion: nn.Module,
-        timer: Timer,
+        epochs_timer: Timer,
     ) -> "DenseNetworkModel.EpochResult":
-        self.network.train()
-        total_loss = 0.0
-        total_accuracy = 0.0
-        n_batches = 0
-        total_samples = 0
-        
-        for batch_emb_a, batch_id_a, batch_emb_b, batch_id_b, batch_labels in dataloader:
-            batch_emb_a: torch.Tensor = batch_emb_a.to(self.device)  # [batch_size, embedding_dim]
-            batch_id_a: torch.Tensor = batch_id_a.to(self.device)  # [batch_size]
-            batch_emb_b: torch.Tensor = batch_emb_b.to(self.device)  # [batch_size, embedding_dim]
-            batch_id_b: torch.Tensor = batch_id_b.to(self.device)  # [batch_size]
-            batch_labels: torch.Tensor = batch_labels.to(self.device)  # [batch_size]
+        with Timer(f"epoch_{epoch}", verbosity="start+end", parent=epochs_timer) as timer:
+            self.network.train()
+            total_loss = 0.0
+            total_accuracy = 0.0
+            n_batches = 0
+            total_samples = 0
             
-            total_samples += len(batch_emb_a)
+            for batch_emb_a, batch_id_a, batch_emb_b, batch_id_b, batch_labels in dataloader:
+                batch_emb_a: torch.Tensor = batch_emb_a.to(self.device)  # [batch_size, embedding_dim]
+                batch_id_a: torch.Tensor = batch_id_a.to(self.device)  # [batch_size]
+                batch_emb_b: torch.Tensor = batch_emb_b.to(self.device)  # [batch_size, embedding_dim]
+                batch_id_b: torch.Tensor = batch_id_b.to(self.device)  # [batch_size]
+                batch_labels: torch.Tensor = batch_labels.to(self.device)  # [batch_size]
+                
+                total_samples += len(batch_emb_a)
+                
+                optimizer.zero_grad()
+                scores_a = self.network(
+                    batch_emb_a,
+                    batch_id_a,
+                )  # [batch_size]
+                scores_b = self.network(
+                    batch_emb_b,
+                    batch_id_b,
+                )  # [batch_size]
+                
+                loss: torch.Tensor = criterion(scores_a, scores_b, batch_labels) # [batch_size]
+                loss.backward()
+                
+                optimizer.step()
+                
+                total_loss += loss.mean().item()
+                
+                with torch.no_grad():
+                    batch_accuracy = compute_pairwise_accuracy(scores_a, scores_b, batch_labels)
+                    total_accuracy += batch_accuracy
+                
+                n_batches += 1
             
-            optimizer.zero_grad()
-            scores_a = self.network(
-                batch_emb_a,
-                batch_id_a,
-            )  # [batch_size]
-            scores_b = self.network(
-                batch_emb_b,
-                batch_id_b,
-            )  # [batch_size]
+            avg_loss = total_loss / n_batches
+            avg_accuracy = total_accuracy / n_batches
             
-            loss: torch.Tensor = criterion(scores_a, scores_b, batch_labels) # [batch_size]
-            loss.backward()
+            with Timer("perform_validation", verbosity="start+end", parent=timer):
+                val_loss, val_accuracy = self._perform_validation(val_dataloader, criterion, timer) if val_dataloader is not None else (None, None)
             
-            optimizer.step()
+            entry = TrainingHistoryEntry(
+                epoch=epoch,
+                total_loss=avg_loss,
+                val_loss=val_loss,
+                train_accuracy=avg_accuracy,
+                val_accuracy=val_accuracy,
+            )
+            self._history_entries.append(entry)
             
-            total_loss += loss.mean().item()
+            if self.wandb_details is not None:
+                self.log_to_wandb(entry)
             
-            with torch.no_grad():
-                batch_accuracy = compute_pairwise_accuracy(scores_a, scores_b, batch_labels)
-                total_accuracy += batch_accuracy
-            
-            n_batches += 1
-        
-        avg_loss = total_loss / n_batches
-        avg_accuracy = total_accuracy / n_batches
-        
-        with Timer("perform_validation", verbosity="start+end", parent=timer):
-            val_loss, val_accuracy = self._perform_validation(val_dataloader, criterion, timer) if val_dataloader is not None else (None, None)
-        
-        entry = TrainingHistoryEntry(
-            epoch=epoch,
-            total_loss=avg_loss,
-            val_loss=val_loss,
-            train_accuracy=avg_accuracy,
-            val_accuracy=val_accuracy,
-        )
-        self._history_entries.append(entry)
-        
-        if self.wandb_details is not None:
-            self.log_to_wandb(entry)
-        
         return self.EpochResult(
             epoch=epoch,
             total_loss=avg_loss,
             train_accuracy=avg_accuracy,
             val_loss=val_loss,
             val_accuracy=val_accuracy,
+            duration=timer.elapsed_time,
         )
 
     def _perform_validation(
@@ -571,9 +572,9 @@ class DenseNetworkModel(ModelBase):
             return
         
         if result.val_loss is None or result.val_accuracy is None:
-            print(f"Epoch {result.epoch:>4}: loss = {result.total_loss:.4f}, accuracy = {(result.train_accuracy*100):.4f}%")
+            print(f"Epoch {result.epoch:>4}: loss = {result.total_loss:.4f}, accuracy = {(result.train_accuracy*100):.4f}% - {result.duration:.2f}s")
         else:
-            print(f"Epoch {result.epoch:>4}: loss = {result.total_loss:.4f}/{result.val_loss:.4f}, accuracy = {(result.train_accuracy*100):.4f}%/{(result.val_accuracy*100):.4f}%")
+            print(f"Epoch {result.epoch:>4}: loss = {result.total_loss:.4f}/{result.val_loss:.4f}, accuracy = {(result.train_accuracy*100):.4f}%/{(result.val_accuracy*100):.4f}% - {result.duration:.2f}s")
 
     @dataclass
     class EpochResult:
@@ -582,6 +583,7 @@ class DenseNetworkModel(ModelBase):
         train_accuracy: float
         val_loss: float | None
         val_accuracy: float | None
+        duration: float
 
     class _DenseNetwork(nn.Module):
         """

@@ -145,8 +145,7 @@ Run inference on a trained model.
 
 ```bash
 python -m src.scripts.cli infer \
-  --model-type dense_network \
-  --model-name model-name \
+  --model dense_network/model-name \
   --models-to-score gpt-3.5-turbo gpt-4 claude-2 \
   --prompts "What is Python?" "Explain machine learning" \
   --batch-size 32 \
@@ -155,11 +154,10 @@ python -m src.scripts.cli infer \
 
 ### Arguments
 
-- `--model-type`: Type of model to use (currently only `"dense_network"`)
-- `--model-name`: Name of the saved model to load
+- `--model`: Type and name of model to use (i.e. `"dense_network/model_name"`)
 - `--models-to-score`: List of model names to evaluate (space-separated)
 - `--prompts`: List of prompts to evaluate (space-separated)
-- `--batch-size`: Batch size for inference
+- `--batch-size`: (Optional) Batch size for inference - defaults to 128
 - `--output-path`: (Optional) Path to output JSON file. If not provided, output will be saved to `inference_outputs/` with an auto-generated filename: `{timestamp}_{model_name}.json`
 
 ### Output Format
@@ -180,11 +178,9 @@ Each model maps to a list of scores, one for each prompt in the order they were 
 
 ```bash
 python -m src.scripts.cli infer \
-  --model-type dense_network \
-  --model-name dense_network_v1 \
+  --model dense_network/dense_network_v1 \
   --models-to-score gpt-3.5-turbo gpt-4 claude-2 \
   --prompts "How do I sort a list?" "Explain recursion" \
-  --batch-size 16
 ```
 
 This will create an output file in `inference_outputs/` with a timestamped filename.

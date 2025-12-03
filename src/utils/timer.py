@@ -4,7 +4,7 @@ from types import TracebackType
 
 
 class Timer:
-    default_verbosity: ClassVar[Literal["detailed", "start+end", "exit", "none"] | None] = None
+    default_verbosity: ClassVar[Literal["detailed", "start+end", "exit", "none"] | None] = "none"
     
     def __init__(self, name: str, verbosity: Literal["detailed", "start+end", "exit", "none"] = "exit", parent: Self | None = None) -> None:
         self.verbosity = self.default_verbosity if self.default_verbosity is not None else verbosity

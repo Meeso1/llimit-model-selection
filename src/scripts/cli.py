@@ -13,11 +13,10 @@ def main():
 
     # TODO: Maybe improve passing prompts to command
     inf = subparsers.add_parser("infer")
-    inf.add_argument("--model-type", type=str, required=True, choices=["dense_network"], help="Type of model to use")
-    inf.add_argument("--model-name", type=str, required=True, help="Name of the saved model to load")
+    inf.add_argument("--model", type=str, required=True, help="Type and name of the saved model to load (e.g. 'dense_network/model_name')")
     inf.add_argument("--models-to-score", type=str, nargs="+", required=True, help="List of model names to score")
     inf.add_argument("--prompts", type=str, nargs="+", required=True, help="List of prompts to evaluate")
-    inf.add_argument("--batch-size", type=int, required=True, help="Batch size for inference")
+    inf.add_argument("--batch-size", type=int, required=False, default=128, help="Batch size for inference")
     inf.add_argument("--output-path", type=str, help="Path to output JSON file (default: auto-generated in inference_outputs/)")
     inf.set_defaults(func=infer.run_infer)
 
