@@ -8,13 +8,12 @@ The optimizer system provides a flexible way to configure and serialize differen
 
 ### OptimizerSpecification (Abstract Base)
 
-Base class defining the interface for optimizer specifications:
+Base class defining the interface for optimizer specifications. All optimizer specs are Pydantic models for automatic validation and serialization:
 
 - **create_optimizer(model)**: Creates optimizer instance for a model
 - **create_scheduler(optimizer)**: Creates LR scheduler if decay is enabled
-- **get_optimizer_name()**: Returns string identifier for serialization
-- **to_dict()**: Serializes to dictionary
-- **from_dict(params)**: Deserializes from dictionary
+- **to_dict()**: Serializes to dictionary (uses Pydantic's `model_dump()`)
+- **from_serialized(optimizer_name, params)**: Static method to deserialize from dictionary
 
 ### Learning Rate Decay
 
@@ -92,8 +91,8 @@ optimizer_spec = MuonSpec(
 
 ## Serialization
 
-Optimizer specifications are serialized as two components:
-1. **Optimizer name**: String identifier (e.g., "adam", "adamw", "muon")
+Optimizer specifications are Pydantic models and can be serialized/deserialized automatically. They are saved as two components:
+1. **Optimizer type**: String identifier (e.g., "adam", "adamw", "muon")
 2. **Parameters dict**: All optimizer-specific parameters
 
 This allows models to save and restore optimizer configurations.
@@ -102,7 +101,7 @@ This allows models to save and restore optimizer configurations.
 ```python
 # Save
 state_dict = {
-    "optimizer_name": optimizer_spec.get_optimizer_name(),
+    "optimizer_type": optimizer_spec.optimizer_type,
     "optimizer_params": optimizer_spec.to_dict(),
     # ... other model state ...
 }
@@ -111,12 +110,12 @@ state_dict = {
 from src.models.optimizers.optimizer_spec import OptimizerSpecification
 
 optimizer_spec = OptimizerSpecification.from_serialized(
-    state_dict["optimizer_name"],
+    state_dict["optimizer_type"],
     state_dict["optimizer_params"],
 )
 ```
 
-The `from_serialized` static method is part of the `OptimizerSpecification` base class and automatically dispatches to the correct optimizer type.
+The `from_serialized` static method is part of the `OptimizerSpecification` base class and automatically dispatches to the correct optimizer type using Pydantic's `model_validate()`.
 
 ## Integration with DenseNetworkModel
 

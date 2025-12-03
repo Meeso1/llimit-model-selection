@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import random
 import numpy as np
 from src.data_models.data_models import TrainingData
 from src.data_models.dense_network_types import PreprocessedTrainingData
@@ -119,3 +120,14 @@ def split_preprocessed_data(
     
     return train_preprocessed, val_preprocessed
 
+def downsample(data: TrainingData, max_samples: int, seed: int) -> TrainingData:
+    """
+    Downsample training data to a maximum number of samples.
+    
+    Args:
+        data: Training data to downsample
+        max_samples: Maximum number of samples to downsample to
+        seed: Random seed for reproducibility
+    """
+    downsampled_entries = np.random.RandomState(seed).choice(data.entries, size=max_samples, replace=False)
+    return TrainingData(entries=downsampled_entries.tolist())

@@ -116,7 +116,7 @@ class DenseNetworkModel(ModelBase):
             "embedding_model_name": self.embedding_model_name,
             "hidden_dims": self.hidden_dims,
             "model_id_embedding_dim": self.model_id_embedding_dim,
-            "optimizer_name": self.optimizer_spec.get_optimizer_name(),
+            "optimizer_type": self.optimizer_spec.optimizer_type,
             "optimizer_params": self.optimizer_spec.to_dict(),
             "balance_model_samples": self.balance_model_samples,
             "preprocessor_version": self.preprocessor.version,
@@ -259,7 +259,7 @@ class DenseNetworkModel(ModelBase):
             "embedding_model_name": self.embedding_model_name,
             "hidden_dims": self.hidden_dims,
             "model_id_embedding_dim": self.model_id_embedding_dim,
-            "optimizer_name": self.optimizer_spec.get_optimizer_name(),
+            "optimizer_type": self.optimizer_spec.optimizer_type,
             "optimizer_params": self.optimizer_spec.to_dict(),
             "balance_model_samples": self.balance_model_samples,
             "print_every": self.print_every,
@@ -282,7 +282,7 @@ class DenseNetworkModel(ModelBase):
             Loaded model instance
         """
         optimizer_spec = OptimizerSpecification.from_serialized(
-            state_dict["optimizer_name"],
+            state_dict["optimizer_type"],
             state_dict["optimizer_params"],
         )
         
