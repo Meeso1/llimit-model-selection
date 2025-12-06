@@ -3,6 +3,7 @@ from typing import Any, ClassVar
 import wandb
 
 from src.constants import MODELS_JAR_PATH
+from src.utils.data_split import ValidationSplit
 from src.utils.jar import Jar
 from src.utils.training_history import TrainingHistory, TrainingHistoryEntry
 from src.utils.wandb_details import WandbDetails
@@ -39,7 +40,7 @@ class ModelBase(ABC):
     def train(
         self, 
         data: TrainingData, 
-        val_data: TrainingData | None = None,
+        validation_split: ValidationSplit | None = None,
         epochs: int = 10, 
         batch_size: int = 32
     ) -> None:

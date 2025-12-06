@@ -265,7 +265,7 @@ class DenseNetworkModel(ModelBase):
             "preprocessor_version": self.preprocessor.version,
             "embedding_dim": self._embedding_dim,
             "network_state_dict": self.network.state_dict(),
-            "model_encoder": self._model_encoder.to_dict(),
+            "model_encoder": self._model_encoder.get_state_dict(),
             "history_entries": self._history_entries,
         }
 
@@ -294,7 +294,7 @@ class DenseNetworkModel(ModelBase):
             print_every=state_dict["print_every"],
         )
         
-        model._model_encoder = StringEncoder.from_dict(state_dict["model_encoder"])
+        model._model_encoder = StringEncoder.load_state_dict(state_dict["model_encoder"])
 
         model._initialize_network(
             embedding_dim=state_dict["embedding_dim"],

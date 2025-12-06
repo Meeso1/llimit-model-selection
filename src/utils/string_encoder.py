@@ -97,7 +97,7 @@ class StringEncoder:
         """Check if a string is in the encoder."""
         return name in self._name_to_id
 
-    def to_dict(self) -> dict[str, Any]:
+    def get_state_dict(self) -> dict[str, Any]:
         """
         Convert encoder to a dictionary for serialization.
         
@@ -111,7 +111,7 @@ class StringEncoder:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "StringEncoder":
+    def load_state_dict(cls, data: dict[str, Any]) -> "StringEncoder":
         """
         Create encoder from a dictionary.
         
