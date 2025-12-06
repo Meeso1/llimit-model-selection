@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 import random
 import numpy as np
+from src.data_models.behavior_encoder_types import PreprocessedBehaviorEncoderData
 from src.data_models.data_models import TrainingData
 from src.data_models.dense_network_types import PreprocessedTrainingData
 
@@ -119,6 +120,37 @@ def split_preprocessed_data(
     )
     
     return train_preprocessed, val_preprocessed
+
+def split_preprocessed_behavior_data(
+    preprocessed_data: PreprocessedBehaviorEncoderData,
+    val_fraction: float = 0.2,
+    seed: int = 42,
+) -> tuple[PreprocessedBehaviorEncoderData, PreprocessedBehaviorEncoderData]:
+    """
+    Split preprocessed behavior encoder data into train and validation sets.
+    
+    Args:
+        preprocessed_data: Preprocessed behavior encoder data to split
+        val_fraction: Fraction of data to use for validation (default: 0.2)
+        seed: Random seed for reproducibility (default: 42)
+    
+    Returns:
+        Tuple of (train_preprocessed, val_preprocessed)
+    """
+    if val_fraction == 0:
+        return preprocessed_data, None
+    
+    n_total = len(preprocessed_data.triplets)
+    train_indices, val_indices = _compute_split_indices(n_total, val_fraction, seed)
+    
+    train_triplets = [preprocessed_data.triplets[i] for i in train_indices]
+    val_triplets = [preprocessed_data.triplets[i] for i in val_indices]
+    
+    train_preprocessed = PreprocessedBehaviorEncoderData(triplets=train_triplets)
+    val_preprocessed = PreprocessedBehaviorEncoderData(triplets=val_triplets)
+    
+    return train_preprocessed, val_preprocessed
+
 
 def downsample(data: TrainingData, max_samples: int, seed: int) -> TrainingData:
     """

@@ -1,34 +1,33 @@
 # Model Behavior Encoder
 
-This document outlines the design for the `ModelBehaviorEncoder`, a Stage 1 model responsible for creating meaningful vector representations (embeddings) of large language models based on their behavior, specifically their responses to given prompts.
+This document describes the `ModelBehaviorEncoder`, a Stage 1 model that creates meaningful vector representations (embeddings) of large language models based on their behavior, specifically their responses to given prompts.
 
 ## 1. Overview
 
-The current `DenseNetworkModel` learns a static, unique embedding for each model ID. This approach is inflexible and cannot handle new, unseen models without a full retrain. To address this, we are introducing a two-stage training process.
+The current `DenseNetworkModel` learns a static, unique embedding for each model ID. This approach is inflexible and cannot handle new, unseen models without a full retrain. To address this, we have implemented a two-stage training process.
 
--   **Stage 1 (This Model)**: The `ModelBehaviorEncoder` will be a Siamese-style network trained to generate embeddings from `(prompt, response)` pairs. The goal is to create an embedding space where models with similar performance characteristics (as judged by humans) are located closer to each other.
--   **Stage 2 (Scoring Model)**: The existing `DenseNetworkModel` will be adapted to use these pre-computed, behavior-based embeddings instead of its internal `model_id` embedding layer. This will allow it to score any model, including new ones, as long as we can generate an embedding for it.
+-   **Stage 1 (This Model)**: The `ModelBehaviorEncoder` is a Siamese-style network trained to generate embeddings from `(prompt, response)` pairs. The goal is to create an embedding space where models with similar performance characteristics (as judged by humans) are located closer to each other.
+-   **Stage 2 (Scoring Model)**: The existing `DenseNetworkModel` will be adapted to use these pre-computed, behavior-based embeddings instead of its internal `model_id` embedding layer. This will allow it to score any model, including new ones, as long as we can generate an embedding for it. *(Not yet implemented)*
 
-The `ModelBehaviorEncoder` will **not** implement the `ModelBase` interface directly but will be a self-contained component with its own preprocessing, training, and serialization logic.
+The `ModelBehaviorEncoder` does **not** implement the `ModelBase` interface directly but is a self-contained component with its own preprocessing, training, and serialization logic.
 
 ## 2. Architecture
 
-The encoder will have a modular architecture to facilitate experimentation with different components.
+The encoder uses a two-component architecture:
 
--   **`TextEncoderBase`**: An abstract base class for the core text encoding module. This allows us to swap different transformer backbones.
--   **`SentenceTransformerEncoder`**: The initial concrete implementation of `TextEncoderBase`, using the `sentence-transformers` library. It will concatenate `prompt` and `response` strings before encoding.
--   **Pooling Layer**: A module to aggregate token-level embeddings from the text encoder into a single fixed-size vector for each `(prompt, response)` pair. Mean pooling is a sensible default.
--   **`ModelBehaviorEncoder`**: The main class that orchestrates the components. It will contain the text encoder and pooling layer, and handle the training loop.
+-   **Frozen Text Encoder**: A sentence transformer model (from `sentence-transformers` library) that is frozen during training. It concatenates `prompt` and `response` strings with a `[SEP]` token before encoding. The outputs are cached during training for efficiency.
+-   **Trainable Dense Network**: A configurable dense neural network (with ReLU activations and dropout) that transforms the frozen text encoder embeddings into a learned embedding space. The architecture is specified via `hidden_dims` parameter (e.g., `[256, 128]`).
+-   **`ModelBehaviorEncoder`** (`src/models/model_behavior_encoder.py`): The main class that orchestrates the components. It handles the training loop, preprocessing, and serialization.
 
-This design allows us to easily replace the `SentenceTransformerEncoder` with a fine-tunable model from the Hugging Face Hub if needed.
+This design keeps the text encoder frozen (avoiding expensive fine-tuning) while still allowing the model to learn a task-specific embedding space through the trainable dense layers.
 
 ## 3. Data Flow and Models
 
-New data structures will be created in `src/data_models/behavior_encoder_types.py` to handle the data flow for this model.
+Data structures in `src/data_models/behavior_encoder_types.py` handle the data flow for this model.
 
--   **Input Data**: The model trains on triplets of `(prompt, response)` pairs. A `BehaviorEncoderTrainingTriplet` dataclass will represent this.
--   **Preprocessed Data**: A `PreprocessedBehaviorEncoderData` dataclass will hold the list of training triplets after any necessary filtering and preprocessing.
--   **Output Data**: The primary output is a fixed-size embedding vector (`np.ndarray`). When generating embeddings for a set of models, the output will be a dictionary mapping model names to their computed embeddings (`dict[str, np.ndarray]`).
+-   **Input Data**: The model trains on triplets of `(prompt, response)` pairs. A `BehaviorEncoderTrainingTriplet` dataclass represents this, containing anchor, positive, and negative prompt-response pairs.
+-   **Preprocessed Data**: A `PreprocessedBehaviorEncoderData` dataclass holds the list of training triplets after filtering and preprocessing.
+-   **Output Data**: The primary output is a fixed-size embedding vector (`np.ndarray`). The `encode()` method returns embeddings for multiple (prompt, response) pairs, while `compute_model_embedding()` returns a single averaged embedding for a model.
 
 ## 4. Training Process
 
@@ -43,73 +42,102 @@ Jointly training both models is not viable as it would lead to an unstable, cons
 
 ### 4.2. Triplet Selection Strategy
 
-The training process will use `TripletMarginLoss`. The key is the strategic selection of triplets to inject human preference data into the embedding space. Given a pairwise comparison `(prompt, response_A, model_A, response_B, model_B, winner=model_A)`:
+The training process uses `TripletMarginLoss`. The key is the strategic selection of triplets to inject human preference data into the embedding space. Given a pairwise comparison `(prompt, response_A, model_A, response_B, model_B, winner=model_A)`:
 
 -   **Anchor (`A`)**: The winning pair: `(prompt, response_A)`.
--   **Negative (`N`)**: The losing pair from the same comparison: `(prompt, response_B)`. This provides a strong, direct preference signal.
--   **Positive (`P`)**: We will use a hybrid strategy for selecting the positive pair:
-    -   **Identity Positive (80% of samples)**: A different `(prompt', response')` pair generated by the same model as the anchor (`model_A`). This teaches the encoder to recognize a model's unique behavioral signature.
-    -   **Performance Positive (20% of samples)**: A winning pair `(prompt'', response_C)` from a different model (`model_C`). This encourages the model to learn a general concept of a "good response", pushing winning embeddings from different models closer together.
+-   **Negative (`N`)**: The losing pair from the same comparison: `(prompt, response_B)`. This provides a strong, direct preference signal. If no losing pair is available, `both_bad` pairs can serve as fallback negatives.
+-   **Positive (`P`)**: A hybrid strategy is used for selecting the positive pair:
+    -   **Identity Positive (80% of samples by default)**: A different `(prompt', response')` pair generated by the same model as the anchor (`model_A`). This teaches the encoder to recognize a model's unique behavioral signature.
+    -   **Performance Positive (20% of samples by default)**: A winning pair `(prompt'', response_C)` from a different model (`model_C`). This encourages the model to learn a general concept of a "good response", pushing winning embeddings from different models closer together.
+
+**For tie entries:**
+- Tie pairs are used as positives for each other
+- `both_bad` pairs serve as negatives for tie anchors
+
+The ratio between identity and performance positives is configurable via the `identity_positive_ratio` parameter. All random selections use a seeded random number generator for reproducibility.
 
 ### 4.3. Validation and Goal Metrics
 
--   **Validation Split**: We need a validation set. A simple random split of the training triplets is a start, but a more robust approach is to split by `user_prompt`. This ensures the model is evaluated on its ability to generalize to unseen prompts.
+-   **Validation Split**: The model supports validation via the `ValidationSplit` parameter. Currently, a simple random split of the training data is performed. A more robust approach would be to split by `user_prompt` to ensure the model is evaluated on its ability to generalize to unseen prompts. *(Prompt-based splitting not yet implemented)*
 -   **Goal Metrics**:
-    1.  **Validation Loss**: The primary metric to monitor for convergence.
+    1.  **Validation Loss**: The primary metric to monitor for convergence. This includes both triplet loss and regularization loss.
     2.  **Triplet Accuracy**: For a validation triplet `(A, P, N)`, we check if `distance(A, P) < distance(A, N)`. The percentage of triplets satisfying this condition is an intuitive measure of how well the embedding space is structured.
 
 ### 4.4. Training Length
 
-Training will be defined by a fixed number of **epochs**. We will not use a "quality threshold" for stopping, but we will monitor the validation `Triplet Accuracy` and validation loss to identify the best-performing epoch and prevent overfitting.
+Training is defined by a fixed number of **epochs**. We do not use a "quality threshold" for stopping, but we monitor the validation `Triplet Accuracy` and validation loss to identify the best-performing epoch and prevent overfitting.
 
 ## 5. Data Considerations
 
 ### 5.1. Preprocessing and Caching
 
-A new preprocessor, `BehaviorEmbeddingPreprocessor`, will be created in `src/preprocessing/`. It will be responsible for:
+The `BehaviorEmbeddingPreprocessor` (`src/preprocessing/behavior_embedding_preprocessor.py`) is responsible for:
 -   Reading the raw `TrainingData`.
 -   Applying filtering rules.
 -   Constructing the training triplets based on the defined strategy.
 -   Implementing a caching mechanism identical to `PromptEmbeddingPreprocessor` to save preprocessed triplets to disk and avoid re-computation.
 
+The preprocessor uses a `Jar` to cache preprocessed data based on a hash of the dataset and preprocessing parameters.
+
 ### 5.2. Data Filtering Rules
 
-Before triplet construction, the raw data will be filtered:
+Before triplet construction, the raw data is filtered:
 
--   **Filter Rare Models**: Models that appear in fewer than a threshold number of comparisons (e.g., < 20) will be excluded from the training set for the encoder. Their data is likely too sparse to learn a stable, representative embedding.
--   **Filter Invalid Entries**: Entries with empty prompts or responses will be discarded.
+-   **Filter Rare Models**: Models that appear in fewer than a threshold number of comparisons (default: 20, configurable via `min_model_comparisons`) are excluded from the training set. Their data is likely too sparse to learn a stable, representative embedding.
+-   **Filter Invalid Entries**: Entries with empty prompts or responses are discarded.
 
 ## 6. API and Usage
 
-### 6.1. Public Method Signatures
+### 6.1. Initialization
 
-The `ModelBehaviorEncoder` class will expose the following public methods:
+The `ModelBehaviorEncoder` can be initialized with the following parameters:
 
 ```python
+from src.models.model_behavior_encoder import ModelBehaviorEncoder
+from src.models.optimizers.adamw_spec import AdamWSpec
+
+encoder = ModelBehaviorEncoder(
+    encoder_model_name="all-MiniLM-L6-v2",  # Sentence transformer model (frozen)
+    hidden_dims=[256, 128],  # Trainable dense layer dimensions
+    optimizer_spec=AdamWSpec(learning_rate=0.001),  # Configurable optimizer
+    triplet_margin=0.2,  # Margin for triplet loss
+    regularization_weight=0.01,  # Weight for KL-divergence regularization
+    min_model_comparisons=20,  # Minimum comparisons per model
+    identity_positive_ratio=0.8,  # Ratio of identity vs performance positives
+    preprocessor_seed=42,  # Random seed for reproducible preprocessing
+    print_every=1,  # Print progress every N epochs (None = no printing)
+)
+```
+
+### 6.2. Public Method Signatures
+
+The `ModelBehaviorEncoder` class exposes the following public methods:
+
+```python
+from src.data_models.behavior_encoder_types import PromptResponsePair
+
 def train(
     self,
     data: TrainingData,
-    validation_split: ValidationSplit,
-    epochs: int,
-    batch_size: int
+    validation_split: ValidationSplit | None = None,
+    epochs: int = 10,
+    batch_size: int = 32
 ) -> None:
     """Trains the model on the given data."""
     ...
 
 def encode(
     self,
-    prompts: list[str],
-    responses: list[str],
-    batch_size: int
+    pairs: list[PromptResponsePair],
+    batch_size: int = 32
 ) -> np.ndarray: # [n_samples, embedding_dim]
     """Encodes a list of (prompt, response) pairs into embeddings."""
     ...
 
 def compute_model_embedding(
     self,
-    prompts: list[str],
-    responses: list[str],
-    batch_size: int
+    pairs: list[PromptResponsePair],
+    batch_size: int = 32
 ) -> np.ndarray: # [embedding_dim]
     """
     Computes a single, representative embedding for a model by
@@ -127,29 +155,86 @@ def load_state_dict(cls, state_dict: dict[str, Any]) -> "ModelBehaviorEncoder":
     ...
 ```
 
-### 6.2. History and Serialization
+### 6.3. Usage Example
 
--   **Training History**: The `train` method will not return a `TrainingHistory` object. Instead, it will maintain an internal list of per-epoch logs (e.g., a dataclass containing loss and accuracy metrics).
--   **Serialization**: The model will be serializable via `get_state_dict` and `load_state_dict`, allowing the trained encoder to be saved and loaded independently.
+```python
+from src.data_models.behavior_encoder_types import PromptResponsePair
+from src.utils.data_split import ValidationSplit
 
-## 7. Future Work & Enhancements
+# Training
+encoder.train(
+    data=training_data,
+    validation_split=ValidationSplit(val_fraction=0.2, seed=42),
+    epochs=20,
+    batch_size=32,
+)
+
+# Encoding pairs
+pairs = [
+    PromptResponsePair(prompt="What is Python?", response="Python is..."),
+    PromptResponsePair(prompt="Explain ML", response="Machine learning is..."),
+]
+embeddings = encoder.encode(pairs, batch_size=32)  # [2, embedding_dim]
+
+# Computing model embedding
+model_embedding = encoder.compute_model_embedding(pairs, batch_size=32)  # [embedding_dim]
+
+# Serialization
+state_dict = encoder.get_state_dict()
+# Save to file...
+
+# Loading
+encoder = ModelBehaviorEncoder.load_state_dict(state_dict)
+```
+
+### 6.4. History and Serialization
+
+-   **Training History**: The `train` method does not return a `TrainingHistory` object. Instead, it maintains an internal list of `EpochLog` dataclasses containing loss and accuracy metrics for each epoch.
+-   **Serialization**: The model is serializable via `get_state_dict` and `load_state_dict`, allowing the trained encoder to be saved and loaded independently.
+
+## 7. Advanced Features
 
 ### 7.1. Incorporating `tie` and `both_bad` data
 
--   **Ties**: When two models tie (`winner="tie"`), their `(prompt, response)` pairs can be used as positives for each other. For a triplet `(Anchor, Positive, Negative)`, we can form `(response_A, response_B, some_negative_response)` and `(response_B, response_A, some_negative_response)`. This will pull the embeddings of similarly high-performing models closer together.
--   **`both_bad`**: When both models are bad, their pairs can serve as a rich source of negatives for any anchor-positive pair, helping the model learn a "bad response" region in the embedding space.
+The implementation includes support for `tie` and `both_bad` entries:
 
-### 7.2. Advanced Loss Components
+-   **Ties**: When two models tie (`winner="tie"`), their `(prompt, response)` pairs are used as positives for each other. This pulls the embeddings of similarly high-performing models closer together.
+-   **`both_bad`**: When both models are bad, their pairs serve as a rich source of negatives for any anchor-positive pair, helping the model learn a "bad response" region in the embedding space.
 
-To further improve the structure of the embedding space, we could explore additional loss components:
--   **Regularization Loss (VAE-style)**: Add a KL-divergence loss term to encourage the embedding distribution to follow a prior (e.g., a standard normal distribution). This can improve generalization.
+### 7.2. Regularization Loss
+
+The implementation includes a KL-divergence regularization loss (VAE-style) that encourages the embedding distribution to follow a standard normal distribution. This improves generalization and prevents the embedding space from collapsing. The regularization weight is configurable via the `regularization_weight` parameter.
+
+The total loss is computed as:
+```
+total_loss = triplet_loss + regularization_weight * kl_divergence_loss
+```
+
+### 7.3. Future Enhancements
+
+Potential future improvements include:
+
 -   **Compactness Loss**: An additional loss term that encourages all embeddings from the same model to be close to their computed mean embedding, making the representation for each model more stable.
+-   **Prompt-based Validation Split**: Split validation data by `user_prompt` to ensure the model is evaluated on its ability to generalize to unseen prompts.
+-   **Fine-tunable Text Encoder**: Unfreeze and fine-tune the last few layers of the sentence transformer for potentially better performance.
+-   **Pluggable Text Encoder**: Add an abstract interface for text encoders (similar to `OptimizerSpecification`) to allow swapping different transformer backbones.
 
-## 8. Implementation Plan
+## 8. Implementation Status
+
+### 8.1. Completed Components
 
 -   **`docs/models/model_behavior_encoder.md`**: This document.
--   **`src/data_models/behavior_encoder_types.py`**: Create dataclasses for data modeling.
--   **`src/models/behavior/encoder_base.py`**: Create the abstract `TextEncoderBase`.
--   **`src/preprocessing/behavior_embedding_preprocessor.py`**: Implement the new preprocessor.
--   **`src/models/behavior/model_behavior_encoder.py`**: Implement the main model class and its components.
--   Update `DenseNetworkModel` to accept pre-computed embeddings (in a later step).
+-   **`src/data_models/behavior_encoder_types.py`**: Dataclasses for data modeling (`PromptResponsePair`, `BehaviorEncoderTrainingTriplet`, `PreprocessedBehaviorEncoderData`, `ModelBehaviorEncoderOutput`).
+-   **`src/preprocessing/behavior_embedding_preprocessor.py`**: Preprocessor with caching, filtering, and triplet construction.
+-   **`src/models/model_behavior_encoder.py`**: Main model class with:
+    -   Frozen sentence transformer for text encoding
+    -   Trainable dense layers for embedding transformation
+    -   Training loop with triplet loss and regularization
+    -   Support for tie/both_bad entries
+    -   Efficient caching of frozen encoder outputs during training
+
+### 8.2. Pending Work
+
+-   Update `DenseNetworkModel` to accept pre-computed embeddings from the behavior encoder (Stage 2 integration).
+-   Implement prompt-based validation split for better generalization evaluation.
+-   Add CLI commands for training and using the behavior encoder.

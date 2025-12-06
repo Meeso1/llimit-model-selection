@@ -3,6 +3,13 @@ import numpy as np
 
 
 @dataclass
+class PromptResponsePair:
+    """A single (prompt, response) pair."""
+    prompt: str
+    response: str
+
+
+@dataclass
 class BehaviorEncoderTrainingTriplet:
     """A single training triplet for the ModelBehaviorEncoder."""
     anchor_prompt: str
