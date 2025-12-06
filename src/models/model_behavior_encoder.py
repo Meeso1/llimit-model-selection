@@ -138,7 +138,7 @@ class ModelBehaviorEncoder:
                     if val_preprocessed is not None else None
             
             if self._module is None:
-                self._initialize_module(train_dataloader.dataset[0][0].shape[1])
+                self._initialize_module(train_dataloader.dataset[0][0].shape[0])
             
             optimizer = self.optimizer_spec.create_optimizer(self.module)
             scheduler = self.optimizer_spec.create_scheduler(optimizer)
@@ -378,19 +378,19 @@ class ModelBehaviorEncoder:
                 val_dataloader, criterion, timer
             ) if val_dataloader is not None else (None, None)
             
-            epoch_log = self.EpochLog(
-                epoch=epoch,
-                train_loss=avg_loss,
-                train_triplet_loss=avg_triplet_loss,
-                train_reg_loss=avg_reg_loss,
-                train_triplet_accuracy=triplet_accuracy,
-                val_loss=val_loss,
-                val_triplet_accuracy=val_triplet_accuracy,
-                duration=timer.elapsed_time,
-            )
-            self._epoch_logs.append(epoch_log)
-            
-            return epoch_log
+        epoch_log = self.EpochLog(
+            epoch=epoch,
+            train_loss=avg_loss,
+            train_triplet_loss=avg_triplet_loss,
+            train_reg_loss=avg_reg_loss,
+            train_triplet_accuracy=triplet_accuracy,
+            val_loss=val_loss,
+            val_triplet_accuracy=val_triplet_accuracy,
+            duration=timer.elapsed_time,
+        )
+        self._epoch_logs.append(epoch_log)
+        
+        return epoch_log
     
     def _perform_validation(
         self,

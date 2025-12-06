@@ -22,6 +22,7 @@ class TrainingTriplet:
     negative_response: str
 
 
+@dataclass
 class TripletEmbedding:
     """Embeddings for a single training triplet."""
     anchor_prompt: np.ndarray # [embedding_dim]
@@ -32,6 +33,7 @@ class TripletEmbedding:
     negative_response: np.ndarray  # [embedding_dim]
 
 
+@dataclass
 class PromptResponsePairEmbedding:
     """Embeddings for a single prompt-response pair."""
     prompt: np.ndarray # [embedding_dim]

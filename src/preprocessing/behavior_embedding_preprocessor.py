@@ -178,6 +178,7 @@ class BehaviorEmbeddingPreprocessor:
                 response=pair.model_b_response,
                 model=pair.model_b
             ))
+        
         return result
 
     def _make_all_winning_examples(self, pairs: list[EvaluationEntry]) -> list["BehaviorEmbeddingPreprocessor.ModelExample"]:
@@ -223,7 +224,9 @@ class BehaviorEmbeddingPreprocessor:
         pairs: list[EvaluationEntry], 
         examples_by_model: dict[str, list["BehaviorEmbeddingPreprocessor.ModelExample"]],
         all_winning_examples: list["BehaviorEmbeddingPreprocessor.ModelExample"]
-    ) -> list[TrainingTriplet]:       
+    ) -> list[TrainingTriplet]:  
+        rng = random.Random(self.seed)
+
         triplets = []
         for pair in pairs:
             anchor_prompt = pair.user_prompt
@@ -242,10 +245,10 @@ class BehaviorEmbeddingPreprocessor:
                 if pair.winner == "model_a" \
                 else pair.model_a_response
 
-            if random.random() < self.identity_positive_ratio:
-                first_positive_example = random.choice(examples_by_model[first_anchor_model])
+            if rng.random() < self.identity_positive_ratio:
+                first_positive_example = rng.choice(examples_by_model[first_anchor_model])
             else:
-                first_positive_example = random.choice(all_winning_examples)
+                first_positive_example = rng.choice(all_winning_examples)
 
             triplets.append(TrainingTriplet(
                 anchor_prompt=anchor_prompt,
@@ -270,7 +273,7 @@ class BehaviorEmbeddingPreprocessor:
                 if pair.winner == "model_b" \
                 else pair.model_b_response
 
-            second_positive_example = random.choice(examples_by_model[second_anchor_model])
+            second_positive_example = rng.choice(examples_by_model[second_anchor_model])
             triplets.append(TrainingTriplet(
                 anchor_prompt=anchor_prompt,
                 anchor_response=second_anchor_response,
@@ -297,7 +300,7 @@ class BehaviorEmbeddingPreprocessor:
             first_positive_prompt = pair.user_prompt
             first_positive_response = pair.model_b_response
 
-            negative_example = random.choice(all_examples)
+            negative_example = random.Random(self.seed).choice(all_examples)
             triplets.append(TrainingTriplet(
                 anchor_prompt=anchor_prompt,
                 anchor_response=first_anchor_response,
@@ -322,6 +325,8 @@ class BehaviorEmbeddingPreprocessor:
                 negative_response=negative_example.response
             ))
 
+        return triplets
+
     def _generate_embeddings(self, triplets: list[TrainingTriplet]) -> list[TripletEmbedding]:
         embedding_model = SentenceTransformer(self.embedding_model_name)
 
@@ -344,7 +349,7 @@ class BehaviorEmbeddingPreprocessor:
         if text in cache:
             return cache[text]
         
-        embedding = model.encode(text).cpu().numpy()
+        embedding = model.encode(text) #.cpu().numpy()
         cache[text] = embedding
         return embedding
 
