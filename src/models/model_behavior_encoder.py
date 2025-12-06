@@ -66,25 +66,18 @@ class ModelBehaviorEncoder:
         self.preprocessor_seed = preprocessor_seed
         self.print_every = print_every
         
-        self._text_encoder: SentenceTransformer | None = None
         self.preprocessor = BehaviorEmbeddingPreprocessor(
             min_model_comparisons=min_model_comparisons,
             identity_positive_ratio=identity_positive_ratio,
             seed=preprocessor_seed,
         )
         
+        self.input_dim: int | None = None
         self._module: ModelBehaviorEncoder._BehaviorEncoderModule | None = None
         self._epoch_logs: list["ModelBehaviorEncoder.EpochLog"] = []
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.last_timer: Timer | None = None
-    
-    @property
-    def text_encoder(self) -> SentenceTransformer:
-        """Lazy load the sentence transformer model."""
-        if self._text_encoder is None:
-            self._text_encoder = SentenceTransformer(self.encoder_model_name)
-        return self._text_encoder
     
     @property
     def module(self) -> "_BehaviorEncoderModule":
@@ -98,11 +91,11 @@ class ModelBehaviorEncoder:
         """Get the dimensionality of the output embeddings."""
         return self.hidden_dims[-1]
     
-    def _initialize_module(self) -> None:
+    def _initialize_module(self, input_dim: int) -> None:
         """Initialize the neural network module."""
-        base_dim = self.text_encoder.get_sentence_embedding_dimension()
+        self.input_dim = input_dim
         self._module = self._BehaviorEncoderModule(
-            input_dim=base_dim,
+            input_dim=input_dim,
             hidden_dims=self.hidden_dims,
         ).to(self.device)
     
@@ -141,10 +134,11 @@ class ModelBehaviorEncoder:
             
             with Timer("prepare_dataloaders", verbosity="start+end", parent=train_timer):
                 train_dataloader = self._prepare_dataloader(train_preprocessed, batch_size, shuffle=True)
-                val_dataloader = self._prepare_dataloader(val_preprocessed, batch_size, shuffle=False) if val_preprocessed is not None else None
+                val_dataloader = self._prepare_dataloader(val_preprocessed, batch_size, shuffle=False) \
+                    if val_preprocessed is not None else None
             
             if self._module is None:
-                self._initialize_module()
+                self._initialize_module(train_dataloader.dataset[0][0].shape[1])
             
             optimizer = self.optimizer_spec.create_optimizer(self.module)
             scheduler = self.optimizer_spec.create_scheduler(optimizer)
@@ -170,7 +164,6 @@ class ModelBehaviorEncoder:
     def encode(
         self,
         pairs: list[PromptResponsePair],
-        batch_size: int = 32,
     ) -> np.ndarray:
         """
         Encode a list of (prompt, response) pairs into embeddings.
@@ -182,27 +175,23 @@ class ModelBehaviorEncoder:
         Returns:
             Array of embeddings  # [n_samples, embedding_dim]
         """
-        # Concatenate prompt and response
-        texts = [f"{pair.prompt} [SEP] {pair.response}" for pair in pairs]
+        if self._module is None:
+            raise RuntimeError("Module not initialized. Train the model first.")
         
-        # Encode texts using sentence transformer
-        text_embeddings = self.text_encoder.encode(
-            texts,
-            batch_size=batch_size,
-            convert_to_tensor=True,
-            show_progress_bar=False,
-        )  # [n_samples, base_dim]
+        preprocessed_pairs = self.preprocessor.preprocess_for_inference(pairs)
+        embeddings = torch.stack([
+            torch.cat([
+                torch.from_numpy(pair.prompt), 
+                torch.from_numpy(pair.response),
+            ])
+            for pair in preprocessed_pairs
+        ]) # [n_samples, 2 * embedding_dim]
         
-        # Apply trainable dense layers if module exists
-        if self._module is not None:
-            text_embeddings = text_embeddings.to(self.device)
-            with torch.no_grad():
-                embeddings = self.module(text_embeddings)  # [n_samples, output_dim]
-            embeddings = embeddings.cpu()
-        else:
-            embeddings = text_embeddings
-        
-        return embeddings.numpy()  # [n_samples, embedding_dim]
+        with torch.no_grad():
+            embeddings = self.module(embeddings)  # [n_samples, output_dim]
+
+        embeddings = embeddings.cpu().numpy()  # [n_samples, embedding_dim]
+        return embeddings
     
     def compute_model_embedding(
         self,
@@ -240,6 +229,7 @@ class ModelBehaviorEncoder:
             "print_every": self.print_every,
             "module_state_dict": self.module.state_dict(),
             "epoch_logs": self._epoch_logs,
+            "input_dim": self.input_dim,
         }
     
     @classmethod
@@ -262,7 +252,7 @@ class ModelBehaviorEncoder:
             print_every=state_dict["print_every"],
         )
         
-        model._initialize_module()
+        model._initialize_module(state_dict["input_dim"])
         model.module.load_state_dict(state_dict["module_state_dict"])
         model._epoch_logs = state_dict["epoch_logs"]
         
@@ -275,43 +265,37 @@ class ModelBehaviorEncoder:
         shuffle: bool,
     ) -> DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
         """
-        Prepare dataloader from preprocessed triplets.
-        
-        Encodes all texts using the frozen sentence transformer and caches the results.
-        This is efficient since the text encoder is frozen during training.
+        Prepare dataloader from preprocessed triplets embeddings.
         
         Args:
-            preprocessed_data: Preprocessed triplets
+            preprocessed_data: Preprocessed triplets embeddings
             batch_size: Batch size
             shuffle: Whether to shuffle data
             
         Returns:
             DataLoader yielding (anchor_emb, positive_emb, negative_emb) tuples
-        """
-        # Collect all texts to encode
-        all_prompts = []
-        all_responses = []
-        
-        for triplet in preprocessed_data.triplets:
-            all_prompts.extend([triplet.anchor_prompt, triplet.positive_prompt, triplet.negative_prompt])
-            all_responses.extend([triplet.anchor_response, triplet.positive_response, triplet.negative_response])
-        
-        # Concatenate prompts and responses
-        all_texts = [f"{p} [SEP] {r}" for p, r in zip(all_prompts, all_responses)]
-        
-        # Encode all texts using the frozen sentence transformer
-        # This is done once and cached for the entire training process
-        all_embeddings = self.text_encoder.encode(
-            all_texts,
-            batch_size=batch_size,
-            convert_to_tensor=True,
-            show_progress_bar=False,
-        )  # [n_texts, base_dim]
-        
-        # Split into anchor, positive, negative
-        anchor_embeddings = all_embeddings[0::3]  # [n_triplets, base_dim]
-        positive_embeddings = all_embeddings[1::3]  # [n_triplets, base_dim]
-        negative_embeddings = all_embeddings[2::3]  # [n_triplets, base_dim]
+        """    
+        anchor_embeddings = torch.stack([
+            torch.cat([
+                torch.from_numpy(triplet.anchor_prompt),
+                torch.from_numpy(triplet.anchor_response),
+            ])
+            for triplet in preprocessed_data.triplets
+        ]) # [n_triplets, 2 * embedding_dim]
+        positive_embeddings = torch.stack([
+            torch.cat([
+                torch.from_numpy(triplet.positive_prompt),
+                torch.from_numpy(triplet.positive_response),
+            ])
+            for triplet in preprocessed_data.triplets
+        ]) # [n_triplets, 2 * embedding_dim]
+        negative_embeddings = torch.stack([
+            torch.cat([
+                torch.from_numpy(triplet.negative_prompt),
+                torch.from_numpy(triplet.negative_response),
+            ])
+            for triplet in preprocessed_data.triplets
+        ]) # [n_triplets, 2 * embedding_dim]
         
         dataset = TensorDataset(
             anchor_embeddings,
