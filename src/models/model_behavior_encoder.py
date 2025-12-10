@@ -5,7 +5,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
-from sentence_transformers import SentenceTransformer
 
 from src.data_models.data_models import TrainingData
 from src.data_models.behavior_encoder_types import PreprocessedBehaviorEncoderData, PromptResponsePair

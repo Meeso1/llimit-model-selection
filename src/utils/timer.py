@@ -65,3 +65,5 @@ class Timer:
             return f"{duration:.3f} s"
         elif duration < 100:
             return f"{duration:.2f} s"
+        else:
+            return f"{duration:.0f} s"
