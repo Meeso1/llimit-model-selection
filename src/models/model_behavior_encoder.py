@@ -1,3 +1,4 @@
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
 import numpy as np
@@ -73,6 +74,7 @@ class ModelBehaviorEncoder:
         
         self.input_dim: int | None = None
         self._module: ModelBehaviorEncoder._BehaviorEncoderModule | None = None
+        self._model_embeddings: dict[str, np.ndarray] | None = None
         self._epoch_logs: list["ModelBehaviorEncoder.EpochLog"] = []
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -89,6 +91,13 @@ class ModelBehaviorEncoder:
     def embedding_dim(self) -> int:
         """Get the dimensionality of the output embeddings."""
         return self.hidden_dims[-1]
+    
+    @property
+    def model_embeddings(self) -> dict[str, np.ndarray]:
+        """Get the model embeddings (must be initialized first)."""
+        if self._model_embeddings is None:
+            raise RuntimeError("Model embeddings not initialized. Train or load a model first.")
+        return self._model_embeddings
     
     def _initialize_module(self, input_dim: int) -> None:
         """Initialize the neural network module."""
@@ -159,6 +168,9 @@ class ModelBehaviorEncoder:
                     
                     if scheduler is not None:
                         scheduler.step()
+                        
+            with Timer("compute_model_embeddings", verbosity="start+end", parent=train_timer):
+                self._model_embeddings = self._compute_model_embeddings(data)
     
     def encode(
         self,
@@ -184,7 +196,7 @@ class ModelBehaviorEncoder:
                 torch.from_numpy(pair.response),
             ])
             for pair in preprocessed_pairs
-        ]) # [n_samples, 2 * embedding_dim]
+        ]).to(self.device) # [n_samples, 2 * embedding_dim]
         
         with torch.no_grad():
             embeddings = self.module(embeddings)  # [n_samples, output_dim]
@@ -195,19 +207,17 @@ class ModelBehaviorEncoder:
     def compute_model_embedding(
         self,
         pairs: list[PromptResponsePair],
-        batch_size: int = 32,
     ) -> np.ndarray:
         """
         Compute a single, representative embedding for a model by averaging.
         
         Args:
             pairs: List of prompt-response pairs from the model  # [n_samples]
-            batch_size: Batch size for encoding
             
         Returns:
             Single averaged embedding  # [embedding_dim]
         """
-        embeddings = self.encode(pairs, batch_size)  # [n_samples, embedding_dim]
+        embeddings = self.encode(pairs)  # [n_samples, embedding_dim]
         return np.mean(embeddings, axis=0)  # [embedding_dim]
     
     def get_state_dict(self) -> dict[str, Any]:
@@ -229,6 +239,7 @@ class ModelBehaviorEncoder:
             "module_state_dict": self.module.state_dict(),
             "epoch_logs": self._epoch_logs,
             "input_dim": self.input_dim,
+            "model_embeddings": self.model_embeddings,
         }
     
     @classmethod
@@ -253,6 +264,7 @@ class ModelBehaviorEncoder:
         
         model._initialize_module(state_dict["input_dim"])
         model.module.load_state_dict(state_dict["module_state_dict"])
+        model._model_embeddings = state_dict["model_embeddings"]
         model._epoch_logs = state_dict["epoch_logs"]
         
         return model
@@ -460,6 +472,27 @@ class ModelBehaviorEncoder:
         # KL divergence from N(0, 1)
         kl_loss = -0.5 * torch.sum(1 + log_var - mean.pow(2) - log_var.exp())
         return kl_loss / embeddings.size(0)  # Normalize by batch size
+    
+    def _compute_model_embeddings(self, data: TrainingData) -> dict[str, np.ndarray]:
+        """Compute model embeddings for the given data."""
+        all_prompts = [
+            v for entry in data.entries for v in [
+                (entry.model_a, PromptResponsePair(prompt=entry.user_prompt, response=entry.model_a_response)),
+                (entry.model_b, PromptResponsePair(prompt=entry.user_prompt, response=entry.model_b_response)),
+            ]
+        ]
+        prompts_by_model: dict[str, list[PromptResponsePair]] = defaultdict(list)
+        for model, prompt_response_pair in all_prompts:
+            prompts_by_model[model].append(prompt_response_pair)
+            
+        embeddings = {
+            model: self.compute_model_embedding(prompts)
+            for model, prompts in prompts_by_model.items()
+        }
+        
+        default_embedding = self.compute_model_embedding([v for _, v in all_prompts])
+        embeddings["default"] = default_embedding
+        return embeddings
     
     def _log_epoch_result(self, epoch_log: "ModelBehaviorEncoder.EpochLog") -> None:
         """Print epoch results if print_every is set."""
