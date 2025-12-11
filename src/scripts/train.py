@@ -7,11 +7,13 @@ from src.data_models.data_models import TrainingData
 from src.models.dense_network_model import DenseNetworkModel
 from src.models.simple_scoring_model import SimpleScoringModel
 from src.models.elo_scoring_model import EloScoringModel
+from src.models.greedy_ranking_model import GreedyRankingModel
 from src.models.model_base import ModelBase
 from src.scripts.model_types import (
     DenseNetworkSpecification,
     SimpleScoringSpecification,
     EloScoringSpecification,
+    GreedyRankingSpecification,
 )
 from src.scripts.training_spec import TrainingSpecification
 from src.utils import data_split
@@ -72,6 +74,8 @@ def _create_starting_model(spec: TrainingSpecification) -> ModelBase:
             return _create_starting_simple_scoring(spec)
         case "elo_scoring":
             return _create_starting_elo_scoring(spec)
+        case "greedy_ranking":
+            return _create_starting_greedy_ranking(spec)
         case unknown:
             raise ValueError(f"Unknown model type: {unknown}")  # pyright: ignore[reportUnreachable]
 
@@ -131,6 +135,22 @@ def _create_starting_elo_scoring(training_spec: TrainingSpecification) -> EloSco
         min_model_occurrences=model_spec.min_model_occurrences,
         wandb_details=training_spec.wandb.to_wandb_details() if training_spec.wandb is not None else None,
         print_every=training_spec.log.print_every,
+    )
+
+
+def _create_starting_greedy_ranking(training_spec: TrainingSpecification) -> GreedyRankingModel:
+    if training_spec.model.start_state is not None:
+        return GreedyRankingModel.load(training_spec.model.start_state)
+    
+    if not isinstance(training_spec.model.spec, GreedyRankingSpecification):
+        raise ValueError(f"Expected model specification to be of type {GreedyRankingSpecification.__name__}, but found {type(training_spec.model.spec).__name__}")
+    
+    model_spec = training_spec.model.spec
+    return GreedyRankingModel(
+        min_model_occurrences=model_spec.min_model_occurrences,
+        score_normalization=model_spec.score_normalization,
+        print_summary=model_spec.print_summary,
+        wandb_details=training_spec.wandb.to_wandb_details() if training_spec.wandb is not None else None,
     )
 
 

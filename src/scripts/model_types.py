@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 from src.models.optimizers.optimizer_spec_union import OptimizerSpec
 
 
-ModelType = Literal["dense_network", "simple_scoring", "elo_scoring"]
+ModelType = Literal["dense_network", "simple_scoring", "elo_scoring", "greedy_ranking"]
 
 
 class ModelSpecBase(BaseModel):
@@ -38,7 +38,14 @@ class EloScoringSpecification(ModelSpecBase):
     min_model_occurrences: int = 1000
 
 
+class GreedyRankingSpecification(ModelSpecBase):
+    model_type: Literal["greedy_ranking"] = "greedy_ranking"
+    min_model_occurrences: int = 1000
+    score_normalization: str = "negative_rank"
+    print_summary: bool = True
+
+
 ModelSpec = Annotated[
-    Union[DenseNetworkSpecification, SimpleScoringSpecification, EloScoringSpecification], 
+    Union[DenseNetworkSpecification, SimpleScoringSpecification, EloScoringSpecification, GreedyRankingSpecification], 
     Field(discriminator="model_type")
 ]

@@ -5,6 +5,9 @@ from typing import Any
 
 from src.data_models.data_models import InputData
 from src.models.dense_network_model import DenseNetworkModel
+from src.models.simple_scoring_model import SimpleScoringModel
+from src.models.elo_scoring_model import EloScoringModel
+from src.models.greedy_ranking_model import GreedyRankingModel
 from src.models.model_base import ModelBase
 from src.scripts.model_types import ModelType
 from src.constants import INFERENCE_OUTPUTS_PATH
@@ -64,6 +67,12 @@ def _load_model(model_type: ModelType, model_name: str) -> ModelBase:
     match model_type:
         case "dense_network":
             return DenseNetworkModel.load(model_name)
+        case "simple_scoring":
+            return SimpleScoringModel.load(model_name)
+        case "elo_scoring":
+            return EloScoringModel.load(model_name)
+        case "greedy_ranking":
+            return GreedyRankingModel.load(model_name)
         case unknown:
             raise ValueError(f"Unknown model type: {unknown}")  # pyright: ignore[reportUnreachable]
 

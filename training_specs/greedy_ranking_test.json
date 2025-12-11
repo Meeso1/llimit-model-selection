@@ -1,0 +1,23 @@
+{
+    "wandb": null,
+    "model": {
+      "name": "greedy-ranking-test",
+      "start_state": null,
+      "spec": {
+        "model_type": "greedy_ranking",
+        "min_model_occurrences": 300,
+        "score_normalization": "negative_rank",
+        "print_summary": true
+      }
+    },
+    "data": {
+      "valiation_split": 0.0,
+      "seed": 42
+    },
+    "log": {
+      "print_every": 1
+    },
+    "epochs": 0,
+    "batch_size": 32
+}
+
