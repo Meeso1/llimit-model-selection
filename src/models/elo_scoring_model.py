@@ -339,7 +339,7 @@ class EloScoringModel(ModelBase):
                     if rating_b < self.initial_rating + self.tie_both_bad_epsilon:
                         actual_b += self.non_ranking_loss_coeff * 0.5
                 elif comparison_type == "both_bad":
-                    actual_a, actual_b = 0.0, 0.0
+                    actual_a, actual_b = 0.5, 0.5
                     n_both_bad += 1
                     # Both should have negative scores (below initial)
                     if rating_a < self.initial_rating and rating_b < self.initial_rating:
