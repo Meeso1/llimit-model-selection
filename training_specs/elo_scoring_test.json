@@ -1,0 +1,26 @@
+{
+    "wandb": null,
+    "model": {
+      "name": "elo-scoring-test",
+      "start_state": null,
+      "spec": {
+        "model_type": "elo_scoring",
+        "initial_rating": 1500.0,
+        "k_factor": 32.0,
+        "balance_model_samples": true,
+        "tie_both_bad_epsilon": 100.0,
+        "non_ranking_loss_coeff": 0.1,
+        "min_model_occurrences": 1000
+      }
+    },
+    "data": {
+      "valiation_split": 0.2,
+      "seed": 42
+    },
+    "log": {
+      "print_every": 1
+    },
+    "epochs": 10,
+    "batch_size": 32
+}
+

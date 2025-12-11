@@ -2,7 +2,7 @@
 
 ## Overview
 
-The `SimpleScoringPreprocessor` prepares training data for the `SimpleScoringModel` by extracting model comparisons and encoding model names to integer IDs.
+The `SimpleScoringPreprocessor` prepares training data for the `SimpleScoringModel` and `EloScoringModel` by extracting model comparisons, filtering out rare models, and encoding model names to integer IDs.
 
 ## Input/Output
 
@@ -52,7 +52,12 @@ Any other winner value is skipped during preprocessing.
 from src.preprocessing.simple_scoring_preprocessor import SimpleScoringPreprocessor
 from src.data_models.data_models import TrainingData
 
-preprocessor = SimpleScoringPreprocessor()
+# Default: filter out models with < 1000 occurrences
+preprocessor = SimpleScoringPreprocessor(min_model_occurrences=1000)
+
+# Or keep all models (no filtering)
+preprocessor = SimpleScoringPreprocessor(min_model_occurrences=1)
+
 preprocessed_data = preprocessor.preprocess(training_data)
 
 # Access model encoder
@@ -76,14 +81,26 @@ The preprocessor creates a `StringEncoder` that:
 
 ## Implementation Details
 
-1. **Extract Unique Models**: Iterates through all entries to collect unique model names
-2. **Create Encoder**: Initializes `StringEncoder` and fits it with sorted model names
-3. **Process Comparisons**: For each entry:
+1. **Count Model Occurrences**: Iterates through all entries to count how many times each model appears
+2. **Filter Rare Models**: Keeps only models that appear at least `min_model_occurrences` times
+3. **Create Encoder**: Initializes `StringEncoder` and fits it with sorted frequent model names
+4. **Process Comparisons**: For each entry:
+   - Skip if either model is filtered out (rare)
    - Encode model_a and model_b to IDs
    - Map winner to comparison type
    - Create `PreprocessedComparison` object
    - Skip entries with unknown winner types
-4. **Return**: `PreprocessedTrainingData` with comparisons and encoder
+5. **Report Filtering**: Prints statistics about filtered models and comparisons
+6. **Return**: `PreprocessedTrainingData` with comparisons and encoder
+
+### Filtering Rationale
+
+Rare models (those appearing in few comparisons) can cause problems:
+- Unreliable score estimates due to limited data
+- Overfitting to specific comparison contexts
+- Computational overhead for marginal benefit
+
+By default, models appearing less than 1000 times are filtered out, ensuring robust score estimation.
 
 ## Design Rationale
 

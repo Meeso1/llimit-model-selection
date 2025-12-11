@@ -39,6 +39,7 @@ class SimpleScoringModel(ModelBase):
         print_every: int | None = 1,
         tie_both_bad_epsilon: float = 1e-2,
         non_ranking_loss_coeff: float = 0.01,
+        min_model_occurrences: int = 1000,
         wandb_details: WandbDetails | None = None,
     ) -> None:
         super().__init__(wandb_details)
@@ -47,7 +48,8 @@ class SimpleScoringModel(ModelBase):
         self.print_every = print_every
         self.tie_both_bad_epsilon = tie_both_bad_epsilon
         self.non_ranking_loss_coeff = non_ranking_loss_coeff
-        self.preprocessor = SimpleScoringPreprocessor()
+        self.min_model_occurrences = min_model_occurrences
+        self.preprocessor = SimpleScoringPreprocessor(min_model_occurrences=min_model_occurrences)
 
         self._history_entries: list[TrainingHistoryEntry] = []
         self._model_encoder: StringEncoder | None = None
@@ -64,6 +66,7 @@ class SimpleScoringModel(ModelBase):
             "balance_model_samples": self.balance_model_samples,
             "tie_both_bad_epsilon": self.tie_both_bad_epsilon,
             "non_ranking_loss_coeff": self.non_ranking_loss_coeff,
+            "min_model_occurrences": self.min_model_occurrences,
             "num_models": self._model_encoder.size
         }
 
@@ -209,6 +212,7 @@ class SimpleScoringModel(ModelBase):
             "print_every": self.print_every,
             "tie_both_bad_epsilon": self.tie_both_bad_epsilon,
             "non_ranking_loss_coeff": self.non_ranking_loss_coeff,
+            "min_model_occurrences": self.min_model_occurrences,
             "network_state_dict": self.network.state_dict(),
             "model_encoder": self._model_encoder.get_state_dict(),
             "history_entries": self._history_entries,
@@ -236,6 +240,7 @@ class SimpleScoringModel(ModelBase):
             print_every=state_dict["print_every"],
             tie_both_bad_epsilon=state_dict["tie_both_bad_epsilon"],
             non_ranking_loss_coeff=state_dict["non_ranking_loss_coeff"],
+            min_model_occurrences=state_dict["min_model_occurrences"],
         )
         
         model._model_encoder = StringEncoder.load_state_dict(state_dict["model_encoder"])
@@ -553,6 +558,7 @@ class SimpleScoringModel(ModelBase):
         else:
             loss_components["tie_loss"] = 0.0
         
+        # TODO: This might be wrong - loss gets smaller with both_bad acc going to 0
         # For both_bad: both models should have negative scores
         if both_bad_mask.any():
             bad_scores_a = scores_a[both_bad_mask]  # [n_bad]

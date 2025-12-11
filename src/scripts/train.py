@@ -5,8 +5,14 @@ import datasets
 from src import data_loading
 from src.data_models.data_models import TrainingData
 from src.models.dense_network_model import DenseNetworkModel
+from src.models.simple_scoring_model import SimpleScoringModel
+from src.models.elo_scoring_model import EloScoringModel
 from src.models.model_base import ModelBase
-from src.scripts.model_types import DenseNetworkSpecification
+from src.scripts.model_types import (
+    DenseNetworkSpecification,
+    SimpleScoringSpecification,
+    EloScoringSpecification,
+)
 from src.scripts.training_spec import TrainingSpecification
 from src.utils import data_split
 
@@ -62,6 +68,10 @@ def _create_starting_model(spec: TrainingSpecification) -> ModelBase:
     match spec.model.spec.model_type:
         case "dense_network":
             return _create_starting_dense_network(spec)
+        case "simple_scoring":
+            return _create_starting_simple_scoring(spec)
+        case "elo_scoring":
+            return _create_starting_elo_scoring(spec)
         case unknown:
             raise ValueError(f"Unknown model type: {unknown}")  # pyright: ignore[reportUnreachable]
 
@@ -80,6 +90,45 @@ def _create_starting_dense_network(training_spec: TrainingSpecification) -> Dens
         model_id_embedding_dim=model_spec.model_id_embedding_dim,
         optimizer_spec=model_spec.optimizer,
         balance_model_samples=True,
+        wandb_details=training_spec.wandb.to_wandb_details() if training_spec.wandb is not None else None,
+        print_every=training_spec.log.print_every,
+    )
+
+
+def _create_starting_simple_scoring(training_spec: TrainingSpecification) -> SimpleScoringModel:
+    if training_spec.model.start_state is not None:
+        return SimpleScoringModel.load(training_spec.model.start_state)
+    
+    if not isinstance(training_spec.model.spec, SimpleScoringSpecification):
+        raise ValueError(f"Expected model specification to be of type {SimpleScoringSpecification.__name__}, but found {type(training_spec.model.spec).__name__}")
+    
+    model_spec = training_spec.model.spec
+    return SimpleScoringModel(
+        optimizer_spec=model_spec.optimizer,
+        balance_model_samples=model_spec.balance_model_samples,
+        tie_both_bad_epsilon=model_spec.tie_both_bad_epsilon,
+        non_ranking_loss_coeff=model_spec.non_ranking_loss_coeff,
+        min_model_occurrences=model_spec.min_model_occurrences,
+        wandb_details=training_spec.wandb.to_wandb_details() if training_spec.wandb is not None else None,
+        print_every=training_spec.log.print_every,
+    )
+
+
+def _create_starting_elo_scoring(training_spec: TrainingSpecification) -> EloScoringModel:
+    if training_spec.model.start_state is not None:
+        return EloScoringModel.load(training_spec.model.start_state)
+    
+    if not isinstance(training_spec.model.spec, EloScoringSpecification):
+        raise ValueError(f"Expected model specification to be of type {EloScoringSpecification.__name__}, but found {type(training_spec.model.spec).__name__}")
+    
+    model_spec = training_spec.model.spec
+    return EloScoringModel(
+        initial_rating=model_spec.initial_rating,
+        k_factor=model_spec.k_factor,
+        balance_model_samples=model_spec.balance_model_samples,
+        tie_both_bad_epsilon=model_spec.tie_both_bad_epsilon,
+        non_ranking_loss_coeff=model_spec.non_ranking_loss_coeff,
+        min_model_occurrences=model_spec.min_model_occurrences,
         wandb_details=training_spec.wandb.to_wandb_details() if training_spec.wandb is not None else None,
         print_every=training_spec.log.print_every,
     )
