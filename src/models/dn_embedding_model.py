@@ -68,8 +68,6 @@ class DnEmbeddingModel(ModelBase):
         
         self._prompt_embedding_dim: int | None = None
         self._network: DnEmbeddingModel._DenseNetwork | None = None
-        self._model_embeddings: dict[str, np.ndarray] | None = None
-        
         self._history_entries: list[TrainingHistoryEntry] = []
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -85,10 +83,7 @@ class DnEmbeddingModel(ModelBase):
 
     @property
     def model_embeddings(self) -> dict[str, np.ndarray]:
-        """Get the model encoder (must be initialized first)."""
-        if self._model_embeddings is None:
-            raise RuntimeError("Model embeddings not initialized. Train or load a model first.")
-        return self._model_embeddings
+        return self.embedding_model.model_embeddings
 
     def _initialize_network(
         self,
@@ -97,7 +92,7 @@ class DnEmbeddingModel(ModelBase):
         self._prompt_embedding_dim = prompt_embedding_dim
         self._network = self._DenseNetwork(
             prompt_embedding_dim=prompt_embedding_dim,
-            model_id_embedding_dim=self.embedding_model_hidden_dims[-1],
+            model_embedding_dim=self.embedding_model.embedding_dim,
             hidden_dims=self.hidden_dims,
         ).to(self.device)
 
