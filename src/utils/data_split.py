@@ -4,6 +4,7 @@ import numpy as np
 from src.data_models.behavior_encoder_types import PreprocessedBehaviorEncoderData
 from src.data_models.data_models import TrainingData
 from src.data_models.dense_network_types import PreprocessedTrainingData
+from src.data_models.simple_scoring_types import PreprocessedTrainingData as SimplePreprocessedTrainingData
 
 
 @dataclass
@@ -71,6 +72,9 @@ def train_val_split(
     Returns:
         Tuple of (train_data, val_data) as TrainingData objects
     """
+    if val_fraction == 0:
+        return data, TrainingData(entries=[])
+    
     n_total = len(data.entries)
     train_indices, val_indices = _compute_split_indices(n_total, val_fraction, seed)
     
@@ -120,6 +124,47 @@ def split_preprocessed_data(
     )
     
     return train_preprocessed, val_preprocessed
+
+def split_simple_scoring_preprocessed_data(
+    preprocessed_data: SimplePreprocessedTrainingData,
+    val_fraction: float = 0.2,
+    seed: int = 42,
+) -> tuple[SimplePreprocessedTrainingData, SimplePreprocessedTrainingData | None]:
+    """
+    Split preprocessed simple scoring data into train and validation sets.
+    
+    This operates on already-preprocessed comparisons, maintaining the same model encoder.
+    
+    Args:
+        preprocessed_data: Preprocessed training data to split
+        val_fraction: Fraction of data to use for validation (default: 0.2)
+        seed: Random seed for reproducibility (default: 42)
+    
+    Returns:
+        Tuple of (train_preprocessed, val_preprocessed) with shared model encoder.
+        val_preprocessed is None if val_fraction is 0.
+    """
+    if val_fraction == 0:
+        return preprocessed_data, None
+    
+    n_total = len(preprocessed_data.comparisons)
+    train_indices, val_indices = _compute_split_indices(n_total, val_fraction, seed)
+    
+    train_comparisons = [preprocessed_data.comparisons[i] for i in train_indices]
+    val_comparisons = [preprocessed_data.comparisons[i] for i in val_indices]
+    
+    train_preprocessed = SimplePreprocessedTrainingData(
+        comparisons=train_comparisons,
+        model_encoder=preprocessed_data.model_encoder,
+    )
+    
+    val_preprocessed = SimplePreprocessedTrainingData(
+        comparisons=val_comparisons,
+        model_encoder=preprocessed_data.model_encoder,
+    )
+    
+    return train_preprocessed, val_preprocessed
+
 
 def split_preprocessed_behavior_data(
     preprocessed_data: PreprocessedBehaviorEncoderData,
