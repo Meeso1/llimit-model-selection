@@ -10,6 +10,8 @@ class PreprocessedPromptPair:
     prompt_embedding: np.ndarray  # [prompt_embedding_dim]
     model_embedding_a: np.ndarray  # [model_embedding_dim]
     model_embedding_b: np.ndarray  # [model_embedding_dim]
+    model_id_a: int
+    model_id_b: int
     winner_label: int  # 0 for model_a wins, 1 for model_b wins
 
 

@@ -94,6 +94,10 @@ class BehaviorEmbeddingPreprocessor:
         self,
         pairs: list[PromptResponsePair]
     ) -> list[PromptResponsePairEmbedding]:
+        cache_key = self._generate_inference_cache_key(pairs)
+        if cache_key in self.jar:
+            return self.jar.get(cache_key)
+        
         embedding_model = SentenceTransformer(self.embedding_model_name)
         result = []
         cache = {}
@@ -102,6 +106,9 @@ class BehaviorEmbeddingPreprocessor:
                 prompt=self._embed_or_get_cached(pair.prompt, embedding_model, cache),
                 response=self._embed_or_get_cached(pair.response, embedding_model, cache)
             ))
+            
+        self.jar.add(cache_key, result)
+            
         return result
 
     def _filter_data(self, data: TrainingData) -> TrainingData:
@@ -294,7 +301,7 @@ class BehaviorEmbeddingPreprocessor:
         for pair in pairs:
             anchor_prompt = pair.user_prompt
 
-            # 1st triplet: tie as anchor, winning as positive
+            # 1st triplet: A as anchor, B as positive
             # Choose negative as any example
             first_anchor_response = pair.model_a_response
             first_positive_prompt = pair.user_prompt
@@ -310,7 +317,7 @@ class BehaviorEmbeddingPreprocessor:
                 negative_response=negative_example.response
             ))
                 
-            # 2nd triplet: tie as anchor, losing as positive
+            # 2nd triplet: B as anchor, A as positive
             # Same negative as in first triplet
             second_anchor_response = pair.model_b_response
             second_positive_prompt = pair.user_prompt
@@ -379,6 +386,19 @@ class BehaviorEmbeddingPreprocessor:
         dataset_signature = hasher.hexdigest()[:16]
         params_str = f"{self.min_model_comparisons}-{self.identity_positive_ratio}-{self.seed}"
         return f"behavior_embedding/{self.version}/{params_str}-{dataset_signature}"
+    
+    def _generate_inference_cache_key(self, pairs: list[PromptResponsePair]) -> str:
+        hasher = hashlib.sha256()
+        hasher.update(str(len(pairs)).encode())
+        hasher.update(str(self.embedding_model_name).encode())
+        hasher.update(str(self.seed).encode())
+        
+        for pair in pairs:
+            hasher.update(pair.prompt.encode())
+            hasher.update(pair.response.encode())
+        
+        dataset_signature = hasher.hexdigest()[:16]
+        return f"behavior_embedding_inference/{self.version}/{self.embedding_model_name}-{dataset_signature}"
 
     @dataclass
     class ModelExample:

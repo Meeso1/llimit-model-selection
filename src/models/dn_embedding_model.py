@@ -19,7 +19,7 @@ from src.utils.training_history import TrainingHistory, TrainingHistoryEntry
 from src.utils.wandb_details import WandbDetails
 from src.utils.timer import Timer
 from src.utils.accuracy import compute_pairwise_accuracy
-from src.utils.data_split import ValidationSplit, split_preprocessed_data
+from src.utils.data_split import ValidationSplit, split_dn_embedding_preprocessed_data
 from src.models.optimizers.optimizer_spec import OptimizerSpecification
 from src.models.optimizers.adamw_spec import AdamWSpec
 
@@ -134,20 +134,22 @@ class DnEmbeddingModel(ModelBase):
                     batch_size=batch_size,
                 )
             
-            if self._network is None:
-                self._initialize_network(
-                    prompt_embedding_dim=self.embedding_model.embedding_dim,
-                )
-            
             with Timer("encode_prompts", verbosity="start+end", parent=train_timer):
                 encoded_prompts = self.preprocessor.preprocess(data)
                 
+            if self._network is None:
+                self._initialize_network(
+                    prompt_embedding_dim=encoded_prompts.embedding_dim,
+                )
+            
             with Timer("prepare_preprocessed_data", verbosity="start+end", parent=train_timer):
                 preprocessed_pairs = [
                     PreprocessedPromptPair(
                         prompt_embedding=pair.prompt_embedding,
                         model_embedding_a=self.model_embeddings[encoded_prompts.model_encoder.decode(pair.model_id_a)],
                         model_embedding_b=self.model_embeddings[encoded_prompts.model_encoder.decode(pair.model_id_b)],
+                        model_id_a=pair.model_id_a,
+                        model_id_b=pair.model_id_b,
                         winner_label=pair.winner_label,
                     )
                     for pair in encoded_prompts.pairs
@@ -155,7 +157,7 @@ class DnEmbeddingModel(ModelBase):
                 preprocessed_data = PreprocessedTrainingData(pairs=preprocessed_pairs)
             
             with Timer("split_preprocessed_data", verbosity="start+end", parent=train_timer):
-                preprocessed_train, preprocessed_val = split_preprocessed_data(
+                preprocessed_train, preprocessed_val = split_dn_embedding_preprocessed_data(
                     preprocessed_data,
                     val_fraction=validation_split.val_fraction if validation_split is not None else 0,
                     seed=validation_split.seed if validation_split is not None else 42,
@@ -359,6 +361,8 @@ class DnEmbeddingModel(ModelBase):
         # Each comparison pair becomes a training sample with margin ranking loss
         prompt_embeddings_a_list = []  # [n_pairs, embedding_dim]
         prompt_embeddings_b_list = []  # [n_pairs, embedding_dim]
+        model_embeddings_a_list = []  # [n_pairs, model_embedding_dim]
+        model_embeddings_b_list = []  # [n_pairs, model_embedding_dim]
         model_ids_a_list = []  # [n_pairs]
         model_ids_b_list = []  # [n_pairs]
         labels_list = []  # [n_pairs] - 1 if a wins, -1 if b wins
@@ -366,22 +370,25 @@ class DnEmbeddingModel(ModelBase):
         for pair in preprocessed_data.pairs:
             prompt_embeddings_a_list.append(torch.from_numpy(pair.prompt_embedding))
             prompt_embeddings_b_list.append(torch.from_numpy(pair.prompt_embedding))
+            model_embeddings_a_list.append(torch.from_numpy(pair.model_embedding_a))
+            model_embeddings_b_list.append(torch.from_numpy(pair.model_embedding_b))
             model_ids_a_list.append(pair.model_id_a)
             model_ids_b_list.append(pair.model_id_b)
+            
             # label: 1 if model_a should be ranked higher, -1 if model_b should be ranked higher
             labels_list.append(1.0 if pair.winner_label == 0 else -1.0)
         
         prompt_embeddings_a = torch.stack(prompt_embeddings_a_list)  # [n_pairs, embedding_dim]
         prompt_embeddings_b = torch.stack(prompt_embeddings_b_list)  # [n_pairs, embedding_dim]
-        model_ids_a = torch.tensor(model_ids_a_list, dtype=torch.long)  # [n_pairs]
-        model_ids_b = torch.tensor(model_ids_b_list, dtype=torch.long)  # [n_pairs]
+        model_embeddings_a = torch.stack(model_embeddings_a_list)  # [n_pairs, model_embedding_dim]
+        model_embeddings_b = torch.stack(model_embeddings_b_list)  # [n_pairs, model_embedding_dim]
         labels = torch.tensor(labels_list, dtype=torch.float32)  # [n_pairs]
         
         dataset = TensorDataset(
             prompt_embeddings_a,
-            model_ids_a,
+            model_embeddings_a,
             prompt_embeddings_b,
-            model_ids_b,
+            model_embeddings_b,
             labels,
         )
         
@@ -460,11 +467,11 @@ class DnEmbeddingModel(ModelBase):
             n_batches = 0
             total_samples = 0
             
-            for batch_emb_a, batch_id_a, batch_emb_b, batch_id_b, batch_labels in dataloader:
-                batch_emb_a: torch.Tensor = batch_emb_a.to(self.device)  # [batch_size, embedding_dim]
-                batch_id_a: torch.Tensor = batch_id_a.to(self.device)  # [batch_size]
-                batch_emb_b: torch.Tensor = batch_emb_b.to(self.device)  # [batch_size, embedding_dim]
-                batch_id_b: torch.Tensor = batch_id_b.to(self.device)  # [batch_size]
+            for batch_emb_a, batch_model_emb_a, batch_emb_b, batch_model_emb_b, batch_labels in dataloader:
+                batch_emb_a: torch.Tensor = batch_emb_a.to(self.device)  # [batch_size, prompt_embedding_dim]
+                batch_model_emb_a: torch.Tensor = batch_model_emb_a.to(self.device)  # [batch_size, model_embedding_dim]
+                batch_emb_b: torch.Tensor = batch_emb_b.to(self.device)  # [batch_size, prompt_embedding_dim]
+                batch_model_emb_b: torch.Tensor = batch_model_emb_b.to(self.device)  # [batch_size, model_embedding_dim]
                 batch_labels: torch.Tensor = batch_labels.to(self.device)  # [batch_size]
                 
                 total_samples += len(batch_emb_a)
@@ -472,11 +479,11 @@ class DnEmbeddingModel(ModelBase):
                 optimizer.zero_grad()
                 scores_a = self.network(
                     batch_emb_a,
-                    batch_id_a,
+                    batch_model_emb_a,
                 )  # [batch_size]
                 scores_b = self.network(
                     batch_emb_b,
-                    batch_id_b,
+                    batch_model_emb_b,
                 )  # [batch_size]
                 
                 loss: torch.Tensor = criterion(scores_a, scores_b, batch_labels) # [batch_size]
@@ -531,12 +538,12 @@ class DnEmbeddingModel(ModelBase):
         n_batches = 0
         total_samples = 0
         
-        for batch_emb_a, batch_id_a, batch_emb_b, batch_id_b, batch_labels in val_dataloader:
+        for batch_emb_a, batch_model_emb_a, batch_emb_b, batch_model_emb_b, batch_labels in val_dataloader:
             with Timer(f"batch_{n_batches}", verbosity="start+end", parent=timer):
                 batch_emb_a: torch.Tensor = batch_emb_a.to(self.device)  # [batch_size, embedding_dim]
-                batch_id_a: torch.Tensor = batch_id_a.to(self.device)  # [batch_size]
-                batch_emb_b: torch.Tensor = batch_emb_b.to(self.device)  # [batch_size, embedding_dim]
-                batch_id_b: torch.Tensor = batch_id_b.to(self.device)  # [batch_size]
+                batch_model_emb_a: torch.Tensor = batch_model_emb_a.to(self.device)  # [batch_size, model_embedding_dim]
+                batch_emb_b: torch.Tensor = batch_emb_b.to(self.device)  # [batch_size, prompt_embedding_dim]
+                batch_model_emb_b: torch.Tensor = batch_model_emb_b.to(self.device)  # [batch_size, model_embedding_dim]
                 batch_labels: torch.Tensor = batch_labels.to(self.device)  # [batch_size]
                 
                 total_samples += len(batch_emb_a)
@@ -544,11 +551,11 @@ class DnEmbeddingModel(ModelBase):
                 with torch.no_grad():
                     scores_a = self.network(
                         batch_emb_a,
-                        batch_id_a,
+                        batch_model_emb_a,
                     )  # [batch_size]
                     scores_b = self.network(
                         batch_emb_b,
-                        batch_id_b,
+                        batch_model_emb_b,
                     )  # [batch_size]
                     
                     loss: torch.Tensor = criterion(scores_a, scores_b, batch_labels) # [batch_size]
@@ -607,10 +614,10 @@ class DnEmbeddingModel(ModelBase):
 
         def forward(
             self,
-            prompt_embedding: torch.Tensor,
-            model_embedding: torch.Tensor,
+            prompt_embedding: torch.Tensor, # [batch_size, prompt_embedding_dim]
+            model_embedding: torch.Tensor, # [batch_size, model_embedding_dim]
         ) -> torch.Tensor:
-            combined = torch.cat([prompt_embedding, model_embedding], dim=-1)  # [batch_size, prompt_embedding_dim + model_embedding_dim]
+            combined = torch.cat([prompt_embedding, model_embedding], dim=1) # [batch_size, prompt_embedding_dim + model_embedding_dim]
             output: torch.Tensor = self.dense_network(combined)  # [batch_size, 1]
             
             return output.squeeze(-1)  # [batch_size]

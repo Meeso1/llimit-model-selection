@@ -18,7 +18,7 @@ from src.utils.wandb_details import WandbDetails
 from src.utils.string_encoder import StringEncoder
 from src.utils.timer import Timer
 from src.utils.accuracy import compute_pairwise_accuracy
-from src.utils.data_split import ValidationSplit, split_preprocessed_data
+from src.utils.data_split import ValidationSplit, split_dense_network_preprocessed_data
 from src.models.optimizers.optimizer_spec import OptimizerSpecification
 from src.models.optimizers.adamw_spec import AdamWSpec
 
@@ -146,7 +146,7 @@ class DenseNetworkModel(ModelBase):
                 preprocessed_data = self._initialize_and_preprocess(data)
             
             with Timer("split_preprocessed_data", verbosity="start+end", parent=train_timer):
-                preprocessed_train, preprocessed_val = split_preprocessed_data(
+                preprocessed_train, preprocessed_val = split_dense_network_preprocessed_data(
                     preprocessed_data,
                     val_fraction=validation_split.val_fraction if validation_split is not None else 0,
                     seed=validation_split.seed if validation_split is not None else 42,
