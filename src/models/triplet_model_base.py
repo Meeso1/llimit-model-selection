@@ -104,8 +104,13 @@ class TripletModelBase(ABC, Generic[TripletType]):
             raise ValueError(f"Unknown embedding model type in state: {model_type}")
     
     @abstractmethod
-    def _initialize_module(self, input_dim: int) -> None:
+    def _initialize_module(self, input_dim: int | None = None) -> None:
         """Initialize the neural network module."""
+        pass
+
+    @abstractmethod
+    def _infer_input_dim(self, first_batch: Any) -> int | None:
+        """Infer the input dimension from the first batch."""
         pass
     
     @abstractmethod
@@ -177,9 +182,9 @@ class TripletModelBase(ABC, Generic[TripletType]):
                     if val_preprocessed is not None else None
             
             if self._get_module() is None:
-                # Get input dimension from first batch
+                # Get first batch so that input dimension can be inferred
                 first_batch = next(iter(train_dataloader))
-                self._initialize_module(first_batch[0].shape[1])
+                self._initialize_module(self._infer_input_dim(first_batch))
             
             optimizer = self._create_optimizer()
             scheduler = self._create_scheduler(optimizer)

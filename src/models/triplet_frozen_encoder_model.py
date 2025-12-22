@@ -92,13 +92,23 @@ class TripletFrozenEncoderModel(TripletModelBase[TripletEmbedding]):
         """Get the neural network module."""
         return self._module
     
-    def _initialize_module(self, input_dim: int) -> None:
+    def _initialize_module(self, input_dim: int | None = None) -> None:
         """Initialize the neural network module."""
+        if input_dim is None:
+            raise ValueError("input_dim cannot be None for frozen encoder model")
+        
         self.input_dim = input_dim
         self._module = self._EncoderModule(
             input_dim=input_dim,
             hidden_dims=self.hidden_dims,
         ).to(self.device)
+    
+    def _infer_input_dim(self, first_batch: Any) -> int:
+        """Infer the input dimension from the first batch."""
+        if not isinstance(first_batch[0], torch.Tensor):
+            raise ValueError("first_batch[0] is not a torch.Tensor")
+
+        return first_batch[0].shape[1]
     
     def _create_optimizer(self) -> optim.Optimizer:
         """Create optimizer for the model."""

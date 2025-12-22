@@ -93,13 +93,16 @@ class TripletFinetunableEncoderModel(TripletModelBase[TrainingTriplet]):
         """Get the neural network module."""
         return self._module
     
-    def _initialize_module(self, input_dim: int) -> None:
+    def _initialize_module(self, input_dim: int | None = None) -> None:
         """Initialize the neural network module."""
-        # input_dim is not used for transformer model
         self._module = self._EncoderModule(
             transformer_model_name=self.transformer_model_name,
             projection_dim=self.projection_dim,
         ).to(self.device)
+
+    def _infer_input_dim(self, first_batch: Any) -> int | None:
+        # We don't need input dimension for transformer model
+        return None
     
     def _create_optimizer(self) -> optim.Optimizer:
         """Create optimizer for the model."""
@@ -269,7 +272,7 @@ class TripletFinetunableEncoderModel(TripletModelBase[TrainingTriplet]):
             print_every=state_dict["print_every"],
         )
         
-        model._initialize_module(0)  # input_dim not used
+        model._initialize_module()
         model._module.load_state_dict(state_dict["module_state_dict"])
         model._model_embeddings = state_dict["model_embeddings"]
         model._epoch_logs = state_dict["epoch_logs"]
