@@ -1,11 +1,13 @@
 from dataclasses import dataclass
-import random
 import numpy as np
-from src.data_models.behavior_encoder_types import PreprocessedBehaviorEncoderData
+from typing import TypeVar
+from src.data_models.triplet_encoder_types import PreprocessedTripletEncoderData
 from src.data_models.data_models import TrainingData
 from src.data_models.dense_network_types import PreprocessedTrainingData as DenseNetworkPreprocessedTrainingData
 from src.data_models.dn_embedding_network_types import PreprocessedTrainingData as DnEmbeddingPreprocessedTrainingData
 from src.data_models.simple_scoring_types import PreprocessedTrainingData as SimplePreprocessedTrainingData
+
+T = TypeVar('T')
 
 
 @dataclass
@@ -207,15 +209,15 @@ def split_simple_scoring_preprocessed_data(
 
 
 def split_preprocessed_behavior_data(
-    preprocessed_data: PreprocessedBehaviorEncoderData,
+    preprocessed_data: PreprocessedTripletEncoderData[T],
     val_fraction: float = 0.2,
     seed: int = 42,
-) -> tuple[PreprocessedBehaviorEncoderData, PreprocessedBehaviorEncoderData]:
+) -> tuple[PreprocessedTripletEncoderData[T], PreprocessedTripletEncoderData[T]]:
     """
-    Split preprocessed behavior encoder data into train and validation sets.
+    Split preprocessed triplet encoder data into train and validation sets.
     
     Args:
-        preprocessed_data: Preprocessed behavior encoder data to split
+        preprocessed_data: Preprocessed triplet encoder data to split
         val_fraction: Fraction of data to use for validation (default: 0.2)
         seed: Random seed for reproducibility (default: 42)
     
@@ -231,8 +233,8 @@ def split_preprocessed_behavior_data(
     train_triplets = [preprocessed_data.triplets[i] for i in train_indices]
     val_triplets = [preprocessed_data.triplets[i] for i in val_indices]
     
-    train_preprocessed = PreprocessedBehaviorEncoderData(triplets=train_triplets)
-    val_preprocessed = PreprocessedBehaviorEncoderData(triplets=val_triplets)
+    train_preprocessed = PreprocessedTripletEncoderData(triplets=train_triplets)
+    val_preprocessed = PreprocessedTripletEncoderData(triplets=val_triplets)
     
     return train_preprocessed, val_preprocessed
 

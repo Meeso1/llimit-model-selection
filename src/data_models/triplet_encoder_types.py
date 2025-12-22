@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import TypeVar, Generic
 import numpy as np
 
 
@@ -11,7 +12,7 @@ class PromptResponsePair:
 
 @dataclass
 class TrainingTriplet:
-    """A single training triplet for the ModelBehaviorEncoder."""
+    """A single training triplet for triplet-based encoder models (text-based)."""
     anchor_prompt: str
     anchor_response: str
     
@@ -25,7 +26,7 @@ class TrainingTriplet:
 @dataclass
 class TripletEmbedding:
     """Embeddings for a single training triplet."""
-    anchor_prompt: np.ndarray # [embedding_dim]
+    anchor_prompt: np.ndarray  # [embedding_dim]
     anchor_response: np.ndarray  # [embedding_dim]
     positive_prompt: np.ndarray  # [embedding_dim]
     positive_response: np.ndarray  # [embedding_dim]
@@ -36,19 +37,28 @@ class TripletEmbedding:
 @dataclass
 class PromptResponsePairEmbedding:
     """Embeddings for a single prompt-response pair."""
-    prompt: np.ndarray # [embedding_dim]
+    prompt: np.ndarray  # [embedding_dim]
     response: np.ndarray  # [embedding_dim]
 
 
-# TODO: Update usages
-@dataclass
-class PreprocessedBehaviorEncoderData:
-    """Preprocessed data for the ModelBehaviorEncoder."""
-    triplets: list[TripletEmbedding]
-    # Other preprocessed fields can be added here.
+# Type variable for the triplet type (either TripletEmbedding or TrainingTriplet)
+TripletType = TypeVar('TripletType', TripletEmbedding, TrainingTriplet)
 
 
 @dataclass
-class ModelBehaviorEncoderOutput:
-    """Output from the ModelBehaviorEncoder."""
+class PreprocessedTripletEncoderData(Generic[TripletType]):
+    """
+    Preprocessed data for triplet-based encoder models.
+    
+    Generic over the triplet type:
+    - PreprocessedTripletEncoderData[TripletEmbedding] for frozen encoder (pre-computed embeddings)
+    - PreprocessedTripletEncoderData[TrainingTriplet] for fine-tunable encoder (raw text)
+    """
+    triplets: list[TripletType]
+
+
+@dataclass
+class TripletEncoderOutput:
+    """Output from triplet-based encoder models."""
     model_embeddings: dict[str, np.ndarray]
+

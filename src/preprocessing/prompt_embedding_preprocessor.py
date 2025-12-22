@@ -2,6 +2,7 @@
 
 import hashlib
 import torch
+from collections import Counter
 from sentence_transformers import SentenceTransformer
 
 from src.constants import PREPROCESSED_DATA_JAR_PATH
@@ -29,15 +30,17 @@ class PromptEmbeddingPreprocessor:
     def __init__(
         self,
         embedding_model_name: str = "all-MiniLM-L6-v2",
+        min_model_comparisons: int = 20,
     ) -> None:
         """
         Initialize the preprocessor.
         
         Args:
             embedding_model_name: Name of the sentence transformer model to use
-            version: Version string for cache invalidation when preprocessing logic changes
+            min_model_comparisons: Minimum number of comparisons for a model to be included
         """
         self.embedding_model_name = embedding_model_name
+        self.min_model_comparisons = min_model_comparisons
         self.version = "v1"
         self.jar = Jar(str(PREPROCESSED_DATA_JAR_PATH))
         self._model: SentenceTransformer | None = None
@@ -72,17 +75,13 @@ class PromptEmbeddingPreprocessor:
                 return self.jar.get(cache_key)
             
             with Timer("filter_entries", verbosity="start+end", parent=timer):
-                # Filter out ties and both_bad entries
-                filtered_entries = self.filter_out(data).entries
-                
-                if len(filtered_entries) == 0:
-                    raise ValueError("No valid training data after filtering out ties and both_bad")
-            
+                filtered_data = self.filter_out_ties_and_both_bad(data)
+                filtered_data, frequent_models = self.filter_out_rare_models(filtered_data, self.min_model_comparisons)
+                filtered_entries = filtered_data.entries
+
             with Timer("fit_model_encoder", verbosity="start+end", parent=timer):
                 model_encoder = StringEncoder()
-                model_encoder.fit(sorted(set(
-                    [entry.model_a for entry in filtered_entries] 
-                    + [entry.model_b for entry in filtered_entries])))
+                model_encoder.fit(sorted(frequent_models))
             
             with Timer("embed_prompts", verbosity="start+end", parent=timer):
                 prompts = [entry.user_prompt for entry in filtered_entries]
@@ -112,7 +111,7 @@ class PromptEmbeddingPreprocessor:
             return preprocessed_data
 
     @staticmethod
-    def filter_out(data: TrainingData) -> TrainingData:
+    def filter_out_ties_and_both_bad(data: TrainingData) -> TrainingData:
         """
         Filter out entries with winner="tie" or winner="both_bad".
         
@@ -126,6 +125,43 @@ class PromptEmbeddingPreprocessor:
             entry for entry in data.entries
             if entry.winner in ["model_a", "model_b"]
         ])
+
+    @staticmethod
+    def filter_out_rare_models(data: TrainingData, min_model_comparisons: int) -> tuple[TrainingData, list[str]]:
+        """
+        Filter out models with insufficient comparisons.
+        
+        Args:
+            data: Training data
+            min_model_comparisons: Minimum number of comparisons for a model to be included
+        """
+        # Count model occurrences
+        model_counts = Counter()
+        for entry in data.entries:
+            model_counts[entry.model_a] += 1
+            model_counts[entry.model_b] += 1
+        
+        # Filter out models with insufficient comparisons
+        frequent_models = {
+            model_name 
+            for model_name, count in model_counts.items() 
+            if count >= min_model_comparisons
+        }
+        
+        # Keep only entries where both models are frequent
+        filtered_entries = [
+            entry for entry in data.entries
+            if entry.model_a in frequent_models and entry.model_b in frequent_models
+        ]
+        
+        if len(filtered_entries) == 0:
+            raise ValueError(
+                "No valid training data after filtering. "
+                f"All models were filtered out (min_model_comparisons={min_model_comparisons}). "
+                "Try lowering min_model_comparisons or providing more training data."
+            )
+
+        return TrainingData(entries=filtered_entries), frequent_models
 
     def _generate_cache_key(self, data: TrainingData) -> str:
         """
@@ -150,7 +186,7 @@ class PromptEmbeddingPreprocessor:
             hasher.update(entry.timestamp.encode())
         
         dataset_signature = hasher.hexdigest()[:16]
-        return f"prompt_embedding/{self.version}/{self.embedding_model_name}-{dataset_signature}"
+        return f"prompt_embedding/{self.version}/{self.embedding_model_name}-{dataset_signature}-{self.min_model_comparisons}"
 
     def preprocess_for_inference(
         self,

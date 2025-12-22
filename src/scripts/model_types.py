@@ -2,9 +2,10 @@ from typing import Literal, Union, Annotated
 from pydantic import BaseModel, Field
 
 from src.models.optimizers.optimizer_spec_union import OptimizerSpec
+from src.models.embedding_specs.embedding_spec_union import EmbeddingSpec
 
 
-ModelType = Literal["dense_network", "simple_scoring", "elo_scoring", "greedy_ranking"]
+ModelType = Literal["dense_network", "dn_embedding", "simple_scoring", "elo_scoring", "greedy_ranking"]
 
 
 class ModelSpecBase(BaseModel):
@@ -17,6 +18,17 @@ class DenseNetworkSpecification(ModelSpecBase):
     hidden_dims: list[int]
     model_id_embedding_dim: int
     optimizer: OptimizerSpec
+
+
+class DnEmbeddingSpecification(ModelSpecBase):
+    model_type: Literal["dn_embedding"] = "dn_embedding"
+    hidden_dims: list[int]
+    optimizer: OptimizerSpec
+    balance_model_samples: bool = True
+    embedding_model_name: str = "all-MiniLM-L6-v2"
+    embedding_spec: EmbeddingSpec
+    min_model_comparisons: int = 20
+    embedding_model_epochs: int = 10
 
 
 class SimpleScoringSpecification(ModelSpecBase):
@@ -46,6 +58,6 @@ class GreedyRankingSpecification(ModelSpecBase):
 
 
 ModelSpec = Annotated[
-    Union[DenseNetworkSpecification, SimpleScoringSpecification, EloScoringSpecification, GreedyRankingSpecification], 
+    Union[DenseNetworkSpecification, DnEmbeddingSpecification, SimpleScoringSpecification, EloScoringSpecification, GreedyRankingSpecification], 
     Field(discriminator="model_type")
 ]

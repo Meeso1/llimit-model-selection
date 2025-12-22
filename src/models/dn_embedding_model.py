@@ -8,11 +8,15 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset, WeightedRandomSampler
 from collections import Counter
+from pydantic import TypeAdapter
 
 from src.models.model_base import ModelBase
 from src.data_models.data_models import TrainingData, InputData, OutputData
 from src.data_models.dn_embedding_network_types import PreprocessedPromptPair, PreprocessedTrainingData, PromptRoutingOutput
-from src.models.model_behavior_encoder import ModelBehaviorEncoder
+from src.models.embedding_specs.embedding_spec_union import EmbeddingSpec
+from src.models.embedding_specs.frozen_embedding_spec import FrozenEmbeddingSpec
+from src.models.triplet_model_base import TripletModelBase
+from src.models.optimizers.adamw_spec import AdamWSpec
 from src.preprocessing.prompt_embedding_preprocessor import PromptEmbeddingPreprocessor
 from src.utils.string_encoder import StringEncoder
 from src.utils.training_history import TrainingHistory, TrainingHistoryEntry
@@ -31,12 +35,8 @@ class DnEmbeddingModel(ModelBase):
         optimizer_spec: OptimizerSpecification | None = None,
         balance_model_samples: bool = True,
         embedding_model_name: str = "all-MiniLM-L6-v2",
-        embedding_model_hidden_dims: list[int] | None = None,
-        embedding_model_optimizer_spec: OptimizerSpecification | None = None,
-        triplet_margin: float = 0.2,
-        regularization_weight: float = 0.01,
+        embedding_spec: EmbeddingSpec | None = None,
         min_model_comparisons: int = 20,
-        identity_positive_ratio: float = 0.8,
         embedding_model_epochs: int = 10,
         wandb_details: WandbDetails | None = None,
         print_every: int | None = None,
@@ -47,23 +47,25 @@ class DnEmbeddingModel(ModelBase):
         self.hidden_dims = hidden_dims if hidden_dims is not None else [256, 128, 64]
         self.optimizer_spec = optimizer_spec if optimizer_spec is not None else AdamWSpec(learning_rate=0.001)
         self.balance_model_samples = balance_model_samples
+        self.embedding_model_name = embedding_model_name
         self.print_every = print_every
-        
+        self.min_model_comparisons = min_model_comparisons
         self.embedding_model_epochs = embedding_model_epochs
-        self.embedding_model = ModelBehaviorEncoder(
-            encoder_model_name=embedding_model_name,
-            hidden_dims=embedding_model_hidden_dims,
-            optimizer_spec=embedding_model_optimizer_spec,
-            triplet_margin=triplet_margin,
-            regularization_weight=regularization_weight,
+        self.seed = seed
+        
+        self.embedding_spec = embedding_spec if embedding_spec is not None else FrozenEmbeddingSpec(
+            optimizer=AdamWSpec(learning_rate=0.001)
+        )
+        
+        self.embedding_model = self.embedding_spec.create_model(
             min_model_comparisons=min_model_comparisons,
-            identity_positive_ratio=identity_positive_ratio,
             preprocessor_seed=seed,
             print_every=print_every,
         )
         
         self.preprocessor = PromptEmbeddingPreprocessor(
             embedding_model_name=embedding_model_name,
+            min_model_comparisons=min_model_comparisons,
         )
         
         self._prompt_embedding_dim: int | None = None
@@ -99,21 +101,17 @@ class DnEmbeddingModel(ModelBase):
     def get_config_for_wandb(self) -> dict[str, Any]:
         """Get configuration dictionary for Weights & Biases logging."""
         return {
-            "model_type": "dense_network",
+            "model_type": "dn_embedding",
             "hidden_dims": self.hidden_dims,
             "optimizer_type": self.optimizer_spec.optimizer_type,
             "optimizer_params": self.optimizer_spec.to_dict(),
             "balance_model_samples": self.balance_model_samples,
+            "embedding_model_name": self.embedding_model_name,
             "preprocessor_version": self.preprocessor.version,
-            "embedding_model_name": self.embedding_model.encoder_model_name,
-            "embedding_model_hidden_dims": self.embedding_model.hidden_dims,
-            "embedding_model_optimizer_type": self.embedding_model.optimizer_spec.optimizer_type,
-            "embedding_model_optimizer_params": self.embedding_model.optimizer_spec.to_dict(),
+            "embedding_type": self.embedding_spec.embedding_type,
+            "embedding_spec": self.embedding_spec.model_dump(),
+            "min_model_comparisons": self.min_model_comparisons,
             "embedding_model_epochs": self.embedding_model_epochs,
-            "triplet_margin": self.embedding_model.triplet_margin,
-            "regularization_weight": self.embedding_model.regularization_weight,
-            "min_model_comparisons": self.embedding_model.min_model_comparisons,
-            "identity_positive_ratio": self.embedding_model.identity_positive_ratio,
         }
 
     def train(
@@ -273,23 +271,19 @@ class DnEmbeddingModel(ModelBase):
             "optimizer_params": self.optimizer_spec.to_dict(),
             "hidden_dims": self.hidden_dims,
             "balance_model_samples": self.balance_model_samples,
+            "embedding_model_name": self.embedding_model_name,
             "print_every": self.print_every,
             "preprocessor_version": self.preprocessor.version,
             "prompt_embedding_dim": self._prompt_embedding_dim,
             "network_state_dict": self.network.state_dict(),
             "history_entries": self._history_entries,
-        
-            "embedding_model_name": self.embedding_model.encoder_model_name,
-            "embedding_model_hidden_dims": self.embedding_model.hidden_dims,
-            "embedding_model_optimizer_type": self.embedding_model.optimizer_spec.optimizer_type,
-            "embedding_model_optimizer_params": self.embedding_model.optimizer_spec.to_dict(),
+            
+            "embedding_type": self.embedding_spec.embedding_type,
+            "embedding_spec": self.embedding_spec.model_dump(),
+            "min_model_comparisons": self.min_model_comparisons,
             "embedding_model_epochs": self.embedding_model_epochs,
-            "triplet_margin": self.embedding_model.triplet_margin,
-            "regularization_weight": self.embedding_model.regularization_weight,
-            "min_model_comparisons": self.embedding_model.min_model_comparisons,
-            "identity_positive_ratio": self.embedding_model.identity_positive_ratio,
             "embedding_model_state_dict": self.embedding_model.get_state_dict(),
-            "seed": self.embedding_model.preprocessor_seed,
+            "seed": self.seed,
         }
 
     @classmethod
@@ -308,28 +302,23 @@ class DnEmbeddingModel(ModelBase):
             state_dict["optimizer_params"],
         )
         
-        embedding_model_optimizer_spec = OptimizerSpecification.from_serialized(
-            state_dict["embedding_model_optimizer_type"],
-            state_dict["embedding_model_optimizer_params"],
-        )
+        # Parse embedding spec using Pydantic TypeAdapter
+        embedding_spec_adapter = TypeAdapter(EmbeddingSpec)
+        embedding_spec = embedding_spec_adapter.validate_python(state_dict["embedding_spec"])
         
         model = cls(
             hidden_dims=state_dict["hidden_dims"],
             optimizer_spec=optimizer_spec,
             balance_model_samples=state_dict["balance_model_samples"],
             embedding_model_name=state_dict["embedding_model_name"],
-            embedding_model_hidden_dims=state_dict["embedding_model_hidden_dims"],
-            embedding_model_optimizer_spec=embedding_model_optimizer_spec,
-            triplet_margin=state_dict["triplet_margin"],
-            regularization_weight=state_dict["regularization_weight"],
+            embedding_spec=embedding_spec,
             min_model_comparisons=state_dict["min_model_comparisons"],
-            identity_positive_ratio=state_dict["identity_positive_ratio"],
             embedding_model_epochs=state_dict["embedding_model_epochs"],
             print_every=state_dict["print_every"],
             seed=state_dict["seed"],
         )
         
-        model.embedding_model = ModelBehaviorEncoder.load_state_dict(state_dict["embedding_model_state_dict"])
+        model.embedding_model = TripletModelBase.load_from_state_dict(state_dict["embedding_model_state_dict"])
 
         model._initialize_network(
             prompt_embedding_dim=state_dict["prompt_embedding_dim"],

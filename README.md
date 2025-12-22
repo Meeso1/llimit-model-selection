@@ -11,11 +11,12 @@
     - [ ] Incorporate timing data into logging
     - [ ] Allow to pass JSON as stdin for infer
 - [ ] Improvements
-    - [ ] Use ties/both_bad in training
-    - [ ] 2-stage training: compute model embeddings based on responses first, then train
+    - [x] Use ties/both_bad in training
+    - [x] 2-stage training: compute model embeddings based on responses first, then train
 - [ ] Trained model analysis
     - [ ] Average scores - use as accuracy during training/validation
     - [x] Percentage of correct predictions for pairs
+    - [ ] Visualise stuff per comparison pair
 - [ ] More simple models
     - [ ] RouteLLM
         - [ ] SW
@@ -25,3 +26,11 @@
     - [ ] Random Forest
     - [ ] LSTM?
     - [ ] Simple transformer
+
+- [ ] Embedding computation
+    - [ ] Focus only on model identity - disregard win-lose info
+    - [ ] Use something like KL+separation loss
+    - [ ] Something based on k-means?
+- [ ] Random stuff
+    - [ ] Inspect ELO model - maybe try seeding with real ELO scores?
+    - [ ] Try using a flow algorithm instead of graph model

@@ -8,26 +8,27 @@ from sentence_transformers import SentenceTransformer
 
 from src.constants import PREPROCESSED_DATA_JAR_PATH
 from src.data_models.data_models import EvaluationEntry, TrainingData
-from src.data_models.behavior_encoder_types import (
+from src.data_models.triplet_encoder_types import (
     PromptResponsePair,
     PromptResponsePairEmbedding,
     TrainingTriplet,
-    PreprocessedBehaviorEncoderData,
+    PreprocessedTripletEncoderData,
     TripletEmbedding,
 )
 from src.utils.jar import Jar
 from src.utils.timer import Timer
 
 
-class BehaviorEmbeddingPreprocessor:
+class TripletFrozenEncoderPreprocessor:
     """
-    Preprocessor for the ModelBehaviorEncoder.
+    Preprocessor for the TripletFrozenEncoderModel.
     
     This preprocessor:
     - Filters rare models (< min_model_comparisons)
     - Filters invalid entries (empty prompts/responses)
     - Constructs training triplets using a strategic selection process
     - Incorporates tie and both_bad entries
+    - Pre-computes embeddings using a frozen sentence transformer
     - Caches preprocessed data for efficiency
     """
     
@@ -44,20 +45,21 @@ class BehaviorEmbeddingPreprocessor:
         Args:
             min_model_comparisons: Minimum number of comparisons for a model to be included
             identity_positive_ratio: Ratio of identity positives (vs performance positives)
+            embedding_model_name: Name of the sentence transformer model
             seed: Random seed for reproducible triplet construction
         """
         self.min_model_comparisons = min_model_comparisons
         self.identity_positive_ratio = identity_positive_ratio
         self.seed = seed
         self.embedding_model_name = embedding_model_name
-        self.version = "v1"
+        self.version = "v2"
         self.jar = Jar(str(PREPROCESSED_DATA_JAR_PATH))
         self.last_timer: Timer | None = None
     
     def preprocess(
         self,
         data: TrainingData,
-    ) -> PreprocessedBehaviorEncoderData:
+    ) -> PreprocessedTripletEncoderData[TripletEmbedding]:
         """
         Preprocess training data by constructing triplets.
         
@@ -67,7 +69,7 @@ class BehaviorEmbeddingPreprocessor:
         Returns:
             Preprocessed data with training triplets
         """
-        with Timer("preprocess_behavior", verbosity="start+end") as timer:
+        with Timer("preprocess_triplet_frozen", verbosity="start+end") as timer:
             self.last_timer = timer
             
             with Timer("generate_cache_key", verbosity="start+end", parent=timer):
@@ -85,7 +87,7 @@ class BehaviorEmbeddingPreprocessor:
             with Timer("generate_embeddings", verbosity="start+end", parent=timer):
                 embeddings = self._generate_embeddings(triplets)
             
-            preprocessed_data = PreprocessedBehaviorEncoderData(triplets=embeddings)
+            preprocessed_data = PreprocessedTripletEncoderData(triplets=embeddings)
             self.jar.add(cache_key, preprocessed_data)
             
             return preprocessed_data
@@ -172,15 +174,15 @@ class BehaviorEmbeddingPreprocessor:
 
         return triplets
 
-    def _make_all_examples(self, pairs: list[EvaluationEntry]) -> list["BehaviorEmbeddingPreprocessor.ModelExample"]:
+    def _make_all_examples(self, pairs: list[EvaluationEntry]) -> list["TripletFrozenEncoderPreprocessor.ModelExample"]:
         result = []
         for pair in pairs:
-            result.append(BehaviorEmbeddingPreprocessor.ModelExample(
+            result.append(TripletFrozenEncoderPreprocessor.ModelExample(
                 prompt=pair.user_prompt,
                 response=pair.model_a_response,
                 model=pair.model_a
             ))
-            result.append(BehaviorEmbeddingPreprocessor.ModelExample(
+            result.append(TripletFrozenEncoderPreprocessor.ModelExample(
                 prompt=pair.user_prompt,
                 response=pair.model_b_response,
                 model=pair.model_b
@@ -188,17 +190,17 @@ class BehaviorEmbeddingPreprocessor:
         
         return result
 
-    def _make_all_winning_examples(self, pairs: list[EvaluationEntry]) -> list["BehaviorEmbeddingPreprocessor.ModelExample"]:
+    def _make_all_winning_examples(self, pairs: list[EvaluationEntry]) -> list["TripletFrozenEncoderPreprocessor.ModelExample"]:
         result = []
         for pair in pairs:
             if pair.winner == "model_a" or pair.winner == "tie":
-                result.append(BehaviorEmbeddingPreprocessor.ModelExample(
+                result.append(TripletFrozenEncoderPreprocessor.ModelExample(
                     prompt=pair.user_prompt,
                     response=pair.model_a_response,
                     model=pair.model_a
                 ))
             if pair.winner == "model_b" or pair.winner == "tie":
-                result.append(BehaviorEmbeddingPreprocessor.ModelExample(
+                result.append(TripletFrozenEncoderPreprocessor.ModelExample(
                     prompt=pair.user_prompt,
                     response=pair.model_b_response,
                     model=pair.model_b
@@ -206,19 +208,19 @@ class BehaviorEmbeddingPreprocessor:
 
         return result
 
-    def _make_examples_by_model(self, pairs: list[EvaluationEntry]) -> dict[str, list["BehaviorEmbeddingPreprocessor.ModelExample"]]:
+    def _make_examples_by_model(self, pairs: list[EvaluationEntry]) -> dict[str, list["TripletFrozenEncoderPreprocessor.ModelExample"]]:
         result = {}
         for pair in pairs:
             if pair.model_a not in result:
                 result[pair.model_a] = []
             if pair.model_b not in result:
                 result[pair.model_b] = []
-            result[pair.model_a].append(BehaviorEmbeddingPreprocessor.ModelExample(
+            result[pair.model_a].append(TripletFrozenEncoderPreprocessor.ModelExample(
                 prompt=pair.user_prompt,
                 response=pair.model_a_response,
                 model=pair.model_a
             ))
-            result[pair.model_b].append(BehaviorEmbeddingPreprocessor.ModelExample(
+            result[pair.model_b].append(TripletFrozenEncoderPreprocessor.ModelExample(
                 prompt=pair.user_prompt,
                 response=pair.model_b_response,
                 model=pair.model_b
@@ -229,8 +231,8 @@ class BehaviorEmbeddingPreprocessor:
     def _construct_triplets_from_win_lose_pairs(
         self, 
         pairs: list[EvaluationEntry], 
-        examples_by_model: dict[str, list["BehaviorEmbeddingPreprocessor.ModelExample"]],
-        all_winning_examples: list["BehaviorEmbeddingPreprocessor.ModelExample"]
+        examples_by_model: dict[str, list["TripletFrozenEncoderPreprocessor.ModelExample"]],
+        all_winning_examples: list["TripletFrozenEncoderPreprocessor.ModelExample"]
     ) -> list[TrainingTriplet]:  
         rng = random.Random(self.seed)
 
@@ -295,7 +297,7 @@ class BehaviorEmbeddingPreprocessor:
     def _construct_triplets_from_tie_pairs(
         self, 
         pairs: list[EvaluationEntry], 
-        all_examples: list["BehaviorEmbeddingPreprocessor.ModelExample"]
+        all_examples: list["TripletFrozenEncoderPreprocessor.ModelExample"]
     ) -> list[TrainingTriplet]:
         triplets = []
         for pair in pairs:
@@ -356,7 +358,7 @@ class BehaviorEmbeddingPreprocessor:
         if text in cache:
             return cache[text]
         
-        embedding = model.encode(text) #.cpu().numpy()
+        embedding = model.encode(text)
         cache[text] = embedding
         return embedding
 
@@ -385,7 +387,7 @@ class BehaviorEmbeddingPreprocessor:
         
         dataset_signature = hasher.hexdigest()[:16]
         params_str = f"{self.min_model_comparisons}-{self.identity_positive_ratio}-{self.seed}"
-        return f"behavior_embedding/{self.version}/{params_str}-{dataset_signature}"
+        return f"triplet_frozen_encoder/{self.version}/{params_str}-{dataset_signature}"
     
     def _generate_inference_cache_key(self, pairs: list[PromptResponsePair]) -> str:
         hasher = hashlib.sha256()
@@ -398,10 +400,11 @@ class BehaviorEmbeddingPreprocessor:
             hasher.update(pair.response.encode())
         
         dataset_signature = hasher.hexdigest()[:16]
-        return f"behavior_embedding_inference/{self.version}/{self.embedding_model_name}-{dataset_signature}"
+        return f"triplet_frozen_encoder_inference/{self.version}/{self.embedding_model_name}-{dataset_signature}"
 
     @dataclass
     class ModelExample:
         prompt: str
         response: str
         model: str
+

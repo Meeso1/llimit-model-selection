@@ -5,12 +5,14 @@ import datasets
 from src import data_loading
 from src.data_models.data_models import TrainingData
 from src.models.dense_network_model import DenseNetworkModel
+from src.models.dn_embedding_model import DnEmbeddingModel
 from src.models.simple_scoring_model import SimpleScoringModel
 from src.models.elo_scoring_model import EloScoringModel
 from src.models.greedy_ranking_model import GreedyRankingModel
 from src.models.model_base import ModelBase
 from src.scripts.model_types import (
     DenseNetworkSpecification,
+    DnEmbeddingSpecification,
     SimpleScoringSpecification,
     EloScoringSpecification,
     GreedyRankingSpecification,
@@ -70,6 +72,8 @@ def _create_starting_model(spec: TrainingSpecification) -> ModelBase:
     match spec.model.spec.model_type:
         case "dense_network":
             return _create_starting_dense_network(spec)
+        case "dn_embedding":
+            return _create_starting_dn_embedding(spec)
         case "simple_scoring":
             return _create_starting_simple_scoring(spec)
         case "elo_scoring":
@@ -94,6 +98,27 @@ def _create_starting_dense_network(training_spec: TrainingSpecification) -> Dens
         model_id_embedding_dim=model_spec.model_id_embedding_dim,
         optimizer_spec=model_spec.optimizer,
         balance_model_samples=True,
+        wandb_details=training_spec.wandb.to_wandb_details() if training_spec.wandb is not None else None,
+        print_every=training_spec.log.print_every,
+    )
+
+
+def _create_starting_dn_embedding(training_spec: TrainingSpecification) -> DnEmbeddingModel:
+    if training_spec.model.start_state is not None:
+        return DnEmbeddingModel.load(training_spec.model.start_state)
+    
+    if not isinstance(training_spec.model.spec, DnEmbeddingSpecification):
+        raise ValueError(f"Expected model specification to be of type {DnEmbeddingSpecification.__name__}, but found {type(training_spec.model.spec).__name__}")
+    
+    model_spec = training_spec.model.spec
+    return DnEmbeddingModel(
+        hidden_dims=model_spec.hidden_dims,
+        optimizer_spec=model_spec.optimizer,
+        balance_model_samples=model_spec.balance_model_samples,
+        embedding_model_name=model_spec.embedding_model_name,
+        embedding_spec=model_spec.embedding_spec,
+        min_model_comparisons=model_spec.min_model_comparisons,
+        embedding_model_epochs=model_spec.embedding_model_epochs,
         wandb_details=training_spec.wandb.to_wandb_details() if training_spec.wandb is not None else None,
         print_every=training_spec.log.print_every,
     )

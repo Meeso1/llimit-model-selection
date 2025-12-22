@@ -1,36 +1,39 @@
+"""Base class for triplet-based model behavior encoders."""
+
+from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Generic
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader
 
 from src.data_models.data_models import TrainingData
-from src.data_models.behavior_encoder_types import PreprocessedBehaviorEncoderData, PromptResponsePair
-from src.preprocessing.behavior_embedding_preprocessor import BehaviorEmbeddingPreprocessor
-from src.utils.data_split import ValidationSplit, split_preprocessed_behavior_data
+from src.data_models.triplet_encoder_types import (
+    PreprocessedTripletEncoderData,
+    PromptResponsePair,
+    TripletType,
+)
+from src.utils.data_split import ValidationSplit
 from src.utils.timer import Timer
-from src.models.optimizers.optimizer_spec import OptimizerSpecification
-from src.models.optimizers.adamw_spec import AdamWSpec
 
 
-class ModelBehaviorEncoder:
+class TripletModelBase(ABC, Generic[TripletType]):
     """
-    Model behavior encoder using Siamese-style architecture with triplet loss.
+    Base class for triplet-based model behavior encoders.
     
     This encoder learns to map (prompt, response) pairs to an embedding space where:
     - Models with similar performance are close together
     - Each model has a distinctive signature
     - Winning responses are separated from losing responses
+    
+    Subclasses must implement the specific encoder architecture (frozen vs fine-tunable).
     """
     
     def __init__(
         self,
-        encoder_model_name: str = "all-MiniLM-L6-v2",
-        hidden_dims: list[int] | None = None,
-        optimizer_spec: OptimizerSpecification | None = None,
         triplet_margin: float = 0.2,
         regularization_weight: float = 0.01,
         min_model_comparisons: int = 20,
@@ -39,12 +42,9 @@ class ModelBehaviorEncoder:
         print_every: int | None = None,
     ) -> None:
         """
-        Initialize the model behavior encoder.
+        Initialize the triplet-based encoder.
         
         Args:
-            encoder_model_name: Name of the sentence transformer model for text encoding
-            hidden_dims: Dimensions of trainable dense layers after frozen transformer
-            optimizer_spec: Optimizer specification (default: AdamW with LR 0.001)
             triplet_margin: Margin for triplet loss
             regularization_weight: Weight for KL-divergence regularization loss
             min_model_comparisons: Minimum comparisons for a model to be included
@@ -52,13 +52,6 @@ class ModelBehaviorEncoder:
             preprocessor_seed: Random seed for preprocessor
             print_every: Print progress every N epochs (None = no printing)
         """
-        self.encoder_model_name = encoder_model_name
-        self.hidden_dims = hidden_dims if hidden_dims is not None else [256, 128]
-        
-        if not self.hidden_dims:
-            raise ValueError("hidden_dims cannot be empty - the model must have trainable layers")
-        
-        self.optimizer_spec = optimizer_spec if optimizer_spec is not None else AdamWSpec(learning_rate=0.001)
         self.triplet_margin = triplet_margin
         self.regularization_weight = regularization_weight
         self.min_model_comparisons = min_model_comparisons
@@ -66,31 +59,17 @@ class ModelBehaviorEncoder:
         self.preprocessor_seed = preprocessor_seed
         self.print_every = print_every
         
-        self.preprocessor = BehaviorEmbeddingPreprocessor(
-            min_model_comparisons=min_model_comparisons,
-            identity_positive_ratio=identity_positive_ratio,
-            seed=preprocessor_seed,
-        )
-        
-        self.input_dim: int | None = None
-        self._module: ModelBehaviorEncoder._BehaviorEncoderModule | None = None
         self._model_embeddings: dict[str, np.ndarray] | None = None
-        self._epoch_logs: list["ModelBehaviorEncoder.EpochLog"] = []
+        self._epoch_logs: list["TripletModelBase.EpochLog"] = []
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.last_timer: Timer | None = None
     
     @property
-    def module(self) -> "_BehaviorEncoderModule":
-        """Get the neural network module (must be initialized first)."""
-        if self._module is None:
-            raise RuntimeError("Module not initialized. Train or load a model first.")
-        return self._module
-    
-    @property
+    @abstractmethod
     def embedding_dim(self) -> int:
         """Get the dimensionality of the output embeddings."""
-        return self.hidden_dims[-1]
+        pass
     
     @property
     def model_embeddings(self) -> dict[str, np.ndarray]:
@@ -99,13 +78,65 @@ class ModelBehaviorEncoder:
             raise RuntimeError("Model embeddings not initialized. Train or load a model first.")
         return self._model_embeddings
     
+    @staticmethod
+    def load_from_state_dict(state_dict: dict[str, Any]) -> "TripletModelBase":
+        """
+        Load embedding model from state dict based on model type.
+        
+        Args:
+            state_dict: State dictionary containing model_type and model parameters
+            
+        Returns:
+            Loaded embedding model instance
+            
+        Raises:
+            ValueError: If model_type is unknown
+        """
+        model_type = state_dict.get("model_type")
+        
+        if model_type == "TripletFrozenEncoderModel":
+            from src.models.triplet_frozen_encoder_model import TripletFrozenEncoderModel
+            return TripletFrozenEncoderModel.load_state_dict(state_dict)
+        elif model_type == "TripletFinetunableEncoderModel":
+            from src.models.triplet_finetunable_encoder_model import TripletFinetunableEncoderModel
+            return TripletFinetunableEncoderModel.load_state_dict(state_dict)
+        else:
+            raise ValueError(f"Unknown embedding model type in state: {model_type}")
+    
+    @abstractmethod
     def _initialize_module(self, input_dim: int) -> None:
         """Initialize the neural network module."""
-        self.input_dim = input_dim
-        self._module = self._BehaviorEncoderModule(
-            input_dim=input_dim,
-            hidden_dims=self.hidden_dims,
-        ).to(self.device)
+        pass
+    
+    @abstractmethod
+    def _get_module(self) -> nn.Module:
+        """Get the neural network module."""
+        pass
+    
+    @abstractmethod
+    def _prepare_dataloader(
+        self,
+        preprocessed_data: PreprocessedTripletEncoderData[TripletType],
+        batch_size: int,
+        shuffle: bool,
+    ) -> DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+        """Prepare dataloader from preprocessed data."""
+        pass
+    
+    @abstractmethod
+    def _preprocess_data(self, data: TrainingData) -> PreprocessedTripletEncoderData[TripletType]:
+        """Preprocess training data."""
+        pass
+    
+    @abstractmethod
+    def _split_preprocessed_data(
+        self,
+        preprocessed_data: PreprocessedTripletEncoderData[TripletType],
+        val_fraction: float,
+        seed: int,
+    ) -> tuple[PreprocessedTripletEncoderData[TripletType], PreprocessedTripletEncoderData[TripletType]]:
+        """Split preprocessed data into train and validation sets."""
+        pass
     
     def train(
         self,
@@ -123,15 +154,15 @@ class ModelBehaviorEncoder:
             epochs: Number of training epochs
             batch_size: Batch size for training
         """
-        with Timer("train_behavior_encoder", verbosity="start+end") as train_timer:
+        with Timer("train_triplet_encoder", verbosity="start+end") as train_timer:
             self.last_timer = train_timer
             
             with Timer("preprocess", verbosity="start+end", parent=train_timer):
-                preprocessed_data = self.preprocessor.preprocess(data)
+                preprocessed_data = self._preprocess_data(data)
             
             with Timer("split_data", verbosity="start+end", parent=train_timer):
                 if validation_split is not None:
-                    train_preprocessed, val_preprocessed = split_preprocessed_behavior_data(
+                    train_preprocessed, val_preprocessed = self._split_preprocessed_data(
                         preprocessed_data,
                         val_fraction=validation_split.val_fraction,
                         seed=validation_split.seed,
@@ -145,11 +176,13 @@ class ModelBehaviorEncoder:
                 val_dataloader = self._prepare_dataloader(val_preprocessed, batch_size, shuffle=False) \
                     if val_preprocessed is not None else None
             
-            if self._module is None:
-                self._initialize_module(train_dataloader.dataset[0][0].shape[0])
+            if self._get_module() is None:
+                # Get input dimension from first batch
+                first_batch = next(iter(train_dataloader))
+                self._initialize_module(first_batch[0].shape[1])
             
-            optimizer = self.optimizer_spec.create_optimizer(self.module)
-            scheduler = self.optimizer_spec.create_scheduler(optimizer)
+            optimizer = self._create_optimizer()
+            scheduler = self._create_scheduler(optimizer)
             
             criterion = nn.TripletMarginLoss(margin=self.triplet_margin, p=2)
             
@@ -168,10 +201,11 @@ class ModelBehaviorEncoder:
                     
                     if scheduler is not None:
                         scheduler.step()
-                        
+            
             with Timer("compute_model_embeddings", verbosity="start+end", parent=train_timer):
                 self._model_embeddings = self._compute_model_embeddings(data)
     
+    @abstractmethod
     def encode(
         self,
         pairs: list[PromptResponsePair],
@@ -181,28 +215,11 @@ class ModelBehaviorEncoder:
         
         Args:
             pairs: List of prompt-response pairs  # [n_samples]
-            batch_size: Batch size for encoding
             
         Returns:
             Array of embeddings  # [n_samples, embedding_dim]
         """
-        if self._module is None:
-            raise RuntimeError("Module not initialized. Train the model first.")
-        
-        preprocessed_pairs = self.preprocessor.preprocess_for_inference(pairs)
-        embeddings = torch.stack([
-            torch.cat([
-                torch.from_numpy(pair.prompt), 
-                torch.from_numpy(pair.response),
-            ])
-            for pair in preprocessed_pairs
-        ]).to(self.device) # [n_samples, 2 * embedding_dim]
-        
-        with torch.no_grad():
-            embeddings = self.module(embeddings)  # [n_samples, output_dim]
-
-        embeddings = embeddings.cpu().numpy()  # [n_samples, embedding_dim]
-        return embeddings
+        pass
     
     def compute_model_embedding(
         self,
@@ -220,105 +237,20 @@ class ModelBehaviorEncoder:
         embeddings = self.encode(pairs)  # [n_samples, embedding_dim]
         return np.mean(embeddings, axis=0)  # [embedding_dim]
     
+    @abstractmethod
     def get_state_dict(self) -> dict[str, Any]:
         """Get state dictionary for serialization."""
-        if self._module is None:
-            raise RuntimeError("Module not initialized. Train the model first.")
-        
-        return {
-            "encoder_model_name": self.encoder_model_name,
-            "hidden_dims": self.hidden_dims,
-            "optimizer_type": self.optimizer_spec.optimizer_type,
-            "optimizer_params": self.optimizer_spec.to_dict(),
-            "triplet_margin": self.triplet_margin,
-            "regularization_weight": self.regularization_weight,
-            "min_model_comparisons": self.min_model_comparisons,
-            "identity_positive_ratio": self.identity_positive_ratio,
-            "preprocessor_seed": self.preprocessor_seed,
-            "print_every": self.print_every,
-            "module_state_dict": self.module.state_dict(),
-            "epoch_logs": self._epoch_logs,
-            "input_dim": self.input_dim,
-            "model_embeddings": self.model_embeddings,
-        }
+        pass
     
-    @classmethod
-    def load_state_dict(cls, state_dict: dict[str, Any]) -> "ModelBehaviorEncoder":
-        """Load model from state dictionary."""
-        optimizer_spec = OptimizerSpecification.from_serialized(
-            state_dict["optimizer_type"],
-            state_dict["optimizer_params"],
-        )
-        
-        model = cls(
-            encoder_model_name=state_dict["encoder_model_name"],
-            hidden_dims=state_dict["hidden_dims"],
-            optimizer_spec=optimizer_spec,
-            triplet_margin=state_dict["triplet_margin"],
-            regularization_weight=state_dict["regularization_weight"],
-            min_model_comparisons=state_dict["min_model_comparisons"],
-            identity_positive_ratio=state_dict["identity_positive_ratio"],
-            preprocessor_seed=state_dict["preprocessor_seed"],
-            print_every=state_dict["print_every"],
-        )
-        
-        model._initialize_module(state_dict["input_dim"])
-        model.module.load_state_dict(state_dict["module_state_dict"])
-        model._model_embeddings = state_dict["model_embeddings"]
-        model._epoch_logs = state_dict["epoch_logs"]
-        
-        return model
+    @abstractmethod
+    def _create_optimizer(self) -> optim.Optimizer:
+        """Create optimizer for the model."""
+        pass
     
-    def _prepare_dataloader(
-        self,
-        preprocessed_data: PreprocessedBehaviorEncoderData,
-        batch_size: int,
-        shuffle: bool,
-    ) -> DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
-        """
-        Prepare dataloader from preprocessed triplets embeddings.
-        
-        Args:
-            preprocessed_data: Preprocessed triplets embeddings
-            batch_size: Batch size
-            shuffle: Whether to shuffle data
-            
-        Returns:
-            DataLoader yielding (anchor_emb, positive_emb, negative_emb) tuples
-        """    
-        anchor_embeddings = torch.stack([
-            torch.cat([
-                torch.from_numpy(triplet.anchor_prompt),
-                torch.from_numpy(triplet.anchor_response),
-            ])
-            for triplet in preprocessed_data.triplets
-        ]) # [n_triplets, 2 * embedding_dim]
-        positive_embeddings = torch.stack([
-            torch.cat([
-                torch.from_numpy(triplet.positive_prompt),
-                torch.from_numpy(triplet.positive_response),
-            ])
-            for triplet in preprocessed_data.triplets
-        ]) # [n_triplets, 2 * embedding_dim]
-        negative_embeddings = torch.stack([
-            torch.cat([
-                torch.from_numpy(triplet.negative_prompt),
-                torch.from_numpy(triplet.negative_response),
-            ])
-            for triplet in preprocessed_data.triplets
-        ]) # [n_triplets, 2 * embedding_dim]
-        
-        dataset = TensorDataset(
-            anchor_embeddings,
-            positive_embeddings,
-            negative_embeddings,
-        )
-        
-        return DataLoader(
-            dataset,
-            batch_size=batch_size,
-            shuffle=shuffle,
-        )
+    @abstractmethod
+    def _create_scheduler(self, optimizer: optim.Optimizer) -> optim.lr_scheduler._LRScheduler | None:
+        """Create learning rate scheduler."""
+        pass
     
     def _train_epoch(
         self,
@@ -328,10 +260,11 @@ class ModelBehaviorEncoder:
         optimizer: optim.Optimizer,
         criterion: nn.Module,
         epochs_timer: Timer,
-    ) -> "ModelBehaviorEncoder.EpochLog":
+    ) -> "TripletModelBase.EpochLog":
         """Train for one epoch."""
         with Timer(f"epoch_{epoch}", verbosity="start+end", parent=epochs_timer) as timer:
-            self.module.train()
+            module = self._get_module()
+            module.train()
             total_triplet_loss = 0.0
             total_reg_loss = 0.0
             total_loss = 0.0
@@ -340,19 +273,19 @@ class ModelBehaviorEncoder:
             total_samples = 0
             
             for batch_anchor, batch_positive, batch_negative in dataloader:
-                batch_anchor = batch_anchor.to(self.device)  # [batch_size, base_dim]
-                batch_positive = batch_positive.to(self.device)  # [batch_size, base_dim]
-                batch_negative = batch_negative.to(self.device)  # [batch_size, base_dim]
+                batch_anchor = batch_anchor.to(self.device)  # [batch_size, input_dim]
+                batch_positive = batch_positive.to(self.device)  # [batch_size, input_dim]
+                batch_negative = batch_negative.to(self.device)  # [batch_size, input_dim]
                 
                 batch_size_actual = len(batch_anchor)
                 total_samples += batch_size_actual
                 
                 optimizer.zero_grad()
                 
-                # Forward pass through projection
-                anchor_emb = self.module(batch_anchor)  # [batch_size, output_dim]
-                positive_emb = self.module(batch_positive)  # [batch_size, output_dim]
-                negative_emb = self.module(batch_negative)  # [batch_size, output_dim]
+                # Forward pass
+                anchor_emb = module(batch_anchor)  # [batch_size, output_dim]
+                positive_emb = module(batch_positive)  # [batch_size, output_dim]
+                negative_emb = module(batch_negative)  # [batch_size, output_dim]
                 
                 # Triplet loss
                 triplet_loss = criterion(anchor_emb, positive_emb, negative_emb)
@@ -388,7 +321,7 @@ class ModelBehaviorEncoder:
             val_loss, val_triplet_accuracy = self._perform_validation(
                 val_dataloader, criterion, timer
             ) if val_dataloader is not None else (None, None)
-            
+        
         epoch_log = self.EpochLog(
             epoch=epoch,
             train_loss=avg_loss,
@@ -410,7 +343,8 @@ class ModelBehaviorEncoder:
         timer: Timer,
     ) -> tuple[float, float]:
         """Perform validation and return (loss, triplet_accuracy)."""
-        self.module.eval()
+        module = self._get_module()
+        module.eval()
         total_loss = 0.0
         correct_triplets = 0
         n_batches = 0
@@ -418,17 +352,17 @@ class ModelBehaviorEncoder:
         
         with torch.no_grad():
             for batch_anchor, batch_positive, batch_negative in val_dataloader:
-                batch_anchor = batch_anchor.to(self.device)  # [batch_size, base_dim]
-                batch_positive = batch_positive.to(self.device)  # [batch_size, base_dim]
-                batch_negative = batch_negative.to(self.device)  # [batch_size, base_dim]
+                batch_anchor = batch_anchor.to(self.device)  # [batch_size, input_dim]
+                batch_positive = batch_positive.to(self.device)  # [batch_size, input_dim]
+                batch_negative = batch_negative.to(self.device)  # [batch_size, input_dim]
                 
                 batch_size_actual = len(batch_anchor)
                 total_samples += batch_size_actual
                 
                 # Forward pass
-                anchor_emb = self.module(batch_anchor)  # [batch_size, output_dim]
-                positive_emb = self.module(batch_positive)  # [batch_size, output_dim]
-                negative_emb = self.module(batch_negative)  # [batch_size, output_dim]
+                anchor_emb = module(batch_anchor)  # [batch_size, output_dim]
+                positive_emb = module(batch_positive)  # [batch_size, output_dim]
+                negative_emb = module(batch_negative)  # [batch_size, output_dim]
                 
                 # Triplet loss
                 triplet_loss = criterion(anchor_emb, positive_emb, negative_emb)
@@ -484,7 +418,7 @@ class ModelBehaviorEncoder:
         prompts_by_model: dict[str, list[PromptResponsePair]] = defaultdict(list)
         for model, prompt_response_pair in all_prompts:
             prompts_by_model[model].append(prompt_response_pair)
-            
+        
         embeddings = {
             model: self.compute_model_embedding(prompts)
             for model, prompts in prompts_by_model.items()
@@ -494,7 +428,7 @@ class ModelBehaviorEncoder:
         embeddings["default"] = default_embedding
         return embeddings
     
-    def _log_epoch_result(self, epoch_log: "ModelBehaviorEncoder.EpochLog") -> None:
+    def _log_epoch_result(self, epoch_log: "TripletModelBase.EpochLog") -> None:
         """Print epoch results if print_every is set."""
         if self.print_every is None:
             return
@@ -529,52 +463,4 @@ class ModelBehaviorEncoder:
         val_loss: float | None
         val_triplet_accuracy: float | None
         duration: float
-    
-    class _BehaviorEncoderModule(nn.Module):
-        """
-        Inner PyTorch module for the behavior encoder.
-        
-        This is a trainable dense network that projects the frozen text encoder
-        embeddings to a learned embedding space.
-        """
-        
-        def __init__(self, input_dim: int, hidden_dims: list[int]) -> None:
-            """
-            Initialize the module.
-            
-            Args:
-                input_dim: Input embedding dimension from text encoder
-                hidden_dims: List of hidden layer dimensions
-            """
-            super().__init__()
-            
-            self.input_dim = input_dim
-            self.hidden_dims = hidden_dims
-            self.output_dim = hidden_dims[-1]
-            
-            # Build dense network with hidden layers
-            layers = []
-            prev_dim = input_dim
-            
-            for hidden_dim in hidden_dims:
-                layers.append(nn.Linear(prev_dim, hidden_dim))
-                layers.append(nn.LeakyReLU(0.1))
-                layers.append(nn.Dropout(0.1))
-                prev_dim = hidden_dim
-            
-            # Remove last dropout
-            layers = layers[:-1]
-            
-            self.network = nn.Sequential(*layers)
-        
-        def forward(self, x: torch.Tensor) -> torch.Tensor:
-            """
-            Forward pass through the network.
-            
-            Args:
-                x: Input embeddings  # [batch_size, input_dim]
-                
-            Returns:
-                Output embeddings  # [batch_size, output_dim]
-            """
-            return self.network(x)
+
