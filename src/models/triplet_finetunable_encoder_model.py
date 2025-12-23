@@ -16,6 +16,7 @@ from src.data_models.triplet_encoder_types import (
 )
 from src.preprocessing.triplet_finetunable_encoder_preprocessor import TripletFinetunableEncoderPreprocessor
 from src.utils.data_split import split_preprocessed_behavior_data
+from src.utils.timer import Timer
 from src.models.triplet_model_base import TripletModelBase
 from src.models.optimizers.optimizer_spec import OptimizerSpecification
 from src.models.optimizers.adamw_spec import AdamWSpec
@@ -227,6 +228,143 @@ class TripletFinetunableEncoderModel(TripletModelBase[TrainingTriplet]):
                 embeddings.append(embedding.cpu().numpy())
         
         return np.concatenate(embeddings, axis=0)  # [n_samples, embedding_dim]
+    
+    def _train_epoch(
+        self,
+        epoch: int,
+        dataloader: DataLoader,
+        val_dataloader: DataLoader | None,
+        optimizer: optim.Optimizer,
+        criterion: nn.Module,
+        epochs_timer: Timer,
+    ) -> "TripletModelBase.EpochLog":
+        """Train for one epoch with tokenized text."""
+        with Timer(f"epoch_{epoch}", verbosity="start+end", parent=epochs_timer) as timer:
+            module = self._get_module()
+            module.train()
+            total_triplet_loss = 0.0
+            total_reg_loss = 0.0
+            total_loss = 0.0
+            correct_triplets = 0
+            n_batches = 0
+            total_samples = 0
+            
+            for batch_anchor, batch_positive, batch_negative in dataloader:
+                # Move tokenized inputs to device
+                batch_anchor = {k: v.to(self.device) for k, v in batch_anchor.items()}  # dict with input_ids, attention_mask
+                batch_positive = {k: v.to(self.device) for k, v in batch_positive.items()}
+                batch_negative = {k: v.to(self.device) for k, v in batch_negative.items()}
+                
+                batch_size_actual = batch_anchor['input_ids'].size(0)
+                total_samples += batch_size_actual
+                
+                optimizer.zero_grad()
+                
+                # Forward pass
+                anchor_emb = module(batch_anchor)  # [batch_size, output_dim]
+                positive_emb = module(batch_positive)  # [batch_size, output_dim]
+                negative_emb = module(batch_negative)  # [batch_size, output_dim]
+                
+                # Triplet loss
+                triplet_loss = criterion(anchor_emb, positive_emb, negative_emb)
+                
+                # Regularization loss: KL divergence to encourage normal distribution
+                reg_loss = self._compute_regularization_loss(
+                    torch.cat([anchor_emb, positive_emb, negative_emb], dim=0)
+                )
+                
+                # Total loss
+                loss = triplet_loss + self.regularization_weight * reg_loss
+                loss.backward()
+                optimizer.step()
+                
+                total_triplet_loss += triplet_loss.item()
+                total_reg_loss += reg_loss.item()
+                total_loss += loss.item()
+                
+                # Compute triplet accuracy
+                with torch.no_grad():
+                    dist_pos = torch.norm(anchor_emb - positive_emb, p=2, dim=1)  # [batch_size]
+                    dist_neg = torch.norm(anchor_emb - negative_emb, p=2, dim=1)  # [batch_size]
+                    correct_triplets += (dist_pos < dist_neg).sum().item()
+                
+                n_batches += 1
+            
+            avg_triplet_loss = total_triplet_loss / n_batches
+            avg_reg_loss = total_reg_loss / n_batches
+            avg_loss = total_loss / n_batches
+            triplet_accuracy = correct_triplets / total_samples
+            
+            # Validation
+            val_loss, val_triplet_accuracy = self._perform_validation(
+                val_dataloader, criterion, timer
+            ) if val_dataloader is not None else (None, None)
+        
+        epoch_log = self.EpochLog(
+            epoch=epoch,
+            train_loss=avg_loss,
+            train_triplet_loss=avg_triplet_loss,
+            train_reg_loss=avg_reg_loss,
+            train_triplet_accuracy=triplet_accuracy,
+            val_loss=val_loss,
+            val_triplet_accuracy=val_triplet_accuracy,
+            duration=timer.elapsed_time,
+        )
+        self._epoch_logs.append(epoch_log)
+        
+        return epoch_log
+    
+    def _perform_validation(
+        self,
+        val_dataloader: DataLoader,
+        criterion: nn.Module,
+        timer: Timer,
+    ) -> tuple[float, float]:
+        """Perform validation and return (loss, triplet_accuracy)."""
+        module = self._get_module()
+        module.eval()
+        total_loss = 0.0
+        correct_triplets = 0
+        n_batches = 0
+        total_samples = 0
+        
+        with torch.no_grad():
+            for batch_anchor, batch_positive, batch_negative in val_dataloader:
+                # Move tokenized inputs to device
+                batch_anchor = {k: v.to(self.device) for k, v in batch_anchor.items()}
+                batch_positive = {k: v.to(self.device) for k, v in batch_positive.items()}
+                batch_negative = {k: v.to(self.device) for k, v in batch_negative.items()}
+                
+                batch_size_actual = batch_anchor['input_ids'].size(0)
+                total_samples += batch_size_actual
+                
+                # Forward pass
+                anchor_emb = module(batch_anchor)  # [batch_size, output_dim]
+                positive_emb = module(batch_positive)  # [batch_size, output_dim]
+                negative_emb = module(batch_negative)  # [batch_size, output_dim]
+                
+                # Triplet loss
+                triplet_loss = criterion(anchor_emb, positive_emb, negative_emb)
+                
+                # Regularization loss
+                reg_loss = self._compute_regularization_loss(
+                    torch.cat([anchor_emb, positive_emb, negative_emb], dim=0)
+                )
+                
+                # Total loss
+                loss = triplet_loss + self.regularization_weight * reg_loss
+                total_loss += loss.item()
+                
+                # Compute triplet accuracy
+                dist_pos = torch.norm(anchor_emb - positive_emb, p=2, dim=1)  # [batch_size]
+                dist_neg = torch.norm(anchor_emb - negative_emb, p=2, dim=1)  # [batch_size]
+                correct_triplets += (dist_pos < dist_neg).sum().item()
+                
+                n_batches += 1
+        
+        avg_loss = total_loss / n_batches
+        triplet_accuracy = correct_triplets / total_samples
+        return avg_loss, triplet_accuracy
     
     def get_state_dict(self) -> dict[str, Any]:
         """Get state dictionary for serialization."""
