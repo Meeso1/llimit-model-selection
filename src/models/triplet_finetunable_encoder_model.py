@@ -27,7 +27,7 @@ class TripletFinetunableEncoderModel(TripletModelBase[TrainingTriplet]):
     Triplet-based encoder using fine-tunable transformers.
     
     This encoder uses:
-    - Fine-tunable transformer (e.g., BERT) for text encoding
+    - Transformer (e.g., BERT) for text encoding (partially frozen)
     - Optional trainable projection layer on top
     - Triplet margin loss for training
     """
@@ -475,7 +475,7 @@ class TripletFinetunableEncoderModel(TripletModelBase[TrainingTriplet]):
         """
         Inner PyTorch module for the fine-tunable encoder model.
         
-        This module uses a transformer that can be fine-tuned end-to-end.
+        This module uses a transformer where only the last layers are fine-tuned.
         """
         
         def __init__(
@@ -495,6 +495,29 @@ class TripletFinetunableEncoderModel(TripletModelBase[TrainingTriplet]):
             self.transformer = AutoModel.from_pretrained(transformer_model_name)
             self.transformer_hidden_size = self.transformer.config.hidden_size
             self.projection_dim = projection_dim
+            
+            # Freeze the transformer, but keep the last N layers trainable
+            # Hardcoded for now
+            n_trainable_layers = 1
+            
+            # Freeze all parameters first
+            for param in self.transformer.parameters():
+                param.requires_grad = False
+            
+            # TODO: Maybe there is a better way to do this?
+            # Unfreeze the last N layers
+            # This works for most BERT-like models (BERT, RoBERTa, etc.)
+            layers = None
+            if hasattr(self.transformer, "encoder") and hasattr(self.transformer.encoder, "layer"):
+                layers = self.transformer.encoder.layer
+            elif hasattr(self.transformer, "transformer") and hasattr(self.transformer.transformer, "layer"):
+                # Handle DistilBERT-like models
+                layers = self.transformer.transformer.layer
+            
+            if layers is not None:
+                for i in range(max(0, len(layers) - n_trainable_layers), len(layers)):
+                    for param in layers[i].parameters():
+                        param.requires_grad = True
             
             self.projection = nn.Sequential(
                 nn.Linear(self.transformer_hidden_size, projection_dim),

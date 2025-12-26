@@ -12,7 +12,7 @@ We provide two implementations:
 
 1. **TripletFrozenEncoderModel** (`src/models/triplet_frozen_encoder_model.py`): Uses a frozen sentence transformer for initial embeddings, with trainable dense layers on top. Fast to train, good baseline.
 
-2. **TripletFinetunableEncoderModel** (`src/models/triplet_finetunable_encoder_model.py`): Uses a fine-tunable transformer (e.g., BERT) that is trained end-to-end. More powerful but slower and more resource-intensive.
+2. **TripletFinetunableEncoderModel** (`src/models/triplet_finetunable_encoder_model.py`): Uses a transformer (e.g., BERT) where only the last layers are fine-tuned. More powerful but slower than the frozen model.
 
 Both models share a common base class `TripletModelBase` and have identical public interfaces.
 
@@ -34,10 +34,10 @@ This design keeps the text encoder frozen (avoiding expensive fine-tuning) while
 
 ### 2.2. TripletFinetunableEncoderModel
 
--   **Fine-tunable Transformer**: A transformer model (e.g., `bert-base-uncased`) from HuggingFace that is fine-tuned during training. Prompts and responses are concatenated with a `[SEP]` token and encoded together.
+-   **Fine-tunable Transformer**: A transformer model (e.g., `bert-base-uncased`) from HuggingFace where only a fixed number of last layers are fine-tuned (the rest are frozen). Prompts and responses are concatenated with a `[SEP]` token and encoded together.
 -   **Optional Projection Layer**: An optional trainable projection layer (with Tanh activation) that projects the transformer's [CLS] token embedding to a lower dimension.
 
-This design allows the model to adapt the transformer to the specific task, potentially learning better representations at the cost of increased training time and resources.
+This design allows the model to adapt the most task-specific layers of the transformer while keeping most of it frozen for efficiency and stability.
 
 ### 2.3. Common Base Class
 
