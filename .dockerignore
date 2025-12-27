@@ -1,0 +1,36 @@
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+.venv/
+
+# Project-specific large data directories
+data/
+saved_models/
+inferrence_outputs/
+
+# IDE / Editor
+.cursor/
+*.swp
+*.swo
+*~
+
+# Jupyter notebooks and checkpoints
+# Keep notebook.ipynb but exclude checkpoints
+.ipynb_checkpoints/
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Documentation (optional - uncomment if you don't need docs in the image)
+# docs/
+
+# Other
+*.log
+.DS_Store
