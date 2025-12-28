@@ -16,10 +16,10 @@ class AdamSpec(OptimizerSpecification):
     eps: float = 1e-8
     weight_decay: float = 0.0
 
-    def create_optimizer(self, model: nn.Module) -> optim.Optimizer:
+    def create_optimizer_for_multiple(self, models: list[nn.Module]) -> optim.Optimizer:
         """Create Adam optimizer instance."""
         return optim.Adam(
-            model.parameters(),
+            [param for model in models for param in model.parameters()],
             lr=self.learning_rate,
             betas=self.betas,
             eps=self.eps,

@@ -21,6 +21,10 @@ class FinetunableEmbeddingSpec(EmbeddingModelSpecification):
     max_length: int = 256
     optimizer: OptimizerSpec
     
+    triplet_margin: float = 0.2
+    regularization_weight: float = 0.01
+    identity_positive_ratio: float = 0.8
+    
     def create_model(
         self,
         min_model_comparisons: int,

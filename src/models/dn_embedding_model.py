@@ -15,7 +15,7 @@ from src.data_models.data_models import TrainingData, InputData, OutputData
 from src.data_models.dn_embedding_network_types import PreprocessedPromptPair, PreprocessedTrainingData, PromptRoutingOutput
 from src.models.embedding_specs.embedding_spec_union import EmbeddingSpec
 from src.models.embedding_specs.frozen_embedding_spec import FrozenEmbeddingSpec
-from src.models.triplet_model_base import TripletModelBase
+from src.models.embedding_model_base import EmbeddingModelBase
 from src.models.optimizers.adamw_spec import AdamWSpec
 from src.preprocessing.prompt_embedding_preprocessor import PromptEmbeddingPreprocessor
 from src.utils.string_encoder import StringEncoder
@@ -263,7 +263,7 @@ class DnEmbeddingModel(ModelBase):
         if self._network is None:
             raise RuntimeError("Model not trained or loaded yet")
         
-        if self.embedding_model._module is None:
+        if not self.embedding_model.is_initialized:
             raise RuntimeError("Embedding model not initialized")
         
         return {
@@ -318,7 +318,7 @@ class DnEmbeddingModel(ModelBase):
             seed=state_dict["seed"],
         )
         
-        model.embedding_model = TripletModelBase.load_from_state_dict(state_dict["embedding_model_state_dict"])
+        model.embedding_model = EmbeddingModelBase.load_from_state_dict(state_dict["embedding_model_state_dict"])
 
         model._initialize_network(
             prompt_embedding_dim=state_dict["prompt_embedding_dim"],

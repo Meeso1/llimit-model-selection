@@ -16,10 +16,10 @@ class MuonSpec(OptimizerSpecification):
     momentum: float = 0.95
     nesterov: bool = True
 
-    def create_optimizer(self, model: nn.Module) -> optim.Optimizer:
+    def create_optimizer_for_multiple(self, models: list[nn.Module]) -> optim.Optimizer:
         """Create Muon optimizer instance."""
         return optim.Muon(
-            model.parameters(),
+            [param for model in models for param in model.parameters()],
             lr=self.learning_rate,
             momentum=self.momentum,
             nesterov=self.nesterov,

@@ -22,13 +22,25 @@ class OptimizerSpecification(BaseModel):
     learning_rate: float
     lr_decay_gamma: float | None = None
 
-    @abstractmethod
     def create_optimizer(self, model: nn.Module) -> optim.Optimizer:
         """
         Create an optimizer instance for the given model.
         
         Args:
             model: PyTorch model to optimize
+            
+        Returns:
+            Configured optimizer instance
+        """
+        return self.create_optimizer_for_multiple([model])
+    
+    @abstractmethod
+    def create_optimizer_for_multiple(self, models: list[nn.Module]) -> optim.Optimizer:
+        """
+        Create an optimizer instance for the given models.
+        
+        Args:
+            models: List of PyTorch models to optimize
             
         Returns:
             Configured optimizer instance

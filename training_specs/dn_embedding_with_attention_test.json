@@ -1,0 +1,49 @@
+{
+  "data": {
+    "max_samples": 1000,
+    "validation_split": 0.1,
+    "seed": 42
+  },
+  "epochs": 10,
+  "batch_size": 32,
+  "model": {
+    "name": "dn-embedding-with-attention-test",
+    "spec": {
+      "model_type": "dn_embedding",
+      "hidden_dims": [256, 128, 64],
+      "optimizer": {
+        "optimizer_type": "adamw",
+        "learning_rate": 0.001,
+        "weight_decay": 0.00001
+      },
+      "balance_model_samples": true,
+      "embedding_model_name": "all-MiniLM-L6-v2",
+      "embedding_spec": {
+        "embedding_type": "attention",
+        "encoder_model_name": "all-MiniLM-L6-v2",
+        "h_emb": 128,
+        "h_scalar": 32,
+        "h_pair": 128,
+        "d_out": 64,
+        "pair_mlp_layers": 2,
+        "num_attention_heads": 4,
+        "dropout": 0.1,
+        "temperature": 0.07,
+        "pairs_per_model": 16,
+        "models_per_batch": 8,
+        "embeddings_per_model": 4,
+        "optimizer": {
+          "optimizer_type": "adamw",
+          "learning_rate": 0.0001,
+          "weight_decay": 0.00001
+        }
+      },
+      "min_model_comparisons": 20,
+      "embedding_model_epochs": 10
+    }
+  },
+  "log": {
+    "print_every": 1
+  }
+}
+

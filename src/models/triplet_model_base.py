@@ -16,11 +16,12 @@ from src.data_models.triplet_encoder_types import (
     PromptResponsePair,
     TripletType,
 )
+from src.models.embedding_model_base import EmbeddingModelBase
 from src.utils.data_split import ValidationSplit
 from src.utils.timer import Timer
 
 
-class TripletModelBase(ABC, Generic[TripletType]):
+class TripletModelBase(EmbeddingModelBase, ABC, Generic[TripletType]):
     """
     Base class for triplet-based model behavior encoders.
     
@@ -78,30 +79,10 @@ class TripletModelBase(ABC, Generic[TripletType]):
             raise RuntimeError("Model embeddings not initialized. Train or load a model first.")
         return self._model_embeddings
     
-    @staticmethod
-    def load_from_state_dict(state_dict: dict[str, Any]) -> "TripletModelBase":
-        """
-        Load embedding model from state dict based on model type.
-        
-        Args:
-            state_dict: State dictionary containing model_type and model parameters
-            
-        Returns:
-            Loaded embedding model instance
-            
-        Raises:
-            ValueError: If model_type is unknown
-        """
-        model_type = state_dict.get("model_type")
-        
-        if model_type == "TripletFrozenEncoderModel":
-            from src.models.triplet_frozen_encoder_model import TripletFrozenEncoderModel
-            return TripletFrozenEncoderModel.load_state_dict(state_dict)
-        elif model_type == "TripletFinetunableEncoderModel":
-            from src.models.triplet_finetunable_encoder_model import TripletFinetunableEncoderModel
-            return TripletFinetunableEncoderModel.load_state_dict(state_dict)
-        else:
-            raise ValueError(f"Unknown embedding model type in state: {model_type}")
+    @property
+    def is_initialized(self) -> bool:
+        """Check if the model has been initialized (trained or loaded)."""
+        return self._get_module() is not None
     
     @abstractmethod
     def _initialize_module(self, input_dim: int | None = None) -> None:

@@ -6,6 +6,7 @@ from src.data_models.data_models import TrainingData
 from src.data_models.dense_network_types import PreprocessedTrainingData as DenseNetworkPreprocessedTrainingData
 from src.data_models.dn_embedding_network_types import PreprocessedTrainingData as DnEmbeddingPreprocessedTrainingData
 from src.data_models.simple_scoring_types import PreprocessedTrainingData as SimplePreprocessedTrainingData
+from src.data_models.attention_embedding_types import ModelSetSample, PreprocessedAttentionEmbeddingData
 
 T = TypeVar('T')
 
@@ -235,6 +236,50 @@ def split_preprocessed_behavior_data(
     
     train_preprocessed = PreprocessedTripletEncoderData(triplets=train_triplets)
     val_preprocessed = PreprocessedTripletEncoderData(triplets=val_triplets)
+    
+    return train_preprocessed, val_preprocessed
+
+
+def split_attention_embedding_preprocessed_data(
+    preprocessed_data: PreprocessedAttentionEmbeddingData,
+    val_fraction: float = 0.2,
+    seed: int = 42,
+) -> tuple[PreprocessedAttentionEmbeddingData, PreprocessedAttentionEmbeddingData | None]:
+    """
+    Split preprocessed attention embedding data into train and validation sets.
+    
+    Splits each model set into train and validation sets.
+    
+    Args:
+        preprocessed_data: Preprocessed attention embedding data to split
+        val_fraction: Fraction of pairs to use for validation (default: 0.2)
+        seed: Random seed for reproducibility (default: 42)
+    
+    Returns:
+        Tuple of (train_preprocessed, val_preprocessed) with shared scaler.
+        val_preprocessed is None if val_fraction is 0.
+    """
+    if val_fraction == 0:
+        return preprocessed_data, None
+
+    train_samples = []
+    val_samples = []
+    for model_set in preprocessed_data.samples:
+        train_indices, val_indices = _compute_split_indices(len(model_set.pairs), val_fraction, seed)
+        train_samples.append(ModelSetSample([model_set.pairs[i] for i in train_indices], model_set.model_id))
+        val_samples.append(ModelSetSample([model_set.pairs[i] for i in val_indices], model_set.model_id))
+    
+    train_preprocessed = PreprocessedAttentionEmbeddingData(
+        samples=train_samples,
+        model_id_to_index=preprocessed_data.model_id_to_index,
+        scaler_state=preprocessed_data.scaler_state,
+    )
+    
+    val_preprocessed = PreprocessedAttentionEmbeddingData(
+        samples=val_samples,
+        model_id_to_index=preprocessed_data.model_id_to_index,
+        scaler_state=preprocessed_data.scaler_state,
+    )
     
     return train_preprocessed, val_preprocessed
 

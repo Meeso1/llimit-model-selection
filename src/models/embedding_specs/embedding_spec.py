@@ -3,7 +3,7 @@
 from abc import abstractmethod
 from pydantic import BaseModel
 
-from src.models.triplet_model_base import TripletModelBase
+from src.models.embedding_model_base import EmbeddingModelBase
 
 
 class EmbeddingModelSpecification(BaseModel):
@@ -11,12 +11,8 @@ class EmbeddingModelSpecification(BaseModel):
     Base class for embedding model specifications.
     
     Similar to OptimizerSpecification, this allows configuring different
-    embedding models (frozen vs fine-tunable) in a consistent way.
+    embedding models (frozen vs fine-tunable vs attention-based) in a consistent way.
     """
-    
-    triplet_margin: float = 0.2
-    regularization_weight: float = 0.01
-    identity_positive_ratio: float = 0.8
     
     @abstractmethod
     def create_model(
@@ -24,7 +20,7 @@ class EmbeddingModelSpecification(BaseModel):
         min_model_comparisons: int,
         preprocessor_seed: int,
         print_every: int | None,
-    ) -> TripletModelBase:
+    ) -> EmbeddingModelBase:
         """
         Create an embedding model instance.
         
