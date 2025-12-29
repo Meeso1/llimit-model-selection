@@ -15,6 +15,7 @@ from src.data_models.triplet_encoder_types import (
     TrainingTriplet,
 )
 from src.preprocessing.triplet_finetunable_encoder_preprocessor import TripletFinetunableEncoderPreprocessor
+from src.utils.accuracy import compute_embedding_accuracy
 from src.utils.data_split import split_preprocessed_behavior_data
 from src.utils.timer import Timer
 from src.models.triplet_model_base import TripletModelBase
@@ -131,7 +132,7 @@ class TripletFinetunableEncoderModel(TripletModelBase[TrainingTriplet]):
         preprocessed_data: PreprocessedTripletEncoderData[TrainingTriplet],
         batch_size: int,
         shuffle: bool,
-    ) -> DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+    ) -> DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[str]]]:
         """
         Prepare dataloader from preprocessed triplets (text-based).
         
@@ -141,7 +142,7 @@ class TripletFinetunableEncoderModel(TripletModelBase[TrainingTriplet]):
             shuffle: Whether to shuffle data
             
         Returns:
-            DataLoader yielding tokenized (anchor, positive, negative) tuples
+            DataLoader yielding (anchor, positive, negative, anchor_model_ids) tuples
         """
         dataset = self._TripletTextDataset(
             triplets=preprocessed_data.triplets,
@@ -158,18 +159,18 @@ class TripletFinetunableEncoderModel(TripletModelBase[TrainingTriplet]):
     
     def _collate_fn(
         self,
-        batch: list[tuple[dict[str, torch.Tensor], dict[str, torch.Tensor], dict[str, torch.Tensor]]],
-    ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+        batch: list[tuple[dict[str, torch.Tensor], dict[str, torch.Tensor], dict[str, torch.Tensor], str]],
+    ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor], dict[str, torch.Tensor], list[str]]:
         """
         Collate function for batching tokenized triplets.
         
         Args:
-            batch: List of (anchor_tokens, positive_tokens, negative_tokens) tuples
+            batch: List of (anchor_tokens, positive_tokens, negative_tokens, anchor_model_id) tuples
             
         Returns:
-            Tuple of batched (anchor_tokens, positive_tokens, negative_tokens)
+            Tuple of batched (anchor_tokens, positive_tokens, negative_tokens, anchor_model_ids)
         """
-        anchors, positives, negatives = zip(*batch)
+        anchors, positives, negatives, anchor_model_ids = zip(*batch)
         
         # Stack input_ids and attention_mask for each component
         anchor_batch = {
@@ -185,7 +186,7 @@ class TripletFinetunableEncoderModel(TripletModelBase[TrainingTriplet]):
             "attention_mask": torch.stack([n["attention_mask"] for n in negatives]),
         }
         
-        return anchor_batch, positive_batch, negative_batch
+        return anchor_batch, positive_batch, negative_batch, list(anchor_model_ids)
     
     def encode(
         self,
@@ -249,7 +250,11 @@ class TripletFinetunableEncoderModel(TripletModelBase[TrainingTriplet]):
             n_batches = 0
             total_samples = 0
             
-            for batch_anchor, batch_positive, batch_negative in dataloader:
+            # Collect anchor embeddings and model IDs for universal accuracy computation
+            train_anchor_embeddings = []
+            train_anchor_model_ids = []
+            
+            for batch_anchor, batch_positive, batch_negative, batch_anchor_model_ids in dataloader:
                 # Move tokenized inputs to device
                 batch_anchor = {k: v.to(self.device) for k, v in batch_anchor.items()}  # dict with input_ids, attention_mask
                 batch_positive = {k: v.to(self.device) for k, v in batch_positive.items()}
@@ -288,6 +293,10 @@ class TripletFinetunableEncoderModel(TripletModelBase[TrainingTriplet]):
                     dist_neg = torch.norm(anchor_emb - negative_emb, p=2, dim=1)  # [batch_size]
                     correct_triplets += (dist_pos < dist_neg).sum().item()
                 
+                # Collect anchor embeddings and model IDs for universal accuracy
+                train_anchor_embeddings.append(anchor_emb.detach())
+                train_anchor_model_ids.extend(batch_anchor_model_ids)
+                
                 n_batches += 1
             
             avg_triplet_loss = total_triplet_loss / n_batches
@@ -295,10 +304,29 @@ class TripletFinetunableEncoderModel(TripletModelBase[TrainingTriplet]):
             avg_loss = total_loss / n_batches
             triplet_accuracy = correct_triplets / total_samples
             
+            model_embeddings = None
+            
+            # TODO: Make this a parameter
+            compute_embeddings_every_k_epochs = 5
+            if (epoch % compute_embeddings_every_k_epochs == 0) or (model_embeddings is None):
+                train_anchor_embeddings_tensor = torch.cat(train_anchor_embeddings, dim=0)
+                with Timer(f"compute_model_embeddings_{epoch}", verbosity="start+end", parent=timer):
+                    model_embeddings = self._compute_model_embeddings_from_stored(
+                        train_anchor_embeddings_tensor, train_anchor_model_ids
+                    )
+            
+            # Compute universal accuracy for training data
+            train_anchor_embeddings_tensor = torch.cat(train_anchor_embeddings, dim=0)
+            train_universal_accuracy = compute_embedding_accuracy(
+                sample_embeddings=train_anchor_embeddings_tensor.detach().cpu().numpy(),
+                sample_model_names=train_anchor_model_ids,
+                model_embeddings=model_embeddings
+            )
+            
             # Validation
-            val_loss, val_triplet_accuracy = self._perform_validation(
-                val_dataloader, criterion, timer
-            ) if val_dataloader is not None else (None, None)
+            val_loss, val_triplet_accuracy, val_universal_accuracy = self._perform_validation(
+                val_dataloader, criterion, model_embeddings, timer
+            ) if val_dataloader is not None else (None, None, None)
         
         epoch_log = self.EpochLog(
             epoch=epoch,
@@ -306,8 +334,10 @@ class TripletFinetunableEncoderModel(TripletModelBase[TrainingTriplet]):
             train_triplet_loss=avg_triplet_loss,
             train_reg_loss=avg_reg_loss,
             train_triplet_accuracy=triplet_accuracy,
+            train_universal_accuracy=train_universal_accuracy,
             val_loss=val_loss,
             val_triplet_accuracy=val_triplet_accuracy,
+            val_universal_accuracy=val_universal_accuracy,
             duration=timer.elapsed_time,
         )
         self._epoch_logs.append(epoch_log)
@@ -318,9 +348,10 @@ class TripletFinetunableEncoderModel(TripletModelBase[TrainingTriplet]):
         self,
         val_dataloader: DataLoader,
         criterion: nn.Module,
+        model_embeddings: dict[str, np.ndarray],
         timer: Timer,
-    ) -> tuple[float, float]:
-        """Perform validation and return (loss, triplet_accuracy)."""
+    ) -> tuple[float, float, float]:
+        """Perform validation and return (loss, triplet_accuracy, universal_accuracy)."""
         module = self._get_module()
         module.eval()
         total_loss = 0.0
@@ -328,8 +359,12 @@ class TripletFinetunableEncoderModel(TripletModelBase[TrainingTriplet]):
         n_batches = 0
         total_samples = 0
         
+        # Collect anchor embeddings and model IDs for universal accuracy computation
+        val_anchor_embeddings = []
+        val_anchor_model_ids = []
+        
         with torch.no_grad():
-            for batch_anchor, batch_positive, batch_negative in val_dataloader:
+            for batch_anchor, batch_positive, batch_negative, batch_anchor_model_ids in val_dataloader:
                 # Move tokenized inputs to device
                 batch_anchor = {k: v.to(self.device) for k, v in batch_anchor.items()}
                 batch_positive = {k: v.to(self.device) for k, v in batch_positive.items()}
@@ -360,11 +395,24 @@ class TripletFinetunableEncoderModel(TripletModelBase[TrainingTriplet]):
                 dist_neg = torch.norm(anchor_emb - negative_emb, p=2, dim=1)  # [batch_size]
                 correct_triplets += (dist_pos < dist_neg).sum().item()
                 
+                # Collect anchor embeddings and model IDs for universal accuracy
+                val_anchor_embeddings.append(anchor_emb)
+                val_anchor_model_ids.extend(batch_anchor_model_ids)
+                
                 n_batches += 1
         
         avg_loss = total_loss / n_batches
         triplet_accuracy = correct_triplets / total_samples
-        return avg_loss, triplet_accuracy
+        
+        # Compute universal accuracy for validation data
+        val_anchor_embeddings_tensor = torch.cat(val_anchor_embeddings, dim=0)
+        universal_accuracy = compute_embedding_accuracy(
+            sample_embeddings=val_anchor_embeddings_tensor.detach().cpu().numpy(),
+            sample_model_names=val_anchor_model_ids,
+            model_embeddings=model_embeddings
+        )
+        
+        return avg_loss, triplet_accuracy, universal_accuracy
     
     def get_state_dict(self) -> dict[str, Any]:
         """Get state dictionary for serialization."""
@@ -433,7 +481,7 @@ class TripletFinetunableEncoderModel(TripletModelBase[TrainingTriplet]):
         def __len__(self) -> int:
             return len(self.triplets)
         
-        def __getitem__(self, idx: int) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+        def __getitem__(self, idx: int) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor], dict[str, torch.Tensor], str]:
             triplet = self.triplets[idx]
             
             # Combine prompt and response for each component
@@ -469,7 +517,7 @@ class TripletFinetunableEncoderModel(TripletModelBase[TrainingTriplet]):
             positive_tokens = {k: v.squeeze(0) for k, v in positive_tokens.items()}
             negative_tokens = {k: v.squeeze(0) for k, v in negative_tokens.items()}
             
-            return anchor_tokens, positive_tokens, negative_tokens
+            return anchor_tokens, positive_tokens, negative_tokens, triplet.anchor_model_id
     
     class _EncoderModule(nn.Module):
         """

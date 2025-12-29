@@ -15,6 +15,7 @@ class TrainingTriplet:
     """A single training triplet for triplet-based encoder models (text-based)."""
     anchor_prompt: str
     anchor_response: str
+    anchor_model_id: str
     
     positive_prompt: str
     positive_response: str
@@ -28,6 +29,7 @@ class TripletEmbedding:
     """Embeddings for a single training triplet."""
     anchor_prompt: np.ndarray  # [embedding_dim]
     anchor_response: np.ndarray  # [embedding_dim]
+    anchor_model_id: str
     positive_prompt: np.ndarray  # [embedding_dim]
     positive_response: np.ndarray  # [embedding_dim]
     negative_prompt: np.ndarray  # [embedding_dim]

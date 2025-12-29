@@ -262,6 +262,7 @@ class TripletFrozenEncoderPreprocessor:
             triplets.append(TrainingTriplet(
                 anchor_prompt=anchor_prompt,
                 anchor_response=first_anchor_response,
+                anchor_model_id=first_anchor_model,
                 positive_prompt=first_positive_example.prompt,
                 positive_response=first_positive_example.response,
                 negative_prompt=first_negative_prompt,
@@ -286,6 +287,7 @@ class TripletFrozenEncoderPreprocessor:
             triplets.append(TrainingTriplet(
                 anchor_prompt=anchor_prompt,
                 anchor_response=second_anchor_response,
+                anchor_model_id=second_anchor_model,
                 positive_prompt=second_positive_example.prompt,
                 positive_response=second_positive_example.response,
                 negative_prompt=second_negative_prompt,
@@ -313,6 +315,7 @@ class TripletFrozenEncoderPreprocessor:
             triplets.append(TrainingTriplet(
                 anchor_prompt=anchor_prompt,
                 anchor_response=first_anchor_response,
+                anchor_model_id=pair.model_a,
                 positive_prompt=first_positive_prompt,
                 positive_response=first_positive_response,
                 negative_prompt=negative_example.prompt,
@@ -328,6 +331,7 @@ class TripletFrozenEncoderPreprocessor:
             triplets.append(TrainingTriplet(
                 anchor_prompt=anchor_prompt,
                 anchor_response=second_anchor_response,
+                anchor_model_id=pair.model_b,
                 positive_prompt=second_positive_prompt,
                 positive_response=second_positive_response,
                 negative_prompt=negative_example.prompt,
@@ -345,6 +349,7 @@ class TripletFrozenEncoderPreprocessor:
             result.append(TripletEmbedding(
                 anchor_prompt=self._embed_or_get_cached(triplet.anchor_prompt, embedding_model, cache),
                 anchor_response=self._embed_or_get_cached(triplet.anchor_response, embedding_model, cache),
+                anchor_model_id=triplet.anchor_model_id,
                 positive_prompt=self._embed_or_get_cached(triplet.positive_prompt, embedding_model, cache),
                 positive_response=self._embed_or_get_cached(triplet.positive_response, embedding_model, cache),
                 negative_prompt=self._embed_or_get_cached(triplet.negative_prompt, embedding_model, cache),

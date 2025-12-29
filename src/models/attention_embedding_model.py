@@ -22,6 +22,7 @@ from src.models.embedding_model_base import EmbeddingModelBase
 from src.models.optimizers.optimizer_spec import OptimizerSpecification
 from src.models.optimizers.adamw_spec import AdamWSpec
 from src.utils.data_split import ValidationSplit, split_attention_embedding_preprocessed_data
+from src.utils.accuracy import compute_embedding_accuracy
 from src.utils.timer import Timer
 from src.utils.jar import Jar
 from src.constants import MODELS_JAR_PATH
@@ -409,13 +410,25 @@ class AttentionEmbeddingModel(EmbeddingModelBase):
             # Create dataloader
             dataloader = self._create_dataloader(train_preprocessed, shuffle=True)
             
+            # TODO: Make this a parameter
+            compute_embeddings_every_k_epochs = 5
+            train_model_embeddings = None
+            
             # Training loop
             with Timer("epochs", verbosity="start+end", parent=train_timer) as epochs_timer:
                 for epoch in range(1, epochs + 1):
-                    with Timer(f"epoch_{epoch}", verbosity="start+end", parent=epochs_timer) as epoch_timer:
-                        epoch_loss, nn_accuracy, triplet_accuracy = self._train_epoch(dataloader, optimizer)
+                    if (epoch % compute_embeddings_every_k_epochs == 0) or (train_model_embeddings is None):
+                        with Timer(f"compute_model_embeddings_{epoch}", verbosity="start+end", parent=epochs_timer):
+                            train_model_embeddings = self._compute_model_embeddings(train_preprocessed)
                     
-                    val_loss, val_nn_accuracy, val_triplet_accuracy = self._perform_validation(val_dataloader)
+                    with Timer(f"epoch_{epoch}", verbosity="start+end", parent=epochs_timer) as epoch_timer:
+                        epoch_loss, nn_accuracy, triplet_accuracy, train_universal_accuracy = self._train_epoch(
+                            dataloader, optimizer, train_model_embeddings
+                        )
+                    
+                    val_loss, val_nn_accuracy, val_triplet_accuracy, val_universal_accuracy = self._perform_validation(
+                        val_dataloader, train_model_embeddings
+                    )
                         
                     epoch_log = self.EpochLog(
                         epoch=epoch,
@@ -423,9 +436,11 @@ class AttentionEmbeddingModel(EmbeddingModelBase):
                         duration=epoch_timer.elapsed_time,
                         nearest_neighbor_accuracy=nn_accuracy,
                         triplet_accuracy=triplet_accuracy,
+                        train_universal_accuracy=train_universal_accuracy,
                         val_loss=val_loss,
                         val_nearest_neighbor_accuracy=val_nn_accuracy,
                         val_triplet_accuracy=val_triplet_accuracy,
+                        val_universal_accuracy=val_universal_accuracy,
                     )
                     self._epoch_logs.append(epoch_log)
                         
@@ -463,13 +478,14 @@ class AttentionEmbeddingModel(EmbeddingModelBase):
     def _train_epoch(
         self,
         dataloader: DataLoader,
-        optimizer: optim.Optimizer
-    ) -> tuple[float, float, float]:
+        optimizer: optim.Optimizer,
+        model_embeddings: dict[str, np.ndarray],
+    ) -> tuple[float, float, float, float]:
         """
         Train for one epoch.
         
         Returns:
-            Tuple of (average_loss, nearest_neighbor_accuracy, triplet_accuracy)
+            Tuple of (average_loss, nearest_neighbor_accuracy, triplet_accuracy, universal_accuracy)
         """
         assert self._pair_encoder is not None
         assert self._set_aggregator is not None
@@ -483,6 +499,7 @@ class AttentionEmbeddingModel(EmbeddingModelBase):
         # Accumulate embeddings and indices for accuracy computation
         all_embeddings = []
         all_model_indices = []
+        all_model_ids = []
         
         for batch in dataloader:
             optimizer.zero_grad()
@@ -492,6 +509,7 @@ class AttentionEmbeddingModel(EmbeddingModelBase):
             response_embs = batch['response_embs'].to(self.device)  # [total_pairs, d_emb]
             scalar_features = batch['scalar_features'].to(self.device)  # [total_pairs, d_scalar]
             model_indices = batch['model_indices'].to(self.device)  # [num_models]
+            model_ids_batch = batch['model_ids']  # list of model IDs
             pairs_per_model = batch['pairs_per_model']
             
             # Encode pairs
@@ -505,10 +523,10 @@ class AttentionEmbeddingModel(EmbeddingModelBase):
             )
             
             # Aggregate per model
-            model_embeddings: torch.Tensor = self._set_aggregator(pair_encodings)  # [num_models, d_out]
+            model_embeddings_batch: torch.Tensor = self._set_aggregator(pair_encodings)  # [num_models, d_out]
             
             # Compute contrastive loss
-            loss = self._supervised_contrastive_loss(model_embeddings, model_indices)
+            loss = self._supervised_contrastive_loss(model_embeddings_batch, model_indices)
             
             # Backward pass
             loss.backward()
@@ -522,29 +540,39 @@ class AttentionEmbeddingModel(EmbeddingModelBase):
             num_batches += 1
             
             # Accumulate embeddings for accuracy computation
-            all_embeddings.append(model_embeddings.detach())
+            all_embeddings.append(model_embeddings_batch.detach())
             all_model_indices.append(model_indices)
+            all_model_ids.extend(model_ids_batch)
         
         # Compute accuracy on accumulated embeddings
         nn_accuracy, triplet_accuracy = self._compute_accuracy(
             all_embeddings, all_model_indices
         )
         
+        all_embeddings_tensor = torch.cat(all_embeddings, dim=0)
+        all_embeddings_np = all_embeddings_tensor.cpu().numpy()
+        universal_accuracy = compute_embedding_accuracy(
+            sample_embeddings=all_embeddings_np,
+            sample_model_names=all_model_ids,
+            model_embeddings=model_embeddings
+        )
+        
         avg_loss = total_loss / max(num_batches, 1)
-        return avg_loss, nn_accuracy, triplet_accuracy
+        return avg_loss, nn_accuracy, triplet_accuracy, universal_accuracy
     
     def _perform_validation(
         self,
-        val_dataloader: DataLoader | None
-    ) -> tuple[float | None, float | None, float | None]:
+        val_dataloader: DataLoader | None,
+        model_embeddings: dict[str, np.ndarray],
+    ) -> tuple[float | None, float | None, float | None, float | None]:
         """
         Validate for one epoch.
         
         Returns:
-            Tuple of (average_loss, nearest_neighbor_accuracy, triplet_accuracy)
+            Tuple of (average_loss, nearest_neighbor_accuracy, triplet_accuracy, universal_accuracy)
         """
         if val_dataloader is None:
-            return None, None, None
+            return None, None, None, None
         
         assert self._pair_encoder is not None
         assert self._set_aggregator is not None
@@ -558,6 +586,7 @@ class AttentionEmbeddingModel(EmbeddingModelBase):
         # Accumulate embeddings and indices for accuracy computation
         all_embeddings = []
         all_model_indices = []
+        all_model_ids = []
         
         with torch.no_grad():
             for batch in val_dataloader:
@@ -566,6 +595,7 @@ class AttentionEmbeddingModel(EmbeddingModelBase):
                 response_embs = batch['response_embs'].to(self.device)  # [total_pairs, d_emb]
                 scalar_features = batch['scalar_features'].to(self.device)  # [total_pairs, d_scalar]
                 model_indices = batch['model_indices'].to(self.device)  # [num_models]
+                model_ids_batch = batch['model_ids']  # list of model IDs
                 pairs_per_model = batch['pairs_per_model']
                 
                 # Encode pairs
@@ -579,25 +609,35 @@ class AttentionEmbeddingModel(EmbeddingModelBase):
                 )
                 
                 # Aggregate per model
-                model_embeddings: torch.Tensor = self._set_aggregator(pair_encodings)  # [num_models, d_out]
+                model_embeddings_batch: torch.Tensor = self._set_aggregator(pair_encodings)  # [num_models, d_out]
                 
                 # Compute contrastive loss
-                loss = self._supervised_contrastive_loss(model_embeddings, model_indices)
+                loss = self._supervised_contrastive_loss(model_embeddings_batch, model_indices)
                 
                 total_loss += loss.item()
                 num_batches += 1
                 
                 # Accumulate embeddings for accuracy computation
-                all_embeddings.append(model_embeddings)
+                all_embeddings.append(model_embeddings_batch)
                 all_model_indices.append(model_indices)
+                all_model_ids.extend(model_ids_batch)
         
         # Compute accuracy on accumulated embeddings
         nn_accuracy, triplet_accuracy = self._compute_accuracy(
             all_embeddings, all_model_indices
         )
         
+        all_embeddings_tensor = torch.cat(all_embeddings, dim=0)
+        all_embeddings_np = all_embeddings_tensor.cpu().numpy()
+        from src.utils.accuracy import compute_embedding_accuracy
+        universal_accuracy = compute_embedding_accuracy(
+            sample_embeddings=all_embeddings_np,
+            sample_model_names=all_model_ids,
+            model_embeddings=model_embeddings
+        )
+        
         avg_loss = total_loss / max(num_batches, 1)
-        return avg_loss, nn_accuracy, triplet_accuracy
+        return avg_loss, nn_accuracy, triplet_accuracy, universal_accuracy
     
     def _supervised_contrastive_loss(
         self,
@@ -839,14 +879,19 @@ class AttentionEmbeddingModel(EmbeddingModelBase):
             loss_str = f"loss = {epoch_log.train_loss:.4f}/{epoch_log.val_loss:.4f}"
             nn_acc_str = f"nn_acc = {epoch_log.nearest_neighbor_accuracy:.4f}/{epoch_log.val_nearest_neighbor_accuracy:.4f}"
             triplet_acc_str = f"triplet_acc = {epoch_log.triplet_accuracy:.4f}/{epoch_log.val_triplet_accuracy:.4f}"
+            univ_acc_str = f"univ_acc = {epoch_log.train_universal_accuracy:.4f}"
+            if epoch_log.val_universal_accuracy is not None:
+                univ_acc_str += f"/{epoch_log.val_universal_accuracy:.4f}"
         else:
             loss_str = f"loss = {epoch_log.train_loss:.4f}"
             nn_acc_str = f"nn_acc = {epoch_log.nearest_neighbor_accuracy:.4f}"
             triplet_acc_str = f"triplet_acc = {epoch_log.triplet_accuracy:.4f}"
+            univ_acc_str = f"univ_acc = {epoch_log.train_universal_accuracy:.4f}" if epoch_log.train_universal_accuracy > 0 else ""
         
+        acc_info = ", ".join(filter(None, [nn_acc_str, triplet_acc_str, univ_acc_str]))
         print(
             f"Epoch {epoch_log.epoch:>4}: "
-            f"{loss_str}, {nn_acc_str}, {triplet_acc_str} - "
+            f"{loss_str}, {acc_info} - "
             f"{epoch_log.duration:.2f}s"
         )
     
@@ -957,9 +1002,11 @@ class AttentionEmbeddingModel(EmbeddingModelBase):
         duration: float
         nearest_neighbor_accuracy: float
         triplet_accuracy: float
+        train_universal_accuracy: float
         val_loss: float | None = None
         val_nearest_neighbor_accuracy: float | None = None
         val_triplet_accuracy: float | None = None
+        val_universal_accuracy: float | None = None
     
     class _ModelSetDataset(Dataset):
         """
@@ -1024,6 +1071,7 @@ class AttentionEmbeddingModel(EmbeddingModelBase):
                 'response_embs': [],
                 'scalar_features': [],
                 'model_indices': [],
+                'model_ids': [],
             }
             
             # For each model, create multiple embeddings with different pair subsets
@@ -1044,8 +1092,9 @@ class AttentionEmbeddingModel(EmbeddingModelBase):
                         batch_data['response_embs'].append(pair.response_emb)
                         batch_data['scalar_features'].append(pair.scalar_features)
                     
-                    # Add model index for this embedding
+                    # Add model index and ID for this embedding
                     batch_data['model_indices'].append(model_index)
+                    batch_data['model_ids'].append(model_id)
             
             # Stack into tensors
             return {
@@ -1053,5 +1102,6 @@ class AttentionEmbeddingModel(EmbeddingModelBase):
                 'response_embs': torch.tensor(np.stack(batch_data['response_embs']), dtype=torch.float32),
                 'scalar_features': torch.tensor(np.stack(batch_data['scalar_features']), dtype=torch.float32),
                 'model_indices': torch.tensor(batch_data['model_indices'], dtype=torch.long),
+                'model_ids': batch_data['model_ids'],
                 'pairs_per_model': self.pairs_per_model,
             }

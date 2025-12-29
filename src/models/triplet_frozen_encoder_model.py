@@ -14,6 +14,7 @@ from src.data_models.triplet_encoder_types import (
     TripletEmbedding,
 )
 from src.preprocessing.triplet_frozen_encoder_preprocessor import TripletFrozenEncoderPreprocessor
+from src.utils.accuracy import compute_embedding_accuracy
 from src.utils.data_split import split_preprocessed_behavior_data
 from src.utils.timer import Timer
 from src.models.triplet_model_base import TripletModelBase
@@ -137,7 +138,7 @@ class TripletFrozenEncoderModel(TripletModelBase[TripletEmbedding]):
         preprocessed_data: PreprocessedTripletEncoderData[TripletEmbedding],
         batch_size: int,
         shuffle: bool,
-    ) -> DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+    ) -> DataLoader:
         """
         Prepare dataloader from preprocessed triplets embeddings.
         
@@ -147,40 +148,47 @@ class TripletFrozenEncoderModel(TripletModelBase[TripletEmbedding]):
             shuffle: Whether to shuffle data
             
         Returns:
-            DataLoader yielding (anchor_emb, positive_emb, negative_emb) tuples
+            DataLoader yielding (anchor_emb, positive_emb, negative_emb, anchor_model_ids) tuples
         """    
-        anchor_embeddings = torch.stack([
-            torch.cat([
-                torch.from_numpy(triplet.anchor_prompt),
-                torch.from_numpy(triplet.anchor_response),
-            ])
-            for triplet in preprocessed_data.triplets
-        ])  # [n_triplets, 2 * embedding_dim]
-        positive_embeddings = torch.stack([
-            torch.cat([
-                torch.from_numpy(triplet.positive_prompt),
-                torch.from_numpy(triplet.positive_response),
-            ])
-            for triplet in preprocessed_data.triplets
-        ])  # [n_triplets, 2 * embedding_dim]
-        negative_embeddings = torch.stack([
-            torch.cat([
-                torch.from_numpy(triplet.negative_prompt),
-                torch.from_numpy(triplet.negative_response),
-            ])
-            for triplet in preprocessed_data.triplets
-        ])  # [n_triplets, 2 * embedding_dim]
+        class TripletDataset:
+            def __init__(self, triplets):
+                self.triplets = triplets
+                
+            def __len__(self):
+                return len(self.triplets)
+                
+            def __getitem__(self, idx):
+                triplet = self.triplets[idx]
+                anchor = torch.cat([
+                    torch.from_numpy(triplet.anchor_prompt),
+                    torch.from_numpy(triplet.anchor_response),
+                ])
+                positive = torch.cat([
+                    torch.from_numpy(triplet.positive_prompt),
+                    torch.from_numpy(triplet.positive_response),
+                ])
+                negative = torch.cat([
+                    torch.from_numpy(triplet.negative_prompt),
+                    torch.from_numpy(triplet.negative_response),
+                ])
+                return anchor, positive, negative, triplet.anchor_model_id
         
-        dataset = TensorDataset(
-            anchor_embeddings,
-            positive_embeddings,
-            negative_embeddings,
-        )
+        dataset = TripletDataset(preprocessed_data.triplets)
+        
+        def collate_fn(batch):
+            anchors, positives, negatives, model_ids = zip(*batch)
+            return (
+                torch.stack(anchors),
+                torch.stack(positives),
+                torch.stack(negatives),
+                list(model_ids)
+            )
         
         return DataLoader(
             dataset,
             batch_size=batch_size,
             shuffle=shuffle,
+            collate_fn=collate_fn,
         )
     
     def encode(
@@ -223,7 +231,7 @@ class TripletFrozenEncoderModel(TripletModelBase[TripletEmbedding]):
         criterion: nn.Module,
         epochs_timer: Timer,
     ) -> "TripletModelBase.EpochLog":
-        """Train for one epoch with pre-computed embeddings."""
+        """Train for one epoch with pre-computed embeddings."""        
         with Timer(f"epoch_{epoch}", verbosity="start+end", parent=epochs_timer) as timer:
             module = self._get_module()
             module.train()
@@ -234,7 +242,11 @@ class TripletFrozenEncoderModel(TripletModelBase[TripletEmbedding]):
             n_batches = 0
             total_samples = 0
             
-            for batch_anchor, batch_positive, batch_negative in dataloader:
+            # Store anchor embeddings and model IDs for universal accuracy
+            train_anchor_embeddings = []
+            train_anchor_model_ids = []
+            
+            for batch_anchor, batch_positive, batch_negative, batch_anchor_model_ids_list in dataloader:
                 batch_anchor = batch_anchor.to(self.device)  # [batch_size, input_dim]
                 batch_positive = batch_positive.to(self.device)  # [batch_size, input_dim]
                 batch_negative = batch_negative.to(self.device)  # [batch_size, input_dim]
@@ -271,6 +283,10 @@ class TripletFrozenEncoderModel(TripletModelBase[TripletEmbedding]):
                     dist_pos = torch.norm(anchor_emb - positive_emb, p=2, dim=1)  # [batch_size]
                     dist_neg = torch.norm(anchor_emb - negative_emb, p=2, dim=1)  # [batch_size]
                     correct_triplets += (dist_pos < dist_neg).sum().item()
+                    
+                    # Store anchor embeddings and model IDs
+                    train_anchor_embeddings.append(anchor_emb.detach())
+                    train_anchor_model_ids.extend(batch_anchor_model_ids_list)
                 
                 n_batches += 1
             
@@ -279,10 +295,29 @@ class TripletFrozenEncoderModel(TripletModelBase[TripletEmbedding]):
             avg_loss = total_loss / n_batches
             triplet_accuracy = correct_triplets / total_samples
             
+            model_embeddings = None
+
+            # TODO: Make this a parameter
+            compute_embeddings_every_k_epochs = 5
+            if (epoch % compute_embeddings_every_k_epochs == 0) or (model_embeddings is None):
+                train_anchor_embeddings_tensor = torch.cat(train_anchor_embeddings, dim=0)
+                with Timer(f"compute_model_embeddings_{epoch}", verbosity="start+end", parent=timer):
+                    model_embeddings = self._compute_model_embeddings_from_stored(
+                        train_anchor_embeddings_tensor, train_anchor_model_ids
+                    )
+            
+            # Compute universal accuracy for training data
+            train_anchor_embeddings_tensor = torch.cat(train_anchor_embeddings, dim=0)
+            train_universal_accuracy = compute_embedding_accuracy(
+                sample_embeddings=train_anchor_embeddings_tensor.detach().cpu().numpy(),
+                sample_model_names=train_anchor_model_ids,
+                model_embeddings=model_embeddings
+            )
+            
             # Validation
-            val_loss, val_triplet_accuracy = self._perform_validation(
-                val_dataloader, criterion, timer
-            ) if val_dataloader is not None else (None, None)
+            val_loss, val_triplet_accuracy, val_universal_accuracy = self._perform_validation(
+                val_dataloader, criterion, model_embeddings, timer
+            ) if val_dataloader is not None else (None, None, None)
         
         epoch_log = self.EpochLog(
             epoch=epoch,
@@ -290,8 +325,10 @@ class TripletFrozenEncoderModel(TripletModelBase[TripletEmbedding]):
             train_triplet_loss=avg_triplet_loss,
             train_reg_loss=avg_reg_loss,
             train_triplet_accuracy=triplet_accuracy,
+            train_universal_accuracy=train_universal_accuracy,
             val_loss=val_loss,
             val_triplet_accuracy=val_triplet_accuracy,
+            val_universal_accuracy=val_universal_accuracy,
             duration=timer.elapsed_time,
         )
         self._epoch_logs.append(epoch_log)
@@ -302,9 +339,10 @@ class TripletFrozenEncoderModel(TripletModelBase[TripletEmbedding]):
         self,
         val_dataloader: DataLoader,
         criterion: nn.Module,
+        model_embeddings: dict[str, np.ndarray],
         timer: Timer,
-    ) -> tuple[float, float]:
-        """Perform validation and return (loss, triplet_accuracy)."""
+    ) -> tuple[float, float, float]:
+        """Perform validation and return (loss, triplet_accuracy, universal_accuracy)."""
         module = self._get_module()
         module.eval()
         total_loss = 0.0
@@ -312,8 +350,12 @@ class TripletFrozenEncoderModel(TripletModelBase[TripletEmbedding]):
         n_batches = 0
         total_samples = 0
         
+        # Store anchor embeddings and model IDs for universal accuracy
+        val_anchor_embeddings = []
+        val_anchor_model_ids = []
+        
         with torch.no_grad():
-            for batch_anchor, batch_positive, batch_negative in val_dataloader:
+            for batch_anchor, batch_positive, batch_negative, batch_anchor_model_ids_list in val_dataloader:
                 batch_anchor = batch_anchor.to(self.device)  # [batch_size, input_dim]
                 batch_positive = batch_positive.to(self.device)  # [batch_size, input_dim]
                 batch_negative = batch_negative.to(self.device)  # [batch_size, input_dim]
@@ -343,11 +385,24 @@ class TripletFrozenEncoderModel(TripletModelBase[TripletEmbedding]):
                 dist_neg = torch.norm(anchor_emb - negative_emb, p=2, dim=1)  # [batch_size]
                 correct_triplets += (dist_pos < dist_neg).sum().item()
                 
+                # Store anchor embeddings and model IDs
+                val_anchor_embeddings.append(anchor_emb)
+                val_anchor_model_ids.extend(batch_anchor_model_ids_list)
+                
                 n_batches += 1
         
         avg_loss = total_loss / n_batches
         triplet_accuracy = correct_triplets / total_samples
-        return avg_loss, triplet_accuracy
+        
+        # Compute universal accuracy for validation data
+        val_anchor_embeddings_tensor = torch.cat(val_anchor_embeddings, dim=0)
+        universal_accuracy = compute_embedding_accuracy(
+            sample_embeddings=val_anchor_embeddings_tensor.detach().cpu().numpy(),
+            sample_model_names=val_anchor_model_ids,
+            model_embeddings=model_embeddings
+        )
+        
+        return avg_loss, triplet_accuracy, universal_accuracy
     
     def get_state_dict(self) -> dict[str, Any]:
         """Get state dictionary for serialization."""

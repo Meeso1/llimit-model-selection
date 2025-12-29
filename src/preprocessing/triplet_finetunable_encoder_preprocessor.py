@@ -229,6 +229,7 @@ class TripletFinetunableEncoderPreprocessor:
             triplets.append(TrainingTriplet(
                 anchor_prompt=anchor_prompt,
                 anchor_response=first_anchor_response,
+                anchor_model_id=first_anchor_model,
                 positive_prompt=first_positive_example.prompt,
                 positive_response=first_positive_example.response,
                 negative_prompt=first_negative_prompt,
@@ -253,6 +254,7 @@ class TripletFinetunableEncoderPreprocessor:
             triplets.append(TrainingTriplet(
                 anchor_prompt=anchor_prompt,
                 anchor_response=second_anchor_response,
+                anchor_model_id=second_anchor_model,
                 positive_prompt=second_positive_example.prompt,
                 positive_response=second_positive_example.response,
                 negative_prompt=second_negative_prompt,
@@ -280,6 +282,7 @@ class TripletFinetunableEncoderPreprocessor:
             triplets.append(TrainingTriplet(
                 anchor_prompt=anchor_prompt,
                 anchor_response=first_anchor_response,
+                anchor_model_id=pair.model_a,
                 positive_prompt=first_positive_prompt,
                 positive_response=first_positive_response,
                 negative_prompt=negative_example.prompt,
@@ -295,6 +298,7 @@ class TripletFinetunableEncoderPreprocessor:
             triplets.append(TrainingTriplet(
                 anchor_prompt=anchor_prompt,
                 anchor_response=second_anchor_response,
+                anchor_model_id=pair.model_b,
                 positive_prompt=second_positive_prompt,
                 positive_response=second_positive_response,
                 negative_prompt=negative_example.prompt,

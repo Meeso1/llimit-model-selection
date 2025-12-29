@@ -204,6 +204,37 @@ class TripletModelBase(EmbeddingModelBase, ABC, Generic[TripletType]):
             with Timer("compute_model_embeddings", verbosity="start+end", parent=train_timer):
                 self._model_embeddings = self._compute_model_embeddings(data)
     
+    def _compute_model_embeddings_from_stored(
+        self,
+        anchor_embeddings: torch.Tensor,  # [n_samples, embedding_dim]
+        anchor_model_ids: list[str],  # [n_samples]
+    ) -> dict[str, np.ndarray]:
+        """
+        Compute model embeddings by averaging stored embeddings from each model.
+        
+        Args:
+            anchor_embeddings: Anchor embeddings from training/validation batch
+            anchor_model_ids: Model IDs for each anchor
+            
+        Returns:
+            Dictionary mapping model IDs to their average embeddings
+        """
+        if len(anchor_embeddings) == 0:
+            raise ValueError("anchor_embeddings cannot be empty")
+        
+        # Group embeddings by model
+        model_embeddings_dict: dict[str, list[torch.Tensor]] = defaultdict(list)
+        for emb, model_id in zip(anchor_embeddings, anchor_model_ids):
+            model_embeddings_dict[model_id].append(emb)
+        
+        # Average embeddings for each model and convert to numpy
+        model_embeddings = {
+            model_id: torch.stack(embs).mean(dim=0).detach().cpu().numpy()
+            for model_id, embs in model_embeddings_dict.items()
+        }
+        
+        return model_embeddings
+    
     @abstractmethod
     def encode(
         self,
@@ -300,19 +331,27 @@ class TripletModelBase(EmbeddingModelBase, ABC, Generic[TripletType]):
         if epoch_log.epoch % self.print_every != 0:
             return
         
-        if epoch_log.val_loss is None or epoch_log.val_triplet_accuracy is None:
+        accuracy_str = f"triplet_acc = {(epoch_log.train_triplet_accuracy*100):.2f}%"
+        if epoch_log.val_triplet_accuracy is not None:
+            accuracy_str += f"/{(epoch_log.val_triplet_accuracy*100):.2f}%"
+        
+        univ_acc_str = f"univ_acc = {(epoch_log.train_universal_accuracy*100):.2f}%"
+        if epoch_log.val_universal_accuracy is not None:
+            univ_acc_str += f"/{(epoch_log.val_universal_accuracy*100):.2f}%"
+            
+        if epoch_log.val_loss is None:
             print(
                 f"Epoch {epoch_log.epoch:>4}: "
                 f"loss = {epoch_log.train_loss:.4f} "
                 f"(triplet: {epoch_log.train_triplet_loss:.4f}, reg: {epoch_log.train_reg_loss:.4f}), "
-                f"triplet_acc = {(epoch_log.train_triplet_accuracy*100):.2f}% - "
+                f"{accuracy_str}, {univ_acc_str} - "
                 f"{epoch_log.duration:.2f}s"
             )
         else:
             print(
                 f"Epoch {epoch_log.epoch:>4}: "
                 f"loss = {epoch_log.train_loss:.4f}/{epoch_log.val_loss:.4f}, "
-                f"triplet_acc = {(epoch_log.train_triplet_accuracy*100):.2f}%/{(epoch_log.val_triplet_accuracy*100):.2f}% - "
+                f"{accuracy_str}, {univ_acc_str} - "
                 f"{epoch_log.duration:.2f}s"
             )
     
@@ -324,7 +363,9 @@ class TripletModelBase(EmbeddingModelBase, ABC, Generic[TripletType]):
         train_triplet_loss: float
         train_reg_loss: float
         train_triplet_accuracy: float
+        train_universal_accuracy: float
         val_loss: float | None
         val_triplet_accuracy: float | None
+        val_universal_accuracy: float | None
         duration: float
 

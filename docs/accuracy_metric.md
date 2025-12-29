@@ -37,6 +37,24 @@ Located in `src/utils/accuracy.py`
 3. Compare predictions to labels
 4. Return fraction of correct predictions
 
+### Function: `compute_embedding_accuracy`
+
+Located in `src/utils/accuracy.py`. Used for embedding-based models to measure how well learned model embeddings represent individual samples.
+
+**Parameters:**
+- `sample_embeddings: np.ndarray` - Embeddings for individual prompt-response pairs, shape `[n_samples, embedding_dim]`
+- `sample_model_names: list[str]` - Actual model name for each sample, length `n_samples`
+- `model_embeddings: dict[str, np.ndarray]` - Dictionary mapping model names to their representative embeddings (e.g., averaged over many samples)
+
+**Returns:**
+- `float` - Accuracy value in `[0, 1]`
+
+**Algorithm:**
+1. For each sample, compute Euclidean distance to all model embeddings in the dictionary.
+2. Identify the closest model (nearest neighbor).
+3. Check if the closest model's name matches the actual model name.
+4. Return the percentage of correct matches.
+
 ## Training Integration
 
 Both training and validation accuracies are computed and logged:
