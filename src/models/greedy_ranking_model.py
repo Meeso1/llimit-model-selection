@@ -291,12 +291,11 @@ class GreedyRankingModel(ModelBase):
         for comparison in data.comparisons:
             i = comparison.model_id_a
             j = comparison.model_id_b
-            comp_type = comparison.comparison_type
             
             # Only count win/loss comparisons for ranking
-            if comp_type == "model_a_wins":
+            if comparison.winner == "model_a":
                 W[i, j] += 1
-            elif comp_type == "model_b_wins":
+            elif comparison.winner == "model_b":
                 W[j, i] += 1
             # Ignore ties and both_bad for ranking computation
         
@@ -426,28 +425,27 @@ class GreedyRankingModel(ModelBase):
         for comparison in comparisons:
             model_id_a = comparison.model_id_a
             model_id_b = comparison.model_id_b
-            comparison_type = comparison.comparison_type
             
             rank_a = rank_of_model[model_id_a]
             rank_b = rank_of_model[model_id_b]
             
             # Check accuracy based on comparison type
-            if comparison_type == "model_a_wins":
+            if comparison.winner == "model_a":
                 n_ranking += 1
                 # Correct if a is ranked higher (lower rank number)
                 if rank_a < rank_b:
                     ranking_accuracy_sum += 1.0
-            elif comparison_type == "model_b_wins":
+            elif comparison.winner == "model_b":
                 n_ranking += 1
                 # Correct if b is ranked higher (lower rank number)
                 if rank_b < rank_a:
                     ranking_accuracy_sum += 1.0
-            elif comparison_type == "tie":
+            elif comparison.winner == "tie":
                 n_ties += 1
                 # Correct if both are in top half
                 if rank_a < n_models / 2 and rank_b < n_models / 2:
                     tie_accuracy_sum += 1.0
-            elif comparison_type == "both_bad":
+            elif comparison.winner == "both_bad":
                 n_both_bad += 1
                 # Correct if both are in bottom half
                 if rank_a >= n_models / 2 and rank_b >= n_models / 2:
@@ -489,17 +487,16 @@ class GreedyRankingModel(ModelBase):
         for comparison in comparisons:
             model_id_a = comparison.model_id_a
             model_id_b = comparison.model_id_b
-            comparison_type = comparison.comparison_type
             
             rank_a = rank_of_model[model_id_a]
             rank_b = rank_of_model[model_id_b]
             
             # Count disagreements for win/loss comparisons only
-            if comparison_type == "model_a_wins":
+            if comparison.winner == "model_a":
                 # Disagreement if a won but is ranked lower (higher rank number)
                 if rank_a > rank_b:
                     disagreements += 1
-            elif comparison_type == "model_b_wins":
+            elif comparison.winner == "model_b":
                 # Disagreement if b won but is ranked lower (higher rank number)
                 if rank_b > rank_a:
                     disagreements += 1

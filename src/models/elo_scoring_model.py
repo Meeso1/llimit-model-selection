@@ -307,7 +307,6 @@ class EloScoringModel(ModelBase):
             for comparison in comparisons:
                 model_id_a = comparison.model_id_a
                 model_id_b = comparison.model_id_b
-                comparison_type = comparison.comparison_type
                 
                 rating_a: float = self._ratings[model_id_a]
                 rating_b: float = self._ratings[model_id_b]
@@ -317,17 +316,17 @@ class EloScoringModel(ModelBase):
                 expected_b = 1.0 - expected_a
                 
                 # Determine actual scores and apply penalties
-                if comparison_type == "model_a_wins":
+                if comparison.winner == "model_a":
                     actual_a, actual_b = 1.0, 0.0
                     n_ranking += 1
                     if rating_a > rating_b:
                         ranking_accuracy_sum += 1.0
-                elif comparison_type == "model_b_wins":
+                elif comparison.winner == "model_b":
                     actual_a, actual_b = 0.0, 1.0
                     n_ranking += 1
                     if rating_b > rating_a:
                         ranking_accuracy_sum += 1.0
-                elif comparison_type == "tie":
+                elif comparison.winner == "tie":
                     actual_a, actual_b = 0.5, 0.5
                     n_ties += 1
                     # Both should have positive scores (above initial)
@@ -338,7 +337,7 @@ class EloScoringModel(ModelBase):
                         actual_a += self.non_ranking_loss_coeff * 0.5
                     if rating_b < self.initial_rating + self.tie_both_bad_epsilon:
                         actual_b += self.non_ranking_loss_coeff * 0.5
-                elif comparison_type == "both_bad":
+                elif comparison.winner == "both_bad":
                     actual_a, actual_b = 0.5, 0.5
                     n_both_bad += 1
                     # Both should have negative scores (below initial)
@@ -350,7 +349,7 @@ class EloScoringModel(ModelBase):
                     if rating_b > self.initial_rating - self.tie_both_bad_epsilon:
                         actual_b -= self.non_ranking_loss_coeff * 0.5
                 else:
-                    raise ValueError(f"Unknown comparison type: {comparison_type}")
+                    raise ValueError(f"Unknown comparison type: {comparison.winner}")
                 
                 # Update ratings
                 delta_a = self.k_factor * (actual_a - expected_a)
@@ -522,25 +521,24 @@ class EloScoringModel(ModelBase):
         for comparison in val_data.comparisons:
             model_id_a = comparison.model_id_a
             model_id_b = comparison.model_id_b
-            comparison_type = comparison.comparison_type
             
             rating_a = self._ratings[model_id_a]
             rating_b = self._ratings[model_id_b]
             
             # Check accuracy based on comparison type
-            if comparison_type == "model_a_wins":
+            if comparison.winner == "model_a":
                 n_ranking += 1
                 if rating_a > rating_b:
                     ranking_accuracy_sum += 1.0
-            elif comparison_type == "model_b_wins":
+            elif comparison.winner == "model_b":
                 n_ranking += 1
                 if rating_b > rating_a:
                     ranking_accuracy_sum += 1.0
-            elif comparison_type == "tie":
+            elif comparison.winner == "tie":
                 n_ties += 1
                 if rating_a > self.initial_rating and rating_b > self.initial_rating:
                     tie_accuracy_sum += 1.0
-            elif comparison_type == "both_bad":
+            elif comparison.winner == "both_bad":
                 n_both_bad += 1
                 if rating_a < self.initial_rating and rating_b < self.initial_rating:
                     both_bad_accuracy_sum += 1.0

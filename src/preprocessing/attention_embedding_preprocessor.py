@@ -2,8 +2,7 @@
 
 import hashlib
 import numpy as np
-import torch
-from collections import Counter, defaultdict
+from collections import defaultdict
 from sentence_transformers import SentenceTransformer
 
 from src.constants import PREPROCESSED_DATA_JAR_PATH
@@ -18,6 +17,7 @@ from src.preprocessing.feature_extraction import extract_all_scalar_features
 from src.preprocessing.simple_scaler import SimpleScaler
 from src.utils.jar import Jar
 from src.utils.timer import Timer
+from src.preprocessing.utils import filter_out_empty_entries, filter_out_rare_models, validate_winner_types
 
 
 class AttentionEmbeddingPreprocessor:
@@ -112,48 +112,16 @@ class AttentionEmbeddingPreprocessor:
             return preprocessed_data
     
     def _filter_data(self, data: TrainingData) -> TrainingData:
-        """
-        Filter out invalid and rare model entries.
-        
-        Args:
-            data: Raw training data
-            
-        Returns:
-            Filtered training data
-        """
-        # Filter out entries with empty prompts or responses
-        valid_entries = [
-            entry for entry in data.entries
-            if (entry.user_prompt.strip() 
-                and entry.model_a_response.strip() 
-                and entry.model_b_response.strip())
-        ]
-        
-        # Count model appearances
-        model_counts = Counter()
-        for entry in valid_entries:
-            model_counts[entry.model_a] += 1
-            model_counts[entry.model_b] += 1
-        
-        # Filter out rare models
-        frequent_models = {
-            model for model, count in model_counts.items()
-            if count >= self.min_model_comparisons
-        }
-        
-        filtered_entries = [
-            entry for entry in valid_entries
-            if entry.model_a in frequent_models and entry.model_b in frequent_models
-        ]
-        
-        if len(filtered_entries) == 0:
+        filtered_data = filter_out_rare_models(data, self.min_model_comparisons)
+        filtered_data = filter_out_empty_entries(filtered_data)
+        if len(filtered_data.entries) == 0:
             raise ValueError(
                 "No valid training data after filtering. "
                 f"All models were filtered out (min_model_comparisons={self.min_model_comparisons}). "
                 "Try lowering min_model_comparisons or providing more training data."
             )
         
-        return TrainingData(entries=filtered_entries)
+        return filtered_data
     
     def _extract_features(
         self, 

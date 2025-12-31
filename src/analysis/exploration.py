@@ -6,69 +6,66 @@ from src.utils.string_encoder import StringEncoder
 
 
 def get_wins_matrix(data: TrainingData, encoder: StringEncoder | None = None) -> tuple[np.ndarray, StringEncoder]:
-    model_encoder = encoder if encoder is not None else StringEncoder()
-    model_encoder.fit([name for entry in data.entries for name in [entry.model_a, entry.model_b]])
+    """
+    Returns a matrix of wins for each model. Element (i, j) is the number of times model i beat model j.
+    """
+    if encoder is None:
+        encoder = StringEncoder()
+        encoder.fit([name for entry in data.entries for name in [entry.model_a, entry.model_b]])
 
-    result = np.zeros((model_encoder.size, model_encoder.size))
+    result = np.zeros((encoder.size, encoder.size))
     for entry in data.entries:
-        model_id_a = model_encoder.encode(entry.model_a)
-        model_id_b = model_encoder.encode(entry.model_b)
+        model_id_a = encoder.encode(entry.model_a)
+        model_id_b = encoder.encode(entry.model_b)
 
         if entry.winner == "model_a":
             result[model_id_a, model_id_b] += 1
         elif entry.winner == "model_b":
             result[model_id_b, model_id_a] += 1
         
-    return result, model_encoder
+    return result, encoder
 
 
 def get_losses_matrix(data: TrainingData, encoder: StringEncoder | None = None) -> tuple[np.ndarray, StringEncoder]:
-    model_encoder = encoder if encoder is not None else StringEncoder()
-    model_encoder.fit([name for entry in data.entries for name in [entry.model_a, entry.model_b]])
-
-    result = np.zeros((model_encoder.size, model_encoder.size))
-    for entry in data.entries:
-        model_id_a = model_encoder.encode(entry.model_a)
-        model_id_b = model_encoder.encode(entry.model_b)
-
-        if entry.winner == "model_a":
-            result[model_id_b, model_id_a] += 1
-        elif entry.winner == "model_b":
-            result[model_id_a, model_id_b] += 1
-    
-    return result, model_encoder
+    """
+    Returns a matrix of losses for each model. Element (i, j) is the number of times model i lost to model j.
+    """
+    wins_matrix, encoder = get_wins_matrix(data, encoder)
+    return wins_matrix.T, encoder
 
 
 def get_ties_matrix(data: TrainingData, encoder: StringEncoder | None = None) -> tuple[np.ndarray, StringEncoder]:
-    model_encoder = encoder if encoder is not None else StringEncoder()
-    model_encoder.fit([name for entry in data.entries for name in [entry.model_a, entry.model_b]])
+    if encoder is None:
+        encoder = StringEncoder()
+        encoder.fit([name for entry in data.entries for name in [entry.model_a, entry.model_b]])
 
-    result = np.zeros((model_encoder.size, model_encoder.size))
+    result = np.zeros((encoder.size, encoder.size))
     for entry in data.entries:
-        model_id_a = model_encoder.encode(entry.model_a)
-        model_id_b = model_encoder.encode(entry.model_b)
+        model_id_a = encoder.encode(entry.model_a)
+        model_id_b = encoder.encode(entry.model_b)
 
         if entry.winner == "tie":
             result[model_id_a, model_id_b] += 1
             result[model_id_b, model_id_a] += 1
 
-    return result, model_encoder
+    return result, encoder
 
 
 def get_both_bad_matrix(data: TrainingData, encoder: StringEncoder | None = None) -> tuple[np.ndarray, StringEncoder]:
-    model_encoder = encoder if encoder is not None else StringEncoder()
-    model_encoder.fit([name for entry in data.entries for name in [entry.model_a, entry.model_b]])
+    if encoder is None:
+        encoder = StringEncoder()
+        encoder.fit([name for entry in data.entries for name in [entry.model_a, entry.model_b]])
 
-    result = np.zeros((model_encoder.size, model_encoder.size))
+    result = np.zeros((encoder.size, encoder.size))
     for entry in data.entries:
-        model_id_a = model_encoder.encode(entry.model_a)
-        model_id_b = model_encoder.encode(entry.model_b)
+        model_id_a = encoder.encode(entry.model_a)
+        model_id_b = encoder.encode(entry.model_b)
 
         if entry.winner == "both_bad":
             result[model_id_a, model_id_b] += 1
             result[model_id_b, model_id_a] += 1
 
-    return result, model_encoder
+    return result, encoder
 
 
 def plot_model_by_model_matrix(

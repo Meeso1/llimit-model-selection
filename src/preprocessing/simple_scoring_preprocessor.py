@@ -1,9 +1,7 @@
 """Preprocessor for simple scoring model."""
-
-from collections import Counter
 from src.data_models.data_models import TrainingData
 from src.data_models.simple_scoring_types import PreprocessedTrainingData, PreprocessedComparison
-from src.utils.string_encoder import StringEncoder
+from src.preprocessing.utils import filter_out_rare_models, create_encoder, validate_winner_types
 
 
 class SimpleScoringPreprocessor:
@@ -28,45 +26,19 @@ class SimpleScoringPreprocessor:
         Returns:
             Preprocessed training data with encoded model IDs
         """
-        model_counts = Counter()
-        for entry in data.entries:
-            model_counts[entry.model_a] += 1
-            model_counts[entry.model_b] += 1
-        
-        frequent_models = {
-            model_name 
-            for model_name, count in model_counts.items() 
-            if count >= self.min_model_occurrences
-        }
-        
-        model_encoder = StringEncoder()
-        model_encoder.fit(sorted(frequent_models))
+        validate_winner_types(data)
+        filtered_data = filter_out_rare_models(data, self.min_model_occurrences)
+        model_encoder = create_encoder(filtered_data)
         
         comparisons = []
-        for entry in data.entries:
-            if entry.model_a not in frequent_models or entry.model_b not in frequent_models:
-                continue
-            
+        for entry in filtered_data.entries:
             model_id_a = model_encoder.encode(entry.model_a)
             model_id_b = model_encoder.encode(entry.model_b)
-            
-            # Map winner to comparison type
-            if entry.winner == "model_a":
-                comparison_type = "model_a_wins"
-            elif entry.winner == "model_b":
-                comparison_type = "model_b_wins"
-            elif entry.winner == "tie":
-                comparison_type = "tie"
-            elif entry.winner == "both_bad":
-                comparison_type = "both_bad"
-            else:
-                # Skip unknown winner types
-                continue
             
             comparisons.append(PreprocessedComparison(
                 model_id_a=model_id_a,
                 model_id_b=model_id_b,
-                comparison_type=comparison_type,
+                winner=entry.winner,
             ))
         
         if len(comparisons) == 0:

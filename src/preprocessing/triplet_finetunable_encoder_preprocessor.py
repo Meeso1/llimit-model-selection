@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 import hashlib
 import random
-from collections import Counter
 
 from src.constants import PREPROCESSED_DATA_JAR_PATH
 from src.data_models.data_models import EvaluationEntry, TrainingData
@@ -9,6 +8,7 @@ from src.data_models.triplet_encoder_types import (
     TrainingTriplet,
     PreprocessedTripletEncoderData,
 )
+from src.preprocessing.utils import filter_out_both_bad, filter_out_empty_entries, filter_out_rare_models
 from src.utils.jar import Jar
 from src.utils.timer import Timer
 
@@ -90,38 +90,17 @@ class TripletFinetunableEncoderPreprocessor:
         Returns:
             Filtered training data
         """
-        # Filter out entries with empty prompts or responses
-        valid_entries = [
-            entry for entry in data.entries
-            if (entry.user_prompt.strip() 
-                and entry.model_a_response.strip() 
-                and entry.model_b_response.strip())
-        ]
+        filtered_data = filter_out_rare_models(data, self.min_model_comparisons)
+        filtered_data = filter_out_empty_entries(filtered_data)
+        filtered_data = filter_out_both_bad(filtered_data)
+        if len(filtered_data.entries) == 0:
+            raise ValueError(
+                "No valid training data after filtering. "
+                f"All models were filtered out (min_model_comparisons={self.min_model_comparisons}). "
+                "Try lowering min_model_comparisons or providing more training data."
+            )
         
-        # Count model appearances
-        model_counts = Counter()
-        for entry in valid_entries:
-            model_counts[entry.model_a] += 1
-            model_counts[entry.model_b] += 1
-        
-        # Filter out rare models
-        frequent_models = {
-            model for model, count in model_counts.items()
-            if count >= self.min_model_comparisons
-        }
-        
-        filtered_entries = [
-            entry for entry in valid_entries
-            if entry.model_a in frequent_models and entry.model_b in frequent_models
-        ]
-
-        # Filter out `both_bad` - we don't use these currently
-        no_both_bad = [
-            entry for entry in filtered_entries
-            if entry.winner != "both_bad"
-        ]
-        
-        return TrainingData(entries=no_both_bad)
+        return filtered_data
 
     def _construct_triplets(self, data: TrainingData) -> list[TrainingTriplet]:
         all_examples = self._make_all_examples(data.entries)

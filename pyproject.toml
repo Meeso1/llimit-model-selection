@@ -8,6 +8,7 @@ dependencies = [
     "datasets>=2.19.2",
     "jupyter==1.1.1",
     "matplotlib==3.10.7",
+    "networkx>=3.4.2",
     "numpy==2.3.5",
     "pydantic>=2.12.4",
     "sentence-transformers>=5.1.2",

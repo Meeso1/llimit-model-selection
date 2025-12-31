@@ -1,20 +1,20 @@
 """Preprocessor for embedding prompts using sentence transformers."""
 
 import hashlib
-import torch
-from collections import Counter
 from sentence_transformers import SentenceTransformer
+import torch
 
 from src.constants import PREPROCESSED_DATA_JAR_PATH
 from src.data_models.data_models import TrainingData
 from src.data_models.dense_network_types import (
+    PreprocessedInferenceInput,
     PreprocessedPromptPair,
     PreprocessedTrainingData,
-    PreprocessedInferenceInput,
 )
 from src.utils.jar import Jar
 from src.utils.string_encoder import StringEncoder
 from src.utils.timer import Timer
+from src.preprocessing.utils import filter_out_ties, filter_out_both_bad, filter_out_empty_entries, filter_out_rare_models, create_encoder
 
 
 class PromptEmbeddingPreprocessor:
@@ -74,21 +74,15 @@ class PromptEmbeddingPreprocessor:
             if cache_key in self.jar:
                 return self.jar.get(cache_key)
             
-            with Timer("filter_entries", verbosity="start+end", parent=timer):
-                filtered_data = self.filter_out_ties_and_both_bad(data)
-                filtered_data, frequent_models = self.filter_out_rare_models(filtered_data, self.min_model_comparisons)
-                filtered_entries = filtered_data.entries
-
-            with Timer("fit_model_encoder", verbosity="start+end", parent=timer):
-                model_encoder = StringEncoder()
-                model_encoder.fit(sorted(frequent_models))
+            with Timer("filter_entries_and_fit_encoder", verbosity="start+end", parent=timer):
+                filtered_data, model_encoder = self._filter_data_and_fit_encoder(data)
             
             with Timer("embed_prompts", verbosity="start+end", parent=timer):
-                prompts = [entry.user_prompt for entry in filtered_entries]
+                prompts = [entry.user_prompt for entry in filtered_data.entries]
                 embeddings = self._embed_prompts(prompts).cpu()  # [n_prompts, embedding_dim]
             
             pairs: list[PreprocessedPromptPair] = []
-            for i, entry in enumerate(filtered_entries):
+            for i, entry in enumerate(filtered_data.entries):
                 winner_label = 0 if entry.winner == "model_a" else 1
                 pairs.append(
                     PreprocessedPromptPair(
@@ -110,58 +104,21 @@ class PromptEmbeddingPreprocessor:
             
             return preprocessed_data
 
-    @staticmethod
-    def filter_out_ties_and_both_bad(data: TrainingData) -> TrainingData:
-        """
-        Filter out entries with winner="tie" or winner="both_bad".
-        
-        Args:
-            data: Training data
-            
-        Returns:
-            Training data with entries filtered out
-        """
-        return TrainingData(entries=[
-            entry for entry in data.entries
-            if entry.winner in ["model_a", "model_b"]
-        ])
-
-    @staticmethod
-    def filter_out_rare_models(data: TrainingData, min_model_comparisons: int) -> tuple[TrainingData, list[str]]:
-        """
-        Filter out models with insufficient comparisons.
-        
-        Args:
-            data: Training data
-            min_model_comparisons: Minimum number of comparisons for a model to be included
-        """
-        # Count model occurrences
-        model_counts = Counter()
-        for entry in data.entries:
-            model_counts[entry.model_a] += 1
-            model_counts[entry.model_b] += 1
-        
-        # Filter out models with insufficient comparisons
-        frequent_models = {
-            model_name 
-            for model_name, count in model_counts.items() 
-            if count >= min_model_comparisons
-        }
-        
-        # Keep only entries where both models are frequent
-        filtered_entries = [
-            entry for entry in data.entries
-            if entry.model_a in frequent_models and entry.model_b in frequent_models
-        ]
-        
-        if len(filtered_entries) == 0:
+    def _filter_data_and_fit_encoder(self, data: TrainingData) -> tuple[TrainingData, StringEncoder]:
+        filtered_data = filter_out_ties(data)
+        filtered_data = filter_out_both_bad(filtered_data)
+        filtered_data = filter_out_empty_entries(filtered_data)
+        filtered_data = filter_out_rare_models(filtered_data, self.min_model_comparisons)
+        if len(filtered_data.entries) == 0:
             raise ValueError(
                 "No valid training data after filtering. "
-                f"All models were filtered out (min_model_comparisons={min_model_comparisons}). "
+                f"All models were filtered out (min_model_comparisons={self.min_model_comparisons}). "
                 "Try lowering min_model_comparisons or providing more training data."
             )
 
-        return TrainingData(entries=filtered_entries), frequent_models
+        model_encoder = create_encoder(filtered_data)
+        
+        return filtered_data, model_encoder
 
     def _generate_cache_key(self, data: TrainingData) -> str:
         """

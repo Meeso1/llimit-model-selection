@@ -315,13 +315,13 @@ class SimpleScoringModel(ModelBase):
             model_ids_b_list.append(comparison.model_id_b)
             
             # Map comparison type to label
-            if comparison.comparison_type == "model_a_wins":
+            if comparison.winner == "model_a":
                 labels_list.append(1.0)
-            elif comparison.comparison_type == "model_b_wins":
+            elif comparison.winner == "model_b":
                 labels_list.append(-1.0)
-            elif comparison.comparison_type == "tie":
+            elif comparison.winner == "tie":
                 labels_list.append(0.0)
-            elif comparison.comparison_type == "both_bad":
+            elif comparison.winner == "both_bad":
                 labels_list.append(2.0)
         
         model_ids_a = torch.tensor(model_ids_a_list, dtype=torch.long)  # [n_comparisons]
