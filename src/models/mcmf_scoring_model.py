@@ -10,9 +10,8 @@ import warnings
 from src.models.model_base import ModelBase
 from src.data_models.data_models import TrainingData, InputData
 from src.data_models.dense_network_types import PromptRoutingOutput
-from src.data_models.simple_scoring_types import PreprocessedTrainingData
-from src.preprocessing.simple_scoring_preprocessor import SimpleScoringPreprocessor
 from src.preprocessing.utils import filter_out_rare_models, filter_out_empty_entries, filter_out_both_bad, filter_out_ties, create_encoder
+from src.utils import accuracy
 from src.utils.training_history import TrainingHistory
 from src.utils.wandb_details import WandbDetails
 from src.utils.string_encoder import StringEncoder
@@ -190,7 +189,7 @@ class McmfScoringModel(ModelBase):
         flow_cost = sum([flow_dict.get(u, {}).get(v, 0) for u in range(self._model_encoder.size) for v in range(self._model_encoder.size)])
         
         return self.TrainMetrics(
-            accuracy=self._compute_accuracy(filtered_data, self._scores),
+            accuracy=accuracy.compute_comparisons_accuracy(filtered_data, self._scores, self._model_encoder),
             min_score=np.min(self._scores),
             max_score=np.max(self._scores),
             avg_score=np.mean(self._scores),
@@ -330,20 +329,6 @@ class McmfScoringModel(ModelBase):
             return np.zeros_like(scores)
         
         return (scores - mean) / std
-
-    def _compute_accuracy(self, data: TrainingData, scores: np.ndarray) -> float:
-        correct = 0
-        for entry in data.entries:
-            model_a_id = self._model_encoder.encode(entry.model_a)
-            model_b_id = self._model_encoder.encode(entry.model_b)
-            if entry.winner == "model_a":
-                if scores[model_a_id] > scores[model_b_id]:
-                    correct += 1
-            elif entry.winner == "model_b":
-                if scores[model_b_id] > scores[model_a_id]:
-                    correct += 1
-
-        return correct / len(data.entries)
 
     def _run_min_cost_max_flow(self, filtered_data: TrainingData) -> tuple[nx.DiGraph, dict[int, dict[int, int]]]:
         num_models = self._model_encoder.size

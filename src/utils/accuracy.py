@@ -1,6 +1,9 @@
 import torch
 import numpy as np
 
+from src.data_models.data_models import TrainingData
+from src.utils.string_encoder import StringEncoder
+
 
 def compute_pairwise_accuracy(
     scores_a: torch.Tensor,  # [batch_size]
@@ -104,3 +107,36 @@ def compute_embedding_accuracy(
     accuracy = correct.mean()
     return float(accuracy)
 
+
+def compute_comparisons_accuracy(
+    data: TrainingData,
+    scores: np.ndarray,
+    encoder: StringEncoder,
+) -> float:
+    """
+    Computes accuracy for win/lose comparisons.
+    
+    Accuracy is defined as the percentage of comparisons where the model's prediction
+    (which model has higher score) matches the human evaluation.
+    
+    This skips ties and both_bad comparisons.
+    """
+    correct = 0
+    counted = 0
+    for entry in data.entries:
+        model_a_id = encoder.encode(entry.model_a)
+        model_b_id = encoder.encode(entry.model_b)
+        
+        if model_a_id is None or model_b_id is None:
+            continue
+
+        if entry.winner == "model_a":
+            if scores[model_a_id] > scores[model_b_id]:
+                correct += 1
+            counted += 1
+        elif entry.winner == "model_b":
+            if scores[model_b_id] > scores[model_a_id]:
+                correct += 1
+            counted += 1
+
+    return correct / counted
