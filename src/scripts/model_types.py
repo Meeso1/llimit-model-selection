@@ -5,7 +5,7 @@ from src.models.optimizers.optimizer_spec_union import OptimizerSpec
 from src.models.embedding_specs.embedding_spec_union import EmbeddingSpec
 
 
-ModelType = Literal["dense_network", "dn_embedding", "simple_scoring", "elo_scoring", "greedy_ranking", "mcmf_scoring"]
+ModelType = Literal["dense_network", "dn_embedding", "simple_scoring", "elo_scoring", "greedy_ranking", "mcmf_scoring", "least_squares_scoring"]
 
 
 class ModelSpecBase(BaseModel):
@@ -63,7 +63,13 @@ class McmfScoringSpecification(ModelSpecBase):
     print_summary: bool = True
 
 
+class LeastSquaresScoringSpecification(ModelSpecBase):
+    model_type: Literal["least_squares_scoring"] = "least_squares_scoring"
+    min_model_occurrences: int = 1000
+    print_summary: bool = True
+
+
 ModelSpec = Annotated[
-    Union[DenseNetworkSpecification, DnEmbeddingSpecification, SimpleScoringSpecification, EloScoringSpecification, GreedyRankingSpecification, McmfScoringSpecification], 
+    Union[DenseNetworkSpecification, DnEmbeddingSpecification, SimpleScoringSpecification, EloScoringSpecification, GreedyRankingSpecification, McmfScoringSpecification, LeastSquaresScoringSpecification], 
     Field(discriminator="model_type")
 ]

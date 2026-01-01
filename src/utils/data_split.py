@@ -64,7 +64,7 @@ def train_val_split(
     data: TrainingData,
     val_fraction: float = 0.2,
     seed: int = 42
-) -> tuple[TrainingData, TrainingData]:
+) -> tuple[TrainingData, TrainingData | None]:
     """
     Splits training data into train and validation sets deterministically.
     
@@ -77,7 +77,7 @@ def train_val_split(
         Tuple of (train_data, val_data) as TrainingData objects
     """
     if val_fraction == 0:
-        return data, TrainingData(entries=[])
+        return data, None
     
     n_total = len(data.entries)
     train_indices, val_indices = _compute_split_indices(n_total, val_fraction, seed)
