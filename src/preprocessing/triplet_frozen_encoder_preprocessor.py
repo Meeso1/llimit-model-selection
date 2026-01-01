@@ -370,7 +370,7 @@ class TripletFrozenEncoderPreprocessor:
             hasher.update(entry.timestamp.encode())
         
         dataset_signature = hasher.hexdigest()[:16]
-        params_str = f"{self.min_model_comparisons}-{self.identity_positive_ratio}-{self.seed}"
+        params_str = f"{self.embedding_model_name}-{self.min_model_comparisons}-{self.identity_positive_ratio}-{self.seed}"
         return f"triplet_frozen_encoder/{self.version}/{params_str}-{dataset_signature}"
     
     def _generate_inference_cache_key(self, pairs: list[PromptResponsePair]) -> str:
