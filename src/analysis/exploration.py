@@ -18,6 +18,9 @@ def get_wins_matrix(data: TrainingData, encoder: StringEncoder | None = None) ->
         model_id_a = encoder.encode(entry.model_a)
         model_id_b = encoder.encode(entry.model_b)
 
+        if model_id_a is None or model_id_b is None:
+            continue
+
         if entry.winner == "model_a":
             result[model_id_a, model_id_b] += 1
         elif entry.winner == "model_b":
@@ -43,6 +46,9 @@ def get_ties_matrix(data: TrainingData, encoder: StringEncoder | None = None) ->
     for entry in data.entries:
         model_id_a = encoder.encode(entry.model_a)
         model_id_b = encoder.encode(entry.model_b)
+        
+        if model_id_a is None or model_id_b is None:
+            continue
 
         if entry.winner == "tie":
             result[model_id_a, model_id_b] += 1
@@ -60,6 +66,9 @@ def get_both_bad_matrix(data: TrainingData, encoder: StringEncoder | None = None
     for entry in data.entries:
         model_id_a = encoder.encode(entry.model_a)
         model_id_b = encoder.encode(entry.model_b)
+
+        if model_id_a is None or model_id_b is None:
+            continue
 
         if entry.winner == "both_bad":
             result[model_id_a, model_id_b] += 1

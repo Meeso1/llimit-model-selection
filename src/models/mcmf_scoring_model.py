@@ -202,8 +202,134 @@ class McmfScoringModel(ModelBase):
             pct_comparisons_used_by_flow=flow_cost / len(filtered_data.entries))
 
     def _compute_scores(self, G: nx.DiGraph, flow_dict: dict[int, dict[int, int]]) -> np.ndarray:
-        # TODO: Implement this
-        return np.zeros(self._model_encoder.size)
+        """
+        Compute scores from node potentials using Bellman-Ford on residual graph.
+        
+        Args:
+            G: Original graph with capacities and weights
+            flow_dict: Flow solution from min cost max flow
+            
+        Returns:
+            scores: [num_models] - normalized scores for each model
+        """
+        num_models = self._model_encoder.size
+        residual = self._build_residual_graph(G, flow_dict)
+        
+        scores = np.full(num_models, np.inf)
+        
+        # Find a starting model node
+        start_node = self._find_starting_node_from(range(num_models), residual)        
+        if start_node is None:
+            raise ValueError("No starting node found in residual graph")
+        
+        # Run Bellman-Ford from the starting node to get potentials
+        potentials = self._run_bellman_ford(residual, start_node)
+        for model_id in range(num_models):
+            scores[model_id] = -potentials.get(model_id, np.inf)
+        
+        # Handle disconnected components
+        unreachable = [i for i in range(num_models) if scores[i] == np.inf]
+        while unreachable:
+            component_start = self._find_starting_node_from(unreachable, residual)
+            if component_start is None:
+                # Remaining unreachable nodes don't exist in residual, set to 0
+                for node in unreachable:
+                    scores[node] = 0.0
+                break
+            
+            component_potentials = self._run_bellman_ford(residual, component_start)
+            for model_id in unreachable[:]:
+                if model_id in component_potentials:
+                    scores[model_id] = -component_potentials[model_id]
+                    unreachable.remove(model_id)
+        
+        scores = self._normalize_scores(scores)
+        return scores
+    
+    def _find_starting_node_from(self, nodes: list[int], residual: nx.DiGraph) -> int:
+        for node in nodes:
+            if node in residual:
+                return node
+            
+        return None
+    
+    def _build_residual_graph(
+        self,
+        G: nx.DiGraph,
+        flow_dict: dict[int, dict[int, int]]
+    ) -> nx.DiGraph:
+        """
+        Build residual graph from original graph and flow solution.
+        
+        In the residual graph:
+        - If there's remaining capacity on edge (u, v), add edge (u, v) with cost = weight
+        - If there's flow on edge (u, v), add reverse edge (v, u) with cost = -weight
+        
+        Args:
+            G: Original graph with capacities and weights
+            flow_dict: Flow solution from min cost max flow
+            
+        Returns:
+            Residual graph
+        """
+        residual = nx.DiGraph()
+        
+        for u, v, edge_data in G.edges(data=True):
+            # Ignore edges between source/sink and model nodes
+            if u >= self._model_encoder.size or v >= self._model_encoder.size:
+                continue
+            
+            capacity = edge_data['capacity']
+            weight = edge_data['weight']
+            flow = flow_dict.get(u, {}).get(v, 0)
+            
+            # Forward edge for remaining capacity
+            remaining_capacity = capacity - flow
+            if remaining_capacity > 0:
+                residual.add_edge(u, v, weight=weight)
+            
+            # Backward edge for used flow
+            if flow > 0:
+                residual.add_edge(v, u, weight=-weight)
+                
+        return residual
+    
+    def _run_bellman_ford(self, G: nx.DiGraph, source: int) -> dict[int, float]:
+        """
+        Run single-source Bellman-Ford algorithm to find shortest paths.
+        
+        Args:
+            G: Graph to run algorithm on
+            source: Source node
+            
+        Returns:
+            Dictionary mapping nodes to their distances from source
+        """
+        try:
+            distances = nx.single_source_bellman_ford_path_length(G, source)
+            return distances
+        except nx.NetworkXError:
+            # No paths from source
+            return {source: 0.0}
+    
+    def _normalize_scores(self, scores: np.ndarray) -> np.ndarray:
+        """
+        Normalize scores to have mean 0 and standard deviation 1.
+        
+        Args:
+            scores: [num_models] - unnormalized scores
+            
+        Returns:
+            normalized_scores: [num_models] - normalized scores
+        """
+        mean = np.mean(scores)
+        std = np.std(scores)
+        
+        if std < 1e-8:
+            # All scores are the same, return zeros
+            return np.zeros_like(scores)
+        
+        return (scores - mean) / std
 
     def _compute_accuracy(self, data: TrainingData, scores: np.ndarray) -> float:
         correct = 0
