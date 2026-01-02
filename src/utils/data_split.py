@@ -118,12 +118,14 @@ def split_dense_network_preprocessed_data(
     train_preprocessed = DenseNetworkPreprocessedTrainingData(
         pairs=train_pairs,
         embedding_dim=preprocessed_data.embedding_dim,
+        prompt_features_dim=preprocessed_data.prompt_features_dim,
         model_encoder=preprocessed_data.model_encoder,
     )
     
     val_preprocessed = DenseNetworkPreprocessedTrainingData(
         pairs=val_pairs,
         embedding_dim=preprocessed_data.embedding_dim,
+        prompt_features_dim=preprocessed_data.prompt_features_dim,
         model_encoder=preprocessed_data.model_encoder,
     )
     
@@ -159,10 +161,12 @@ def split_dn_embedding_preprocessed_data(
     
     train_preprocessed = DnEmbeddingPreprocessedTrainingData(
         pairs=train_pairs,
+        prompt_features_dim=preprocessed_data.prompt_features_dim,
     )
     
     val_preprocessed = DnEmbeddingPreprocessedTrainingData(
         pairs=val_pairs,
+        prompt_features_dim=preprocessed_data.prompt_features_dim,
     )
     
     return train_preprocessed, val_preprocessed
