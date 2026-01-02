@@ -1,15 +1,18 @@
 import pandas as pd
 import numpy as np
 import warnings
-from typing import Any
 from src.data_models.data_models import TrainingData, EvaluationEntry, EvaluationMessage
 
 
-def _extract_text(content: np.ndarray, row_id: str) -> str:
+def _extract_text(content: np.ndarray | str, row_id: str) -> str:
     """
     Extracts text from a message content field.
-    Content is always a numpy array containing a list of dicts with 'type'='text'.
+    Content is a numpy array containing a list of dicts with 'type'='text' in lmarena-human-preference-140k,
+    or a string in chatbot_arena.
     """
+    if isinstance(content, str):
+        return content
+
     content_list = content.tolist()
         
     text_parts = []
@@ -67,7 +70,7 @@ def _parse_conversation(conversation: np.ndarray, row_id: str) -> tuple[list[Eva
     return history, user_prompt, response
 
 
-def load_training_data(df: pd.DataFrame) -> TrainingData:
+def load_training_data_lmarena(df: pd.DataFrame) -> TrainingData:
     """
     Converts a Pandas DataFrame from the lmarena-human-preference-140k dataset
     into a TrainingData instance.
@@ -109,6 +112,63 @@ def load_training_data(df: pd.DataFrame) -> TrainingData:
                 model_a_response=response_a,
                 model_b_response=response_b,
                 timestamp=str(row["timestamp"])
+            )
+            entries.append(entry)
+            
+        except (ValueError, KeyError, TypeError) as e:
+            skipped_count += 1
+            warnings.warn(f"Skipping row: {str(e)}", UserWarning)
+            continue
+    
+    if skipped_count > 0:
+        warnings.warn(f"Skipped {skipped_count} rows due to errors", UserWarning)
+            
+    return TrainingData(entries=entries)
+
+
+def load_training_data_chatbot_arena(df: pd.DataFrame) -> TrainingData:
+    """
+    Converts a Pandas DataFrame from the chatbot_arena dataset
+    into a TrainingData instance.
+    """
+    required_columns = [
+        "model_a", "model_b", "winner", 
+        "question_id", "turn", 
+        "conversation_a", "conversation_b", "tstamp"
+    ]
+    
+    missing_cols = [col for col in required_columns if col not in df.columns]
+    if missing_cols:
+        raise ValueError(f"Missing required columns: {missing_cols}")
+    
+    entries = []
+    skipped_count = 0
+    
+    for idx, row in df.iterrows():
+        row_id = f"idx={idx}, session={row.get('question_id', 'unknown')}"
+        
+        try:
+            history_a, prompt_a, response_a = _parse_conversation(row["conversation_a"], row_id)
+            _, _, response_b = _parse_conversation(row["conversation_b"], row_id)
+            
+            winner = row["winner"]
+            if winner not in ["model_a", "model_b", "tie", "tie (bothbad)"]:
+                raise ValueError(f"Row {row_id}: Invalid winner value '{winner}'")
+
+            if winner == "tie (bothbad)":
+                winner = "both_bad"
+            
+            entry = EvaluationEntry(
+                model_a=row["model_a"],
+                model_b=row["model_b"],
+                winner=winner,
+                evaluation_session_id=row["question_id"],
+                evaluation_order=int(row["turn"]),
+                conversation_history=history_a,
+                user_prompt=prompt_a,
+                model_a_response=response_a,
+                model_b_response=response_b,
+                timestamp=str(row["tstamp"])
             )
             entries.append(entry)
             

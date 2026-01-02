@@ -219,7 +219,7 @@ def _create_starting_least_squares_scoring(training_spec: TrainingSpecification)
 
 def _load_lmarena_human_preference() -> TrainingData:
     dataset = datasets.load_dataset("lmarena-ai/arena-human-preference-140k")
-    training_data = data_loading.load_training_data(dataset["train"].to_pandas())
+    training_data = data_loading.load_training_data_lmarena(dataset["train"].to_pandas())
     print(f"Successfully loaded {len(training_data.entries)} entries")
     return training_data
 
