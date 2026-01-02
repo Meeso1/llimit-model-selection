@@ -77,13 +77,13 @@ class EmbeddingModelBase(ABC):
         model_type = state_dict.get("model_type")
         
         if model_type == "TripletFrozenEncoderModel":
-            from src.models.triplet_frozen_encoder_model import TripletFrozenEncoderModel
+            from src.models.embedding_models.triplet_frozen_encoder_model import TripletFrozenEncoderModel
             return TripletFrozenEncoderModel.load_state_dict(state_dict)
         elif model_type == "TripletFinetunableEncoderModel":
-            from src.models.triplet_finetunable_encoder_model import TripletFinetunableEncoderModel
+            from src.models.embedding_models.triplet_finetunable_encoder_model import TripletFinetunableEncoderModel
             return TripletFinetunableEncoderModel.load_state_dict(state_dict)
         elif model_type == "AttentionEmbeddingModel":
-            from src.models.attention_embedding_model import AttentionEmbeddingModel
+            from src.models.embedding_models.attention_embedding_model import AttentionEmbeddingModel
             return AttentionEmbeddingModel.load_state_dict(state_dict)
         else:
             raise ValueError(f"Unknown embedding model type in state: {model_type}")

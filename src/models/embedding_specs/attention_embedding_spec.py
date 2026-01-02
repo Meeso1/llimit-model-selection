@@ -3,7 +3,7 @@
 from typing import Literal
 
 from src.models.embedding_specs.embedding_spec import EmbeddingModelSpecification
-from src.models.attention_embedding_model import AttentionEmbeddingModel
+from src.models.embedding_models.attention_embedding_model import AttentionEmbeddingModel
 from src.models.optimizers.optimizer_spec_union import OptimizerSpec
 
 

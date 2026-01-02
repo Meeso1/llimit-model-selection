@@ -18,7 +18,7 @@ from src.data_models.attention_embedding_types import (
 )
 from src.data_models.triplet_encoder_types import PromptResponsePair
 from src.preprocessing.attention_embedding_preprocessor import AttentionEmbeddingPreprocessor
-from src.models.embedding_model_base import EmbeddingModelBase
+from src.models.embedding_models.embedding_model_base import EmbeddingModelBase
 from src.models.optimizers.optimizer_spec import OptimizerSpecification
 from src.models.optimizers.adamw_spec import AdamWSpec
 from src.utils.data_split import ValidationSplit, split_attention_embedding_preprocessed_data

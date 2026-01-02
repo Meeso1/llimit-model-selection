@@ -3,7 +3,7 @@
 from typing import Literal
 
 from src.models.embedding_specs.embedding_spec import EmbeddingModelSpecification
-from src.models.triplet_finetunable_encoder_model import TripletFinetunableEncoderModel
+from src.models.embedding_models.triplet_finetunable_encoder_model import TripletFinetunableEncoderModel
 from src.models.optimizers.optimizer_spec_union import OptimizerSpec
 
 

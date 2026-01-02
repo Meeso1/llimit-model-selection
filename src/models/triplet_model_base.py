@@ -16,7 +16,7 @@ from src.data_models.triplet_encoder_types import (
     PromptResponsePair,
     TripletType,
 )
-from src.models.embedding_model_base import EmbeddingModelBase
+from src.models.embedding_models.embedding_model_base import EmbeddingModelBase
 from src.utils.data_split import ValidationSplit
 from src.utils.timer import Timer
 

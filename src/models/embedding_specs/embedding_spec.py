@@ -3,7 +3,7 @@
 from abc import abstractmethod
 from pydantic import BaseModel
 
-from src.models.embedding_model_base import EmbeddingModelBase
+from src.models.embedding_models.embedding_model_base import EmbeddingModelBase
 
 
 class EmbeddingModelSpecification(BaseModel):

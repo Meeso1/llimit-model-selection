@@ -126,7 +126,7 @@ Before triplet construction, raw data is filtered:
 Both models share the same interface. Example with TripletFrozenEncoderModel:
 
 ```python
-from src.models.triplet_frozen_encoder_model import TripletFrozenEncoderModel
+from src.models.embedding_models.triplet_frozen_encoder_model import TripletFrozenEncoderModel
 from src.models.optimizers.adamw_spec import AdamWSpec
 
 encoder = TripletFrozenEncoderModel(
@@ -145,7 +145,7 @@ encoder = TripletFrozenEncoderModel(
 Example with TripletFinetunableEncoderModel:
 
 ```python
-from src.models.triplet_finetunable_encoder_model import TripletFinetunableEncoderModel
+from src.models.embedding_models.triplet_finetunable_encoder_model import TripletFinetunableEncoderModel
 from src.models.optimizers.adamw_spec import AdamWSpec
 
 encoder = TripletFinetunableEncoderModel(
