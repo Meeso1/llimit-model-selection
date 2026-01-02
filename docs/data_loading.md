@@ -40,11 +40,14 @@ The dataset stores conversations as numpy arrays of message dictionaries. Each m
 
 After loading, data goes through preprocessing (see `PromptEmbeddingPreprocessor`):
 - Filters out ties and "both_bad" outcomes
+- Extracts 45 scalar features from each prompt (task type, complexity, domain, style, context, output format)
 - Embeds prompts using sentence transformers
 - Creates model ID mappings
-- **Caches results** based on dataset signature for reuse
+- **Caches results** based on dataset signature and preprocessor version for reuse
 
-Train/validation splitting happens *after* preprocessing on the preprocessed pairs, ensuring both splits share the same model encoder.
+Train/validation splitting happens *after* preprocessing on the preprocessed pairs, ensuring both splits share the same model encoder and feature extraction logic.
+
+**Preprocessor Version**: The preprocessor version (currently "v2") is included in the cache key. When new features are added or preprocessing logic changes, the version should be incremented to invalidate old cached data.
 
 ## Usage
 To load data:

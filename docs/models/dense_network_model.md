@@ -10,9 +10,10 @@ The `DenseNetworkModel` is a feedforward neural network designed for prompt rout
 
 - **Input**: 
   - Fixed-size prompt embedding (default: 384-dimensional from `all-MiniLM-L6-v2`)
+  - Prompt features (45-dimensional scalar features extracted from prompt text)
   - Model ID (integer, embedded into learned vector)
 - **Model ID Embedding**: Learned embeddings for each model (default: 32-dimensional)
-- **Concatenation**: Prompt embedding + Model ID embedding
+- **Concatenation**: Prompt embedding + Prompt features + Model ID embedding
 - **Hidden Layers**: Configurable dense layers with ReLU activation and dropout (default: [256, 128, 64])
 - **Output**: Single score value constrained to [-1, 1] using tanh activation
 
@@ -71,27 +72,31 @@ The preprocessor handles a single dataset at a time:
 
 1. **Filtering**: Removes entries with `winner="tie"` or `winner="both_bad"`
 2. **Model Encoding**: Creates and fits a `StringEncoder` with all unique model names from the dataset
-3. **Embedding**: Uses Sentence Transformers to embed user prompts into fixed-size vectors (returned as numpy arrays)
-4. **Model ID Assignment**: Converts model names to integer IDs using the encoder
-5. **Caching**: Results are cached for reuse (see below)
+3. **Feature Extraction**: Extracts 45 scalar features from each prompt (task type, complexity, domain, style, context, output format)
+4. **Embedding**: Uses Sentence Transformers to embed user prompts into fixed-size vectors (returned as numpy arrays)
+5. **Model ID Assignment**: Converts model names to integer IDs using the encoder
+6. **Caching**: Results are cached for reuse (see below)
 
 **Train/Val Split**: The split happens *after* preprocessing on the preprocessed pairs, so both train and val naturally share the same model encoder.
 
 #### Inference Preprocessing
 
-1. **Embedding**: Embeds the input prompts (returned as numpy arrays)
-2. **Model ID Encoding**: Converts requested model names to IDs using the saved encoder
-3. **No Caching**: Inference preprocessing is done on-the-fly
+1. **Feature Extraction**: Extracts 45 scalar features from each prompt (task type, complexity, domain, style, context, output format)
+2. **Embedding**: Embeds the input prompts (returned as numpy arrays)
+3. **Model ID Encoding**: Converts requested model names to IDs using the saved encoder
+4. **No Caching**: Inference preprocessing is done on-the-fly
+
+**Note**: During inference, conversation history is not available, so context features are computed with empty history.
 
 #### Caching
 
 Preprocessing is cached per dataset. The cache key is based on:
-- Preprocessor version (e.g., "v1")
+- Preprocessor version (e.g., "v2")
 - Content signature of the dataset (hash of sample entries)
 
 When you preprocess the same dataset (even with different train/val splits), the cached results are reused. This significantly speeds up repeated training runs.
 
-**Cache invalidation**: Changing the dataset content or preprocessor version will trigger re-preprocessing.
+**Cache invalidation**: Changing the dataset content or preprocessor version will trigger re-preprocessing. The version was incremented to v2 when prompt features were added.
 
 ### Embedding Models
 
@@ -103,6 +108,19 @@ The default embedding model is `all-MiniLM-L6-v2` from Sentence Transformers:
 Other models can be used by passing `embedding_model_name` to the constructor. Popular alternatives from the RouteLLM paper:
 - `all-mpnet-base-v2`: Higher quality, 768 dimensions
 - `all-MiniLM-L12-v2`: Medium quality/speed tradeoff, 384 dimensions
+
+### Prompt Features
+
+In addition to semantic embeddings, the model uses 45 scalar features extracted from prompt text. These features capture various aspects of prompts that help the model understand task requirements:
+
+- **Task Type Indicators (10 features)**: Detects code requests, math/reasoning, creative writing, factual queries, instructions, roleplay, and analysis tasks
+- **Prompt Complexity (8 features)**: Measures length, vocabulary complexity, sentence structure, nesting depth, and multi-part requests
+- **Domain Indicators (12 features)**: Identifies domain-specific content (science, medicine, law, finance, tech, academic, casual, formal, philosophical, historical, personal, business)
+- **Linguistic Style (6 features)**: Captures formality, imperative vs interrogative, specificity, politeness, and urgency markers
+- **Context Features (4 features)**: Uses conversation history to detect follow-up questions, context length, and dialogue turns
+- **Output Format (5 features)**: Identifies expected response formats (list, table, JSON, code, long-form)
+
+These features are extracted using functions in `src/preprocessing/scoring_feature_extraction.py` and concatenated with the prompt embedding before being fed into the neural network. During training, conversation history is available from the dataset. During inference, context features are computed with empty history since conversation context is not provided.
 
 ## Usage
 
@@ -192,9 +210,9 @@ Model-invariant types (in `src/data_models/data_models.py`):
 
 Model-specific types (in `src/data_models/dense_network_types.py`):
 - **PromptRoutingOutput**: Inherits from `OutputData`, contains dictionary mapping model names to score arrays
-- **PreprocessedPromptPair**: Cached embedding with model IDs and winner label
-- **PreprocessedTrainingData**: Collection of preprocessed pairs with string encoder
-- **PreprocessedInferenceInput**: Embedded prompts and model IDs for inference
+- **PreprocessedPromptPair**: Cached embedding with prompt features, model IDs and winner label
+- **PreprocessedTrainingData**: Collection of preprocessed pairs with string encoder, embedding dimension, and prompt features dimension
+- **PreprocessedInferenceInput**: Embedded prompts, prompt features, and model IDs for inference
 
 ### Score Interpretation
 
@@ -267,7 +285,7 @@ This approach ensures the model encoder is fitted on the full dataset while keep
 The actual PyTorch module is implemented as `_DenseNetwork`, an inner class at the bottom of the model class. Key components:
 
 1. **Model Embedding Layer**: `nn.Embedding(num_models, model_id_embedding_dim)` - learns representations for each model
-2. **Concatenation**: Combines prompt embedding with model ID embedding
+2. **Concatenation**: Combines prompt embedding, prompt features, and model ID embedding
 3. **Dense Layers**: Standard feedforward layers with ReLU and dropout
 4. **Output**: Single score per (prompt, model) pair
 
@@ -304,7 +322,9 @@ The model can automatically balance model representation during training to hand
 - Can only score models that were present in the training data (string encoder limitation)
 - Ties and "both_bad" entries are filtered out (not used for training)
 - Fixed embedding dimension per model instance (determined by embedding model)
+- Fixed prompt features dimension (45 features)
 - Single score output (doesn't model uncertainty or provide probability distributions)
 - Model ID embeddings require sufficient training data per model to learn meaningful representations
 - Preprocessing cache is version-based only, not data-specific (manual cache management needed if dataset changes)
 - Sample balancing uses inverse frequency weighting and doesn't handle extreme cases (single occurrence)
+- Conversation history is not available during inference, so context features use empty history

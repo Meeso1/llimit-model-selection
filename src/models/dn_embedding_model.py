@@ -28,6 +28,9 @@ from src.models.optimizers.optimizer_spec import OptimizerSpecification
 from src.models.optimizers.adamw_spec import AdamWSpec
 
 
+_DataLoaderType = DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]
+
+
 class DnEmbeddingModel(ModelBase):
     def __init__(
         self,
@@ -69,6 +72,7 @@ class DnEmbeddingModel(ModelBase):
         )
         
         self._prompt_embedding_dim: int | None = None
+        self._prompt_features_dim: int | None = None
         self._network: DnEmbeddingModel._DenseNetwork | None = None
         self._history_entries: list[TrainingHistoryEntry] = []
         
@@ -90,10 +94,13 @@ class DnEmbeddingModel(ModelBase):
     def _initialize_network(
         self,
         prompt_embedding_dim: int,
+        prompt_features_dim: int,
     ) -> None:
         self._prompt_embedding_dim = prompt_embedding_dim
+        self._prompt_features_dim = prompt_features_dim
         self._network = self._DenseNetwork(
             prompt_embedding_dim=prompt_embedding_dim,
+            prompt_features_dim=prompt_features_dim,
             model_embedding_dim=self.embedding_model.embedding_dim,
             hidden_dims=self.hidden_dims,
         ).to(self.device)
@@ -138,12 +145,14 @@ class DnEmbeddingModel(ModelBase):
             if self._network is None:
                 self._initialize_network(
                     prompt_embedding_dim=encoded_prompts.embedding_dim,
+                    prompt_features_dim=encoded_prompts.prompt_features_dim,
                 )
             
             with Timer("prepare_preprocessed_data", verbosity="start+end", parent=train_timer):
                 preprocessed_pairs = [
                     PreprocessedPromptPair(
                         prompt_embedding=pair.prompt_embedding,
+                        prompt_features=pair.prompt_features,
                         model_embedding_a=self.model_embeddings[encoded_prompts.model_encoder.decode(pair.model_id_a)],
                         model_embedding_b=self.model_embeddings[encoded_prompts.model_encoder.decode(pair.model_id_b)],
                         model_id_a=pair.model_id_a,
@@ -152,7 +161,10 @@ class DnEmbeddingModel(ModelBase):
                     )
                     for pair in encoded_prompts.pairs
                 ]
-                preprocessed_data = PreprocessedTrainingData(pairs=preprocessed_pairs)
+                preprocessed_data = PreprocessedTrainingData(
+                    pairs=preprocessed_pairs,
+                    prompt_features_dim=encoded_prompts.prompt_features_dim,
+                )
             
             with Timer("split_preprocessed_data", verbosity="start+end", parent=train_timer):
                 preprocessed_train, preprocessed_val = split_dn_embedding_preprocessed_data(
@@ -212,6 +224,7 @@ class DnEmbeddingModel(ModelBase):
                 )
             
             prompt_embeddings = torch.from_numpy(encoded_prompts.prompt_embeddings).to(self.device)  # [n_prompts, embedding_dim]
+            prompt_features = torch.from_numpy(encoded_prompts.prompt_features).to(self.device)  # [n_prompts, prompt_features_dim]
             model_ids = torch.from_numpy(np.array([
                 self.model_embeddings[model_name] if model_name in self.model_embeddings else self.model_embeddings["default"] 
                 for model_name in X.model_names
@@ -226,6 +239,7 @@ class DnEmbeddingModel(ModelBase):
                     
                     for i in range(0, len(prompt_embeddings), batch_size):
                         batch_embeddings = prompt_embeddings[i:i + batch_size]  # [batch_size, embedding_dim]
+                        batch_features = prompt_features[i:i + batch_size]  # [batch_size, prompt_features_dim]
                         batch_size_actual = len(batch_embeddings)
                         
                         batch_model_ids = torch.full(
@@ -237,6 +251,7 @@ class DnEmbeddingModel(ModelBase):
                         
                         batch_scores = self.network(
                             batch_embeddings,
+                            batch_features,
                             batch_model_ids,
                         )  # [batch_size]
                         
@@ -275,6 +290,7 @@ class DnEmbeddingModel(ModelBase):
             "print_every": self.print_every,
             "preprocessor_version": self.preprocessor.version,
             "prompt_embedding_dim": self._prompt_embedding_dim,
+            "prompt_features_dim": self._prompt_features_dim,
             "network_state_dict": self.network.state_dict(),
             "history_entries": self._history_entries,
             
@@ -322,6 +338,7 @@ class DnEmbeddingModel(ModelBase):
 
         model._initialize_network(
             prompt_embedding_dim=state_dict["prompt_embedding_dim"],
+            prompt_features_dim=state_dict["prompt_features_dim"],
         )
         model.network.load_state_dict(state_dict["network_state_dict"])
         
@@ -334,7 +351,7 @@ class DnEmbeddingModel(ModelBase):
         preprocessed_data: PreprocessedTrainingData, 
         batch_size: int,
         use_balancing: bool,
-    ) -> DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]:
+    ) -> _DataLoaderType:
         """
         Prepare dataloader from preprocessed training data.
         
@@ -350,6 +367,8 @@ class DnEmbeddingModel(ModelBase):
         # Each comparison pair becomes a training sample with margin ranking loss
         prompt_embeddings_a_list = []  # [n_pairs, embedding_dim]
         prompt_embeddings_b_list = []  # [n_pairs, embedding_dim]
+        prompt_features_a_list = []  # [n_pairs, prompt_features_dim]
+        prompt_features_b_list = []  # [n_pairs, prompt_features_dim]
         model_embeddings_a_list = []  # [n_pairs, model_embedding_dim]
         model_embeddings_b_list = []  # [n_pairs, model_embedding_dim]
         model_ids_a_list = []  # [n_pairs]
@@ -359,6 +378,8 @@ class DnEmbeddingModel(ModelBase):
         for pair in preprocessed_data.pairs:
             prompt_embeddings_a_list.append(torch.from_numpy(pair.prompt_embedding))
             prompt_embeddings_b_list.append(torch.from_numpy(pair.prompt_embedding))
+            prompt_features_a_list.append(torch.from_numpy(pair.prompt_features))
+            prompt_features_b_list.append(torch.from_numpy(pair.prompt_features))
             model_embeddings_a_list.append(torch.from_numpy(pair.model_embedding_a))
             model_embeddings_b_list.append(torch.from_numpy(pair.model_embedding_b))
             model_ids_a_list.append(pair.model_id_a)
@@ -369,14 +390,18 @@ class DnEmbeddingModel(ModelBase):
         
         prompt_embeddings_a = torch.stack(prompt_embeddings_a_list)  # [n_pairs, embedding_dim]
         prompt_embeddings_b = torch.stack(prompt_embeddings_b_list)  # [n_pairs, embedding_dim]
+        prompt_features_a = torch.stack(prompt_features_a_list)  # [n_pairs, prompt_features_dim]
+        prompt_features_b = torch.stack(prompt_features_b_list)  # [n_pairs, prompt_features_dim]
         model_embeddings_a = torch.stack(model_embeddings_a_list)  # [n_pairs, model_embedding_dim]
         model_embeddings_b = torch.stack(model_embeddings_b_list)  # [n_pairs, model_embedding_dim]
         labels = torch.tensor(labels_list, dtype=torch.float32)  # [n_pairs]
         
         dataset = TensorDataset(
             prompt_embeddings_a,
+            prompt_features_a,
             model_embeddings_a,
             prompt_embeddings_b,
+            prompt_features_b,
             model_embeddings_b,
             labels,
         )
@@ -443,8 +468,8 @@ class DnEmbeddingModel(ModelBase):
     def _train_epoch(
         self, 
         epoch: int,
-        dataloader: DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]],
-        val_dataloader: DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]] | None,
+        dataloader: _DataLoaderType,
+        val_dataloader: _DataLoaderType | None,
         optimizer: optim.Optimizer,
         criterion: nn.Module,
         epochs_timer: Timer,
@@ -456,10 +481,12 @@ class DnEmbeddingModel(ModelBase):
             n_batches = 0
             total_samples = 0
             
-            for batch_emb_a, batch_model_emb_a, batch_emb_b, batch_model_emb_b, batch_labels in dataloader:
+            for batch_emb_a, batch_features_a, batch_model_emb_a, batch_emb_b, batch_features_b, batch_model_emb_b, batch_labels in dataloader:
                 batch_emb_a: torch.Tensor = batch_emb_a.to(self.device)  # [batch_size, prompt_embedding_dim]
+                batch_features_a: torch.Tensor = batch_features_a.to(self.device)  # [batch_size, prompt_features_dim]
                 batch_model_emb_a: torch.Tensor = batch_model_emb_a.to(self.device)  # [batch_size, model_embedding_dim]
                 batch_emb_b: torch.Tensor = batch_emb_b.to(self.device)  # [batch_size, prompt_embedding_dim]
+                batch_features_b: torch.Tensor = batch_features_b.to(self.device)  # [batch_size, prompt_features_dim]
                 batch_model_emb_b: torch.Tensor = batch_model_emb_b.to(self.device)  # [batch_size, model_embedding_dim]
                 batch_labels: torch.Tensor = batch_labels.to(self.device)  # [batch_size]
                 
@@ -468,10 +495,12 @@ class DnEmbeddingModel(ModelBase):
                 optimizer.zero_grad()
                 scores_a = self.network(
                     batch_emb_a,
+                    batch_features_a,
                     batch_model_emb_a,
                 )  # [batch_size]
                 scores_b = self.network(
                     batch_emb_b,
+                    batch_features_b,
                     batch_model_emb_b,
                 )  # [batch_size]
                 
@@ -517,7 +546,7 @@ class DnEmbeddingModel(ModelBase):
 
     def _perform_validation(
         self,
-        val_dataloader: DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]],
+        val_dataloader: _DataLoaderType,
         criterion: nn.Module,
         timer: Timer,
     ) -> tuple[float, float]:
@@ -527,11 +556,13 @@ class DnEmbeddingModel(ModelBase):
         n_batches = 0
         total_samples = 0
         
-        for batch_emb_a, batch_model_emb_a, batch_emb_b, batch_model_emb_b, batch_labels in val_dataloader:
+        for batch_emb_a, batch_features_a, batch_model_emb_a, batch_emb_b, batch_features_b, batch_model_emb_b, batch_labels in val_dataloader:
             with Timer(f"batch_{n_batches}", verbosity="start+end", parent=timer):
                 batch_emb_a: torch.Tensor = batch_emb_a.to(self.device)  # [batch_size, embedding_dim]
+                batch_features_a: torch.Tensor = batch_features_a.to(self.device)  # [batch_size, prompt_features_dim]
                 batch_model_emb_a: torch.Tensor = batch_model_emb_a.to(self.device)  # [batch_size, model_embedding_dim]
                 batch_emb_b: torch.Tensor = batch_emb_b.to(self.device)  # [batch_size, prompt_embedding_dim]
+                batch_features_b: torch.Tensor = batch_features_b.to(self.device)  # [batch_size, prompt_features_dim]
                 batch_model_emb_b: torch.Tensor = batch_model_emb_b.to(self.device)  # [batch_size, model_embedding_dim]
                 batch_labels: torch.Tensor = batch_labels.to(self.device)  # [batch_size]
                 
@@ -540,10 +571,12 @@ class DnEmbeddingModel(ModelBase):
                 with torch.no_grad():
                     scores_a = self.network(
                         batch_emb_a,
+                        batch_features_a,
                         batch_model_emb_a,
                     )  # [batch_size]
                     scores_b = self.network(
                         batch_emb_b,
+                        batch_features_b,
                         batch_model_emb_b,
                     )  # [batch_size]
                     
@@ -583,13 +616,14 @@ class DnEmbeddingModel(ModelBase):
         def __init__(
             self,
             prompt_embedding_dim: int,
+            prompt_features_dim: int,
             model_embedding_dim: int,
             hidden_dims: list[int],
         ) -> None:
             super().__init__()
             
             layers = []
-            prev_dim = prompt_embedding_dim + model_embedding_dim
+            prev_dim = prompt_embedding_dim + prompt_features_dim + model_embedding_dim
             
             for hidden_dim in hidden_dims:
                 layers.append(nn.Linear(prev_dim, hidden_dim))
@@ -604,9 +638,10 @@ class DnEmbeddingModel(ModelBase):
         def forward(
             self,
             prompt_embedding: torch.Tensor, # [batch_size, prompt_embedding_dim]
+            prompt_features: torch.Tensor, # [batch_size, prompt_features_dim]
             model_embedding: torch.Tensor, # [batch_size, model_embedding_dim]
         ) -> torch.Tensor:
-            combined = torch.cat([prompt_embedding, model_embedding], dim=1) # [batch_size, prompt_embedding_dim + model_embedding_dim]
+            combined = torch.cat([prompt_embedding, prompt_features, model_embedding], dim=1) # [batch_size, prompt_embedding_dim + prompt_features_dim + model_embedding_dim]
             output: torch.Tensor = self.dense_network(combined)  # [batch_size, 1]
             
             return output.squeeze(-1)  # [batch_size]

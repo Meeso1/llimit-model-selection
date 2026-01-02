@@ -1,6 +1,7 @@
 """Preprocessor for embedding prompts using sentence transformers."""
 
 import hashlib
+import numpy as np
 from sentence_transformers import SentenceTransformer
 import torch
 
@@ -15,6 +16,7 @@ from src.utils.jar import Jar
 from src.utils.string_encoder import StringEncoder
 from src.utils.timer import Timer
 from src.preprocessing.utils import filter_out_ties, filter_out_both_bad, filter_out_empty_entries, filter_out_rare_models, create_encoder
+from src.preprocessing.scoring_feature_extraction import extract_all_prompt_features
 
 
 class PromptEmbeddingPreprocessor:
@@ -41,7 +43,7 @@ class PromptEmbeddingPreprocessor:
         """
         self.embedding_model_name = embedding_model_name
         self.min_model_comparisons = min_model_comparisons
-        self.version = "v1"
+        self.version = "v2"
         self.jar = Jar(str(PREPROCESSED_DATA_JAR_PATH))
         self._model: SentenceTransformer | None = None
         self.last_timer: Timer | None = None
@@ -77,16 +79,27 @@ class PromptEmbeddingPreprocessor:
             with Timer("filter_entries_and_fit_encoder", verbosity="start+end", parent=timer):
                 filtered_data, model_encoder = self._filter_data_and_fit_encoder(data)
             
+            with Timer("extract_prompt_features", verbosity="start+end", parent=timer) as prompt_features_timer:
+                prompt_features_list = [
+                    extract_all_prompt_features(
+                        entry.user_prompt,
+                        entry.conversation_history,
+                        timer=prompt_features_timer
+                    )
+                    for entry in filtered_data.entries
+                ]
+            
             with Timer("embed_prompts", verbosity="start+end", parent=timer):
                 prompts = [entry.user_prompt for entry in filtered_data.entries]
                 embeddings = self._embed_prompts(prompts).cpu()  # [n_prompts, embedding_dim]
             
             pairs: list[PreprocessedPromptPair] = []
-            for i, entry in enumerate(filtered_data.entries):
+            for entry, embedding, prompt_features in zip(filtered_data.entries, embeddings, prompt_features_list):
                 winner_label = 0 if entry.winner == "model_a" else 1
                 pairs.append(
                     PreprocessedPromptPair(
-                        prompt_embedding=embeddings[i].numpy(),
+                        prompt_embedding=embedding.numpy(),
+                        prompt_features=prompt_features,
                         model_id_a=model_encoder.encode(entry.model_a),
                         model_id_b=model_encoder.encode(entry.model_b),
                         winner_label=winner_label,
@@ -94,9 +107,11 @@ class PromptEmbeddingPreprocessor:
                 )
             
             embedding_dim = pairs[0].prompt_embedding.shape[0]
+            prompt_features_dim = pairs[0].prompt_features.shape[0]
             preprocessed_data = PreprocessedTrainingData(
                 pairs=pairs,
                 embedding_dim=embedding_dim,
+                prompt_features_dim=prompt_features_dim,
                 model_encoder=model_encoder,
             )
             
@@ -160,14 +175,20 @@ class PromptEmbeddingPreprocessor:
             model_encoder: Fitted model encoder from training
             
         Returns:
-            PreprocessedInferenceInput with embeddings and model IDs
+            PreprocessedInferenceInput with embeddings, features, and model IDs
         """
+        
+        prompt_features_list = [
+            extract_all_prompt_features(prompt, []) # TODO: Decide what to do with conversation history in inference
+            for prompt in prompts
+        ]
         prompt_embeddings = self._embed_prompts(prompts).cpu()  # [n_prompts, embedding_dim]
         model_ids = model_encoder.encode(model_names)
         
         return PreprocessedInferenceInput(
-            prompt_embeddings=prompt_embeddings.numpy(),
-            model_ids=model_ids,
+            prompt_embeddings=prompt_embeddings.numpy(), # [n_prompts, embedding_dim]
+            prompt_features=np.stack(prompt_features_list),  # [n_prompts, prompt_features_dim]
+            model_ids=model_ids, # [n_models]
         )
 
     def _embed_prompts(self, prompts: list[str]) -> torch.Tensor:

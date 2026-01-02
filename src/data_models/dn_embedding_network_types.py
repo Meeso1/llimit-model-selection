@@ -8,6 +8,7 @@ from src.data_models.data_models import OutputData
 class PreprocessedPromptPair:
     """A pair of models compared for a prompt with embeddings and winner label."""
     prompt_embedding: np.ndarray  # [prompt_embedding_dim]
+    prompt_features: np.ndarray  # [prompt_features_dim]
     model_embedding_a: np.ndarray  # [model_embedding_dim]
     model_embedding_b: np.ndarray  # [model_embedding_dim]
     model_id_a: int
@@ -19,12 +20,14 @@ class PreprocessedPromptPair:
 class PreprocessedTrainingData:
     """Training data after preprocessing - contains prompt embeddings, model IDs, and encoder."""
     pairs: list[PreprocessedPromptPair]
+    prompt_features_dim: int
 
 
 @dataclass
 class PreprocessedInferenceInput:
     """Preprocessed input for inference - prompt embeddings and model IDs."""
     prompt_embeddings: np.ndarray  # [n_prompts, prompt_embedding_dim]
+    prompt_features: np.ndarray  # [n_prompts, prompt_features_dim]
     model_embeddings: np.ndarray  # [n_models, model_embedding_dim]
 
 

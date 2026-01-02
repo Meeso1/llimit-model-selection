@@ -13,11 +13,11 @@ from src.data_models.attention_embedding_types import (
     PreprocessedAttentionEmbeddingData,
     ScalerState,
 )
-from src.preprocessing.feature_extraction import extract_all_scalar_features
+from src.preprocessing.model_embedding_feature_extraction import extract_all_scalar_features
 from src.preprocessing.simple_scaler import SimpleScaler
 from src.utils.jar import Jar
 from src.utils.timer import Timer
-from src.preprocessing.utils import filter_out_empty_entries, filter_out_rare_models, validate_winner_types
+from src.preprocessing.utils import filter_out_empty_entries, filter_out_rare_models
 
 
 class AttentionEmbeddingPreprocessor:

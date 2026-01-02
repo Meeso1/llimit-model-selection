@@ -23,6 +23,9 @@ from src.models.optimizers.optimizer_spec import OptimizerSpecification
 from src.models.optimizers.adamw_spec import AdamWSpec
 
 
+_DataLoaderType = DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]
+
+
 class DenseNetworkModel(ModelBase):
     """
     Dense neural network for routing prompts to LLMs.
@@ -67,6 +70,7 @@ class DenseNetworkModel(ModelBase):
         
         self._network: DenseNetworkModel._DenseNetwork | None = None
         self._embedding_dim: int | None = None
+        self._prompt_features_dim: int | None = None
         self._model_encoder: StringEncoder | None = None
         
         self._history_entries: list[TrainingHistoryEntry] = []
@@ -92,6 +96,7 @@ class DenseNetworkModel(ModelBase):
     def _initialize_network(
         self,
         embedding_dim: int,
+        prompt_features_dim: int,
         num_models: int,
     ) -> None:
         """
@@ -99,11 +104,14 @@ class DenseNetworkModel(ModelBase):
         
         Args:
             embedding_dim: Dimension of prompt embeddings
+            prompt_features_dim: Dimension of prompt features
             num_models: Number of unique models (for embedding layer)
         """
         self._embedding_dim = embedding_dim
+        self._prompt_features_dim = prompt_features_dim
         self._network = self._DenseNetwork(
             prompt_embedding_dim=embedding_dim,
+            prompt_features_dim=prompt_features_dim,
             num_models=num_models,
             model_id_embedding_dim=self.model_id_embedding_dim,
             hidden_dims=self.hidden_dims,
@@ -121,6 +129,7 @@ class DenseNetworkModel(ModelBase):
             "balance_model_samples": self.balance_model_samples,
             "preprocessor_version": self.preprocessor.version,
             "embedding_dim": self._embedding_dim,
+            "prompt_features_dim": self._prompt_features_dim,
             "num_models": self._model_encoder.size if self._model_encoder else None,
         }
 
@@ -203,6 +212,7 @@ class DenseNetworkModel(ModelBase):
                 )
             
             prompt_embeddings = torch.from_numpy(preprocessed_input.prompt_embeddings).to(self.device)  # [n_prompts, embedding_dim]
+            prompt_features = torch.from_numpy(preprocessed_input.prompt_features).to(self.device)  # [n_prompts, prompt_features_dim]
             model_ids = preprocessed_input.model_ids
             
             self.network.eval()
@@ -214,6 +224,7 @@ class DenseNetworkModel(ModelBase):
                     
                     for i in range(0, len(prompt_embeddings), batch_size):
                         batch_embeddings = prompt_embeddings[i:i + batch_size]  # [batch_size, embedding_dim]
+                        batch_features = prompt_features[i:i + batch_size]  # [batch_size, prompt_features_dim]
                         batch_size_actual = len(batch_embeddings)
                         
                         batch_model_ids = torch.full(
@@ -225,6 +236,7 @@ class DenseNetworkModel(ModelBase):
                         
                         batch_scores = self.network(
                             batch_embeddings,
+                            batch_features,
                             batch_model_ids,
                         )  # [batch_size]
                         
@@ -264,6 +276,7 @@ class DenseNetworkModel(ModelBase):
             "print_every": self.print_every,
             "preprocessor_version": self.preprocessor.version,
             "embedding_dim": self._embedding_dim,
+            "prompt_features_dim": self._prompt_features_dim,
             "network_state_dict": self.network.state_dict(),
             "model_encoder": self._model_encoder.get_state_dict(),
             "history_entries": self._history_entries,
@@ -298,6 +311,7 @@ class DenseNetworkModel(ModelBase):
 
         model._initialize_network(
             embedding_dim=state_dict["embedding_dim"],
+            prompt_features_dim=state_dict["prompt_features_dim"],
             num_models=model._model_encoder.size,
         )
         model.network.load_state_dict(state_dict["network_state_dict"])
@@ -333,6 +347,7 @@ class DenseNetworkModel(ModelBase):
         if self._network is None:
             self._initialize_network(
                 embedding_dim=preprocessed_data.embedding_dim,
+                prompt_features_dim=preprocessed_data.prompt_features_dim,
                 num_models=self._model_encoder.size,
             )
         
@@ -343,7 +358,7 @@ class DenseNetworkModel(ModelBase):
         preprocessed_data: PreprocessedTrainingData, 
         batch_size: int,
         use_balancing: bool,
-    ) -> DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]:
+    ) -> _DataLoaderType:
         """
         Prepare dataloader from preprocessed training data.
         
@@ -361,6 +376,8 @@ class DenseNetworkModel(ModelBase):
         # Each comparison pair becomes a training sample with margin ranking loss
         prompt_embeddings_a_list = []  # [n_pairs, embedding_dim]
         prompt_embeddings_b_list = []  # [n_pairs, embedding_dim]
+        prompt_features_a_list = []  # [n_pairs, prompt_features_dim]
+        prompt_features_b_list = []  # [n_pairs, prompt_features_dim]
         model_ids_a_list = []  # [n_pairs]
         model_ids_b_list = []  # [n_pairs]
         labels_list = []  # [n_pairs] - 1 if a wins, -1 if b wins
@@ -368,6 +385,8 @@ class DenseNetworkModel(ModelBase):
         for pair in preprocessed_data.pairs:
             prompt_embeddings_a_list.append(torch.from_numpy(pair.prompt_embedding))
             prompt_embeddings_b_list.append(torch.from_numpy(pair.prompt_embedding))
+            prompt_features_a_list.append(torch.from_numpy(pair.prompt_features))
+            prompt_features_b_list.append(torch.from_numpy(pair.prompt_features))
             model_ids_a_list.append(pair.model_id_a)
             model_ids_b_list.append(pair.model_id_b)
             # label: 1 if model_a should be ranked higher, -1 if model_b should be ranked higher
@@ -375,14 +394,18 @@ class DenseNetworkModel(ModelBase):
         
         prompt_embeddings_a = torch.stack(prompt_embeddings_a_list)  # [n_pairs, embedding_dim]
         prompt_embeddings_b = torch.stack(prompt_embeddings_b_list)  # [n_pairs, embedding_dim]
+        prompt_features_a = torch.stack(prompt_features_a_list)  # [n_pairs, prompt_features_dim]
+        prompt_features_b = torch.stack(prompt_features_b_list)  # [n_pairs, prompt_features_dim]
         model_ids_a = torch.tensor(model_ids_a_list, dtype=torch.long)  # [n_pairs]
         model_ids_b = torch.tensor(model_ids_b_list, dtype=torch.long)  # [n_pairs]
         labels = torch.tensor(labels_list, dtype=torch.float32)  # [n_pairs]
         
         dataset = TensorDataset(
             prompt_embeddings_a,
+            prompt_features_a,
             model_ids_a,
             prompt_embeddings_b,
+            prompt_features_b,
             model_ids_b,
             labels,
         )
@@ -449,8 +472,8 @@ class DenseNetworkModel(ModelBase):
     def _train_epoch(
         self, 
         epoch: int,
-        dataloader: DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]],
-        val_dataloader: DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]] | None,
+        dataloader: _DataLoaderType,
+        val_dataloader: _DataLoaderType | None,
         optimizer: optim.Optimizer,
         criterion: nn.Module,
         epochs_timer: Timer,
@@ -462,10 +485,12 @@ class DenseNetworkModel(ModelBase):
             n_batches = 0
             total_samples = 0
             
-            for batch_emb_a, batch_id_a, batch_emb_b, batch_id_b, batch_labels in dataloader:
+            for batch_emb_a, batch_features_a, batch_id_a, batch_emb_b, batch_features_b, batch_id_b, batch_labels in dataloader:
                 batch_emb_a: torch.Tensor = batch_emb_a.to(self.device)  # [batch_size, embedding_dim]
+                batch_features_a: torch.Tensor = batch_features_a.to(self.device)  # [batch_size, prompt_features_dim]
                 batch_id_a: torch.Tensor = batch_id_a.to(self.device)  # [batch_size]
                 batch_emb_b: torch.Tensor = batch_emb_b.to(self.device)  # [batch_size, embedding_dim]
+                batch_features_b: torch.Tensor = batch_features_b.to(self.device)  # [batch_size, prompt_features_dim]
                 batch_id_b: torch.Tensor = batch_id_b.to(self.device)  # [batch_size]
                 batch_labels: torch.Tensor = batch_labels.to(self.device)  # [batch_size]
                 
@@ -474,10 +499,12 @@ class DenseNetworkModel(ModelBase):
                 optimizer.zero_grad()
                 scores_a = self.network(
                     batch_emb_a,
+                    batch_features_a,
                     batch_id_a,
                 )  # [batch_size]
                 scores_b = self.network(
                     batch_emb_b,
+                    batch_features_b,
                     batch_id_b,
                 )  # [batch_size]
                 
@@ -523,7 +550,7 @@ class DenseNetworkModel(ModelBase):
 
     def _perform_validation(
         self,
-        val_dataloader: DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]],
+        val_dataloader: _DataLoaderType,
         criterion: nn.Module,
         timer: Timer,
     ) -> tuple[float, float]:
@@ -533,11 +560,13 @@ class DenseNetworkModel(ModelBase):
         n_batches = 0
         total_samples = 0
         
-        for batch_emb_a, batch_id_a, batch_emb_b, batch_id_b, batch_labels in val_dataloader:
+        for batch_emb_a, batch_features_a, batch_id_a, batch_emb_b, batch_features_b, batch_id_b, batch_labels in val_dataloader:
             with Timer(f"batch_{n_batches}", verbosity="start+end", parent=timer):
                 batch_emb_a: torch.Tensor = batch_emb_a.to(self.device)  # [batch_size, embedding_dim]
+                batch_features_a: torch.Tensor = batch_features_a.to(self.device)  # [batch_size, prompt_features_dim]
                 batch_id_a: torch.Tensor = batch_id_a.to(self.device)  # [batch_size]
                 batch_emb_b: torch.Tensor = batch_emb_b.to(self.device)  # [batch_size, embedding_dim]
+                batch_features_b: torch.Tensor = batch_features_b.to(self.device)  # [batch_size, prompt_features_dim]
                 batch_id_b: torch.Tensor = batch_id_b.to(self.device)  # [batch_size]
                 batch_labels: torch.Tensor = batch_labels.to(self.device)  # [batch_size]
                 
@@ -546,10 +575,12 @@ class DenseNetworkModel(ModelBase):
                 with torch.no_grad():
                     scores_a = self.network(
                         batch_emb_a,
+                        batch_features_a,
                         batch_id_a,
                     )  # [batch_size]
                     scores_b = self.network(
                         batch_emb_b,
+                        batch_features_b,
                         batch_id_b,
                     )  # [batch_size]
                     
@@ -600,6 +631,7 @@ class DenseNetworkModel(ModelBase):
         def __init__(
             self,
             prompt_embedding_dim: int,
+            prompt_features_dim: int,
             num_models: int,
             model_id_embedding_dim: int,
             hidden_dims: list[int],
@@ -609,6 +641,7 @@ class DenseNetworkModel(ModelBase):
             
             Args:
                 prompt_embedding_dim: Dimension of prompt embeddings
+                prompt_features_dim: Dimension of prompt features
                 num_models: Number of unique models (for embedding layer)
                 model_id_embedding_dim: Dimension of model ID embeddings
                 hidden_dims: List of hidden layer dimensions
@@ -621,7 +654,7 @@ class DenseNetworkModel(ModelBase):
             )
             
             layers = []
-            prev_dim = prompt_embedding_dim + model_id_embedding_dim
+            prev_dim = prompt_embedding_dim + prompt_features_dim + model_id_embedding_dim
             
             for hidden_dim in hidden_dims:
                 layers.append(nn.Linear(prev_dim, hidden_dim))
@@ -636,6 +669,7 @@ class DenseNetworkModel(ModelBase):
         def forward(
             self,
             prompt_embedding: torch.Tensor,
+            prompt_features: torch.Tensor,
             model_id: torch.Tensor,
         ) -> torch.Tensor:
             """
@@ -643,13 +677,14 @@ class DenseNetworkModel(ModelBase):
             
             Args:
                 prompt_embedding: Prompt embeddings  # [batch_size, prompt_embedding_dim]
+                prompt_features: Prompt features  # [batch_size, prompt_features_dim]
                 model_id: Model IDs  # [batch_size]
                 
             Returns:
                 Scores (raw scores, tanh applied separately)  # [batch_size]
             """
             model_embedding = self.model_embedding(model_id)  # [batch_size, model_id_embedding_dim]
-            combined = torch.cat([prompt_embedding, model_embedding], dim=-1)  # [batch_size, prompt_embedding_dim + model_id_embedding_dim]
+            combined = torch.cat([prompt_embedding, prompt_features, model_embedding], dim=-1)  # [batch_size, prompt_embedding_dim + prompt_features_dim + model_id_embedding_dim]
             output: torch.Tensor = self.dense_network(combined)  # [batch_size, 1]
             
             return output.squeeze(-1)  # [batch_size]
