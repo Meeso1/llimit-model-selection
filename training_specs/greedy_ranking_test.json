@@ -11,7 +11,7 @@
       }
     },
     "data": {
-      "valiation_split": 0.0,
+      "validation_split": 0.0,
       "seed": 42
     },
     "log": {

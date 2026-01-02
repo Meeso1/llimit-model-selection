@@ -43,7 +43,7 @@ class ModelSpecification(BaseModel):
 
 class DataSpecification(BaseModel):
     max_samples: int | None = Field(default=None, description="Sample dataset to this size before preprocessing etc. (use provided seed)")
-    valiation_split: float = Field(description="Data fraction to use as validation set")
+    validation_split: float = Field(description="Data fraction to use as validation set")
     seed: int
 
 

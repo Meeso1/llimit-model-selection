@@ -57,7 +57,7 @@ def train(spec: TrainingSpecification) -> None:
     model.train(
         downsampled, 
         validation_split=data_split.ValidationSplit(
-            val_fraction=spec.data.valiation_split, 
+            val_fraction=spec.data.validation_split, 
             seed=spec.data.seed,
         ),
         epochs=spec.epochs, 
