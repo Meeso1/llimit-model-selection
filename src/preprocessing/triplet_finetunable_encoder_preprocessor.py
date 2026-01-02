@@ -2,14 +2,13 @@ from dataclasses import dataclass
 import hashlib
 import random
 
-from src.constants import PREPROCESSED_DATA_JAR_PATH
 from src.data_models.data_models import EvaluationEntry, TrainingData
 from src.data_models.triplet_encoder_types import (
     TrainingTriplet,
     PreprocessedTripletEncoderData,
 )
 from src.preprocessing.utils import filter_out_both_bad, filter_out_empty_entries, filter_out_rare_models
-from src.utils.jar import Jar
+from src.utils.jars import Jars
 from src.utils.timer import Timer
 
 
@@ -44,7 +43,6 @@ class TripletFinetunableEncoderPreprocessor:
         self.identity_positive_ratio = identity_positive_ratio
         self.seed = seed
         self.version = "v2"
-        self.jar = Jar(str(PREPROCESSED_DATA_JAR_PATH))
         self.last_timer: Timer | None = None
     
     def preprocess(
@@ -66,8 +64,8 @@ class TripletFinetunableEncoderPreprocessor:
             with Timer("generate_cache_key", verbosity="start+end", parent=timer):
                 cache_key = self._generate_cache_key(data)
             
-            if cache_key in self.jar:
-                return self.jar.get(cache_key)
+            if cache_key in Jars.preprocessed_data:
+                return Jars.preprocessed_data.get(cache_key)
             
             with Timer("filter", verbosity="start+end", parent=timer):
                 filtered_data = self._filter_data(data)
@@ -76,7 +74,7 @@ class TripletFinetunableEncoderPreprocessor:
                 triplets = self._construct_triplets(filtered_data)
             
             preprocessed_data = PreprocessedTripletEncoderData(triplets=triplets)
-            self.jar.add(cache_key, preprocessed_data)
+            Jars.preprocessed_data.add(cache_key, preprocessed_data)
             
             return preprocessed_data
 

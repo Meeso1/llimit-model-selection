@@ -24,8 +24,6 @@ from src.models.optimizers.adamw_spec import AdamWSpec
 from src.utils.data_split import ValidationSplit, split_attention_embedding_preprocessed_data
 from src.utils.accuracy import compute_embedding_accuracy
 from src.utils.timer import Timer
-from src.utils.jar import Jar
-from src.constants import MODELS_JAR_PATH
 
 
 class PairEncoder(nn.Module):
@@ -980,19 +978,6 @@ class AttentionEmbeddingModel(EmbeddingModelBase):
         model._model_embeddings = state_dict["model_embeddings"]
         
         return model
-    
-    # load_from_state_dict is inherited from EmbeddingModelBase
-    
-    def save(self, name: str) -> None:
-        """Save the model to disk."""
-        jar = Jar(str(MODELS_JAR_PATH))
-        jar.add(name, self.get_state_dict())
-    
-    @classmethod
-    def load(cls, name: str) -> "AttentionEmbeddingModel":
-        """Load the model from disk."""
-        jar = Jar(str(MODELS_JAR_PATH))
-        return cls.load_state_dict(jar.get(name))
     
     @dataclass
     class EpochLog:

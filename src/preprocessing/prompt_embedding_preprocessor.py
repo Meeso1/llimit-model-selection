@@ -5,14 +5,13 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 import torch
 
-from src.constants import PREPROCESSED_DATA_JAR_PATH
 from src.data_models.data_models import TrainingData
 from src.data_models.dense_network_types import (
     PreprocessedInferenceInput,
     PreprocessedPromptPair,
     PreprocessedTrainingData,
 )
-from src.utils.jar import Jar
+from src.utils.jars import Jars
 from src.utils.string_encoder import StringEncoder
 from src.utils.timer import Timer
 from src.preprocessing.utils import filter_out_ties, filter_out_both_bad, filter_out_empty_entries, filter_out_rare_models, create_encoder
@@ -44,7 +43,6 @@ class PromptEmbeddingPreprocessor:
         self.embedding_model_name = embedding_model_name
         self.min_model_comparisons = min_model_comparisons
         self.version = "v2"
-        self.jar = Jar(str(PREPROCESSED_DATA_JAR_PATH))
         self._model: SentenceTransformer | None = None
         self.last_timer: Timer | None = None
 
@@ -73,8 +71,8 @@ class PromptEmbeddingPreprocessor:
             with Timer("generate_cache_key", verbosity="start+end", parent=timer):
                 cache_key = self._generate_cache_key(data)
             
-            if cache_key in self.jar:
-                return self.jar.get(cache_key)
+            if cache_key in Jars.preprocessed_data:
+                return Jars.preprocessed_data.get(cache_key)
             
             with Timer("filter_entries_and_fit_encoder", verbosity="start+end", parent=timer):
                 filtered_data, model_encoder = self._filter_data_and_fit_encoder(data)
@@ -115,7 +113,7 @@ class PromptEmbeddingPreprocessor:
                 model_encoder=model_encoder,
             )
             
-            self.jar.add(cache_key, preprocessed_data)
+            Jars.preprocessed_data.add(cache_key, preprocessed_data)
             
             return preprocessed_data
 

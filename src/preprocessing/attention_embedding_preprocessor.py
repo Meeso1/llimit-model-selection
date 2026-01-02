@@ -5,7 +5,6 @@ import numpy as np
 from collections import defaultdict
 from sentence_transformers import SentenceTransformer
 
-from src.constants import PREPROCESSED_DATA_JAR_PATH
 from src.data_models.data_models import TrainingData
 from src.data_models.attention_embedding_types import (
     ProcessedPair,
@@ -15,7 +14,7 @@ from src.data_models.attention_embedding_types import (
 )
 from src.preprocessing.model_embedding_feature_extraction import extract_all_scalar_features
 from src.preprocessing.simple_scaler import SimpleScaler
-from src.utils.jar import Jar
+from src.utils.jars import Jars
 from src.utils.timer import Timer
 from src.preprocessing.utils import filter_out_empty_entries, filter_out_rare_models
 
@@ -52,7 +51,6 @@ class AttentionEmbeddingPreprocessor:
         self.min_model_comparisons = min_model_comparisons
         self.seed = seed
         self.version = "v1"
-        self.jar = Jar(str(PREPROCESSED_DATA_JAR_PATH))
         self._embedding_model: SentenceTransformer | None = None
         self.last_timer: Timer | None = None
     
@@ -82,8 +80,8 @@ class AttentionEmbeddingPreprocessor:
             with Timer("generate_cache_key", verbosity="start+end", parent=timer):
                 cache_key = self._generate_cache_key(data)
             
-            if cache_key in self.jar:
-                return self.jar.get(cache_key)
+            if cache_key in Jars.preprocessed_data:
+                return Jars.preprocessed_data.get(cache_key)
             
             with Timer("filter_data", verbosity="start+end", parent=timer):
                 filtered_data = self._filter_data(data)
@@ -107,7 +105,7 @@ class AttentionEmbeddingPreprocessor:
                 scaler_state=scaler_state,
             )
             
-            self.jar.add(cache_key, preprocessed_data)
+            Jars.preprocessed_data.add(cache_key, preprocessed_data)
             
             return preprocessed_data
     

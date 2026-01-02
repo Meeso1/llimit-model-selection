@@ -62,5 +62,6 @@ class TrainingSpecification(BaseModel):
     model: ModelSpecification
     data: DataSpecification
     log: LoggingSpecification
+    jar_base_path: str | None = Field(default=None, description="Base path for jars, if None, jars are saved in project root")
     epochs: int
     batch_size: int

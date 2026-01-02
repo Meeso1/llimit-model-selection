@@ -1,18 +1,15 @@
 from abc import ABC, abstractmethod
-from typing import Any, ClassVar
+from typing import Any
 import wandb
 
-from src.constants import MODELS_JAR_PATH
 from src.utils.data_split import ValidationSplit
-from src.utils.jar import Jar
 from src.utils.training_history import TrainingHistory, TrainingHistoryEntry
 from src.utils.wandb_details import WandbDetails
 from src.data_models.data_models import InputData, OutputData, TrainingData
+from src.utils.jars import Jars
 
 
 class ModelBase(ABC):
-    models_jar: ClassVar[Jar] = Jar(MODELS_JAR_PATH)
-    
     def __init__(self, wandb_details: WandbDetails | None = None) -> None:
         self.wandb_details = wandb_details
 
@@ -66,15 +63,15 @@ class ModelBase(ABC):
         pass
 
     def save(self, name: str) -> None:
-        self.models_jar.add(name, self.get_state_dict())
+        Jars.models.add(name, self.get_state_dict())
 
         if self.wandb_details is not None and self.wandb_details.artifact_name is not None:
-            path = self.models_jar.get_latest_file_path(name)
+            path = Jars.models.get_latest_file_path(name)
             self._save_model_to_wandb(self.wandb_details.artifact_name, path)
 
     @classmethod
     def load(cls, name: str) -> "ModelBase":
-        return cls.load_state_dict(cls.models_jar.get(name))
+        return cls.load_state_dict(Jars.models.get(name))
 
     def _save_model_to_wandb(self, name: str, path: str) -> None:
         artifact = wandb.Artifact(name=name, type="model", description="Model state dict")

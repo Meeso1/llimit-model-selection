@@ -1,6 +1,7 @@
 import sys
 from typing import Any
 import datasets
+from pathlib import Path
 
 from src import data_loading
 from src.data_models.data_models import TrainingData
@@ -23,6 +24,7 @@ from src.scripts.model_types import (
 )
 from src.scripts.training_spec import TrainingSpecification
 from src.utils import data_split
+from src.utils.jars import Jars
 
 
 def run_train(args: Any) -> None:
@@ -45,6 +47,9 @@ def run_train(args: Any) -> None:
 
 
 def train(spec: TrainingSpecification) -> None:
+    if spec.jar_base_path is not None:
+        Jars.set_base_path(Path(spec.jar_base_path))
+
     model = _create_starting_model(spec)
 
     training_data = _load_lmarena_human_preference()
