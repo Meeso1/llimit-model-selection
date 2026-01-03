@@ -144,6 +144,7 @@ class GradientBoostingModel(ModelBase):
         balance_model_samples: bool = True,
         embedding_model_name: str = "all-MiniLM-L6-v2",
         embedding_spec: EmbeddingSpec | None = None,
+        load_embedding_model_from: str | None = None,
         min_model_comparisons: int = 20,
         embedding_model_epochs: int = 10,
         wandb_details: WandbDetails | None = None,
@@ -151,6 +152,9 @@ class GradientBoostingModel(ModelBase):
         seed: int = 42,
     ) -> None:
         super().__init__(wandb_details)
+
+        if load_embedding_model_from is None and embedding_spec is None:
+            raise ValueError("Either embedding_spec or load_embedding_model_from must be specified")
         
         self.max_depth = max_depth
         self.learning_rate = learning_rate
@@ -165,21 +169,19 @@ class GradientBoostingModel(ModelBase):
         self.embedding_model_epochs = embedding_model_epochs
         self.seed = seed
         
-        self.embedding_spec = embedding_spec if embedding_spec is not None else FrozenEmbeddingSpec(
-            optimizer=AdamWSpec(learning_rate=0.001)
-        )
-        
+        self.embedding_spec = embedding_spec        
         self.embedding_model = self.embedding_spec.create_model(
             min_model_comparisons=min_model_comparisons,
             preprocessor_seed=seed,
             print_every=print_every,
-        )
+        ) if embedding_spec is not None else None
         
         self.preprocessor = PromptEmbeddingPreprocessor(
             embedding_model_name=embedding_model_name,
             min_model_comparisons=min_model_comparisons,
         )
         
+        self._embedding_model_source: str | None = load_embedding_model_from
         self._prompt_embedding_dim: int | None = None
         self._prompt_features_dim: int | None = None
         self._model_embedding_dim: int | None = None
@@ -190,6 +192,9 @@ class GradientBoostingModel(ModelBase):
 
     @property
     def model_embeddings(self) -> dict[str, np.ndarray]:
+        if self.embedding_model is None:
+            raise RuntimeError("Embedding model not created. Train or load a model first.")
+
         return self.embedding_model.model_embeddings
 
     def _initialize_dimensions(
@@ -240,12 +245,13 @@ class GradientBoostingModel(ModelBase):
             self.last_timer = train_timer
             
             with Timer("train_embedding_model", verbosity="start+end", parent=train_timer):
-                self.embedding_model.train(
-                    data, 
-                    validation_split=validation_split, 
-                    epochs=self.embedding_model_epochs, 
-                    batch_size=batch_size,
-                )
+                if not self._load_embedding_model_if_specified():
+                    self.embedding_model.train(
+                        data, 
+                        validation_split=validation_split, 
+                        epochs=self.embedding_model_epochs, 
+                        batch_size=batch_size,
+                    )
             
             with Timer("encode_prompts", verbosity="start+end", parent=train_timer):
                 encoded_prompts = self.preprocessor.preprocess(data)
@@ -680,6 +686,17 @@ class GradientBoostingModel(ModelBase):
             val_accuracy=val_accuracy,
             duration=timer.elapsed_time,
         )
+
+    def _load_embedding_model_if_specified(self) -> bool:
+        if self._embedding_model_source is None:
+            return False
+        
+        loaded: GradientBoostingModel = GradientBoostingModel.load(self._embedding_model_source)
+        self.embedding_model = loaded.embedding_model
+        self.embedding_spec = loaded.embedding_spec
+        self.embedding_model_epochs = loaded.embedding_model_epochs
+
+        return True
 
     def _log_epoch_result(self, result: "GradientBoostingModel.EpochResult") -> None:
         if self.print_every is None:
