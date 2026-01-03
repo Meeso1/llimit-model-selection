@@ -5,6 +5,7 @@ from src.data_models.triplet_encoder_types import PreprocessedTripletEncoderData
 from src.data_models.data_models import TrainingData
 from src.data_models.dense_network_types import PreprocessedTrainingData as DenseNetworkPreprocessedTrainingData
 from src.data_models.dn_embedding_network_types import PreprocessedTrainingData as DnEmbeddingPreprocessedTrainingData
+from src.data_models.transformer_embedding_types import PreprocessedTrainingData as TransformerEmbeddingPreprocessedTrainingData
 from src.data_models.simple_scoring_types import PreprocessedTrainingData as SimplePreprocessedTrainingData
 from src.data_models.attention_embedding_types import ModelSetSample, PreprocessedAttentionEmbeddingData
 
@@ -167,6 +168,48 @@ def split_dn_embedding_preprocessed_data(
     val_preprocessed = DnEmbeddingPreprocessedTrainingData(
         pairs=val_pairs,
         prompt_features_dim=preprocessed_data.prompt_features_dim,
+    )
+    
+    return train_preprocessed, val_preprocessed
+
+
+def split_transformer_embedding_preprocessed_data(
+    preprocessed_data: TransformerEmbeddingPreprocessedTrainingData,
+    val_fraction: float = 0.2,
+    seed: int = 42,
+) -> tuple[TransformerEmbeddingPreprocessedTrainingData, TransformerEmbeddingPreprocessedTrainingData | None]:
+    """
+    Split preprocessed transformer embedding training data into train and validation sets.
+    
+    This operates on already-preprocessed pairs, maintaining the same model encoder.
+    
+    Args:
+        preprocessed_data: Preprocessed training data to split
+        val_fraction: Fraction of data to use for validation (default: 0.2)
+        seed: Random seed for reproducibility (default: 42)
+    
+    Returns:
+        Tuple of (train_preprocessed, val_preprocessed) with shared model encoder
+    """
+    if val_fraction == 0:
+        return preprocessed_data, None
+    
+    n_total = len(preprocessed_data.pairs)
+    train_indices, val_indices = _compute_split_indices(n_total, val_fraction, seed)
+    
+    train_pairs = [preprocessed_data.pairs[i] for i in train_indices]
+    val_pairs = [preprocessed_data.pairs[i] for i in val_indices]
+    
+    train_preprocessed = TransformerEmbeddingPreprocessedTrainingData(
+        pairs=train_pairs,
+        prompt_features_dim=preprocessed_data.prompt_features_dim,
+        model_encoder=preprocessed_data.model_encoder,
+    )
+    
+    val_preprocessed = TransformerEmbeddingPreprocessedTrainingData(
+        pairs=val_pairs,
+        prompt_features_dim=preprocessed_data.prompt_features_dim,
+        model_encoder=preprocessed_data.model_encoder,
     )
     
     return train_preprocessed, val_preprocessed

@@ -1,0 +1,735 @@
+"""Transformer embedding model for prompt routing with LoRA fine-tuning."""
+
+from dataclasses import dataclass
+from typing import Any
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, Dataset
+from collections import Counter
+from transformers import AutoModel, AutoTokenizer
+from pydantic import TypeAdapter
+from peft import LoraConfig, get_peft_model
+
+from src.models.model_base import ModelBase
+from src.data_models.data_models import TrainingData, InputData, OutputData
+from src.data_models.transformer_embedding_types import (
+    PreprocessedPromptPair,
+    PreprocessedTrainingData,
+    PromptRoutingOutput,
+)
+from src.models.embedding_specs.embedding_spec_union import EmbeddingSpec
+from src.models.embedding_models.embedding_model_base import EmbeddingModelBase
+from src.models.optimizers.adamw_spec import AdamWSpec
+from src.preprocessing.transformer_embedding_preprocessor import TransformerEmbeddingPreprocessor
+from src.utils.string_encoder import StringEncoder
+from src.utils.training_history import TrainingHistory, TrainingHistoryEntry
+from src.utils.wandb_details import WandbDetails
+from src.utils.timer import Timer
+from src.utils.accuracy import compute_pairwise_accuracy
+from src.utils.data_split import ValidationSplit, split_transformer_embedding_preprocessed_data
+from src.models.optimizers.optimizer_spec import OptimizerSpecification
+
+
+class TransformerEmbeddingModel(ModelBase):
+    def __init__(
+        self,
+        transformer_model_name: str = "sentence-transformers/all-MiniLM-L12-v2",
+        lora_rank: int = 16,
+        lora_alpha: int = 32,
+        lora_dropout: float = 0.05,
+        max_length: int = 256,
+        optimizer_spec: OptimizerSpecification | None = None,
+        balance_model_samples: bool = True,
+        embedding_spec: EmbeddingSpec | None = None,
+        load_embedding_model_from: str | None = None,
+        min_model_comparisons: int = 20,
+        embedding_model_epochs: int = 10,
+        wandb_details: WandbDetails | None = None,
+        print_every: int | None = None,
+        seed: int = 42,
+    ) -> None:
+        super().__init__(wandb_details)
+
+        if load_embedding_model_from is None and embedding_spec is None:
+            raise ValueError("Either embedding_spec or load_embedding_model_from must be specified")
+        
+        self.transformer_model_name = transformer_model_name
+        self.lora_rank = lora_rank
+        self.lora_alpha = lora_alpha
+        self.lora_dropout = lora_dropout
+        self.max_length = max_length
+        self.optimizer_spec = optimizer_spec if optimizer_spec is not None else AdamWSpec(learning_rate=0.0001)
+        self.balance_model_samples = balance_model_samples
+        self.print_every = print_every
+        self.min_model_comparisons = min_model_comparisons
+        self.embedding_model_epochs = embedding_model_epochs
+        self.seed = seed
+        
+        self.embedding_spec = embedding_spec
+        self.embedding_model = self.embedding_spec.create_model(
+            min_model_comparisons=min_model_comparisons,
+            preprocessor_seed=seed,
+            print_every=print_every,
+        ) if embedding_spec is not None else None
+        
+        self.preprocessor = TransformerEmbeddingPreprocessor(
+            min_model_comparisons=min_model_comparisons,
+        )
+        
+        self._embedding_model_source: str | None = load_embedding_model_from
+        self._prompt_features_dim: int | None = None
+        self._network: TransformerEmbeddingModel._TransformerNetwork | None = None
+        self._tokenizer: AutoTokenizer | None = None
+        self._history_entries: list[TrainingHistoryEntry] = []
+        
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        self.last_timer: Timer | None = None
+
+    @property
+    def network(self) -> "_TransformerNetwork":
+        """Get the neural network (must be initialized first)."""
+        if self._network is None:
+            raise RuntimeError("Network not initialized. Train or load a model first.")
+        return self._network
+
+    @property
+    def tokenizer(self) -> AutoTokenizer:
+        """Get the tokenizer (must be initialized first)."""
+        if self._tokenizer is None:
+            raise RuntimeError("Tokenizer not initialized. Train or load a model first.")
+        return self._tokenizer
+
+    @property
+    def model_embeddings(self) -> dict[str, np.ndarray]:
+        if self.embedding_model is None:
+            raise RuntimeError("Embedding model not created. Train or load a model first.")
+        
+        return self.embedding_model.model_embeddings
+
+    def _initialize_network(
+        self,
+        prompt_features_dim: int,
+    ) -> None:
+        self._prompt_features_dim = prompt_features_dim
+        self._tokenizer = AutoTokenizer.from_pretrained(self.transformer_model_name)
+        self._network = self._TransformerNetwork(
+            transformer_model_name=self.transformer_model_name,
+            prompt_features_dim=prompt_features_dim,
+            model_embedding_dim=self.embedding_model.embedding_dim,
+            lora_rank=self.lora_rank,
+            lora_alpha=self.lora_alpha,
+            lora_dropout=self.lora_dropout,
+        ).to(self.device)
+
+    def get_config_for_wandb(self) -> dict[str, Any]:
+        """Get configuration dictionary for Weights & Biases logging."""
+        return {
+            "model_type": "transformer_embedding",
+            "transformer_model_name": self.transformer_model_name,
+            "lora_rank": self.lora_rank,
+            "lora_alpha": self.lora_alpha,
+            "lora_dropout": self.lora_dropout,
+            "max_length": self.max_length,
+            "optimizer_type": self.optimizer_spec.optimizer_type,
+            "optimizer_params": self.optimizer_spec.to_dict(),
+            "balance_model_samples": self.balance_model_samples,
+            "preprocessor_version": self.preprocessor.version,
+            "embedding_type": self.embedding_spec.embedding_type,
+            "embedding_spec": self.embedding_spec.model_dump(),
+            "min_model_comparisons": self.min_model_comparisons,
+            "embedding_model_epochs": self.embedding_model_epochs,
+        }
+
+    def train(
+        self,
+        data: TrainingData,
+        validation_split: ValidationSplit | None = None,
+        epochs: int = 10,
+        batch_size: int = 32,
+    ) -> None:
+        with Timer("train", verbosity="start+end") as train_timer:
+            self.last_timer = train_timer
+            
+            with Timer("train_embedding_model", verbosity="start+end", parent=train_timer):
+                if not self._load_embedding_model_if_specified():
+                    self.embedding_model.train(
+                        data, 
+                        validation_split=validation_split, 
+                        epochs=self.embedding_model_epochs, 
+                        batch_size=batch_size,
+                    )
+            
+            with Timer("preprocess", verbosity="start+end", parent=train_timer):
+                preprocessed_data = self.preprocessor.preprocess(data)
+                
+            if self._network is None:
+                self._initialize_network(
+                    prompt_features_dim=preprocessed_data.prompt_features_dim,
+                )
+            
+            with Timer("add_model_embeddings_to_training_data", verbosity="start+end", parent=train_timer):
+                preprocessed_pairs = [
+                    PreprocessedPromptPair(
+                        prompt=pair.prompt,
+                        prompt_features=pair.prompt_features,
+                        model_embedding_a=self.model_embeddings[preprocessed_data.model_encoder.decode(pair.model_id_a)],
+                        model_embedding_b=self.model_embeddings[preprocessed_data.model_encoder.decode(pair.model_id_b)],
+                        model_id_a=pair.model_id_a,
+                        model_id_b=pair.model_id_b,
+                        winner_label=pair.winner_label,
+                    )
+                    for pair in preprocessed_data.pairs
+                ]
+                preprocessed_data_with_embeddings = PreprocessedTrainingData(
+                    pairs=preprocessed_pairs,
+                    prompt_features_dim=preprocessed_data.prompt_features_dim,
+                    model_encoder=preprocessed_data.model_encoder,
+                )
+            
+            with Timer("split_preprocessed_data", verbosity="start+end", parent=train_timer):
+                preprocessed_train, preprocessed_val = split_transformer_embedding_preprocessed_data(
+                    preprocessed_data_with_embeddings,
+                    val_fraction=validation_split.val_fraction if validation_split is not None else 0,
+                    seed=validation_split.seed if validation_split is not None else 42,
+                )
+            
+            with Timer("prepare_dataloaders", verbosity="start+end", parent=train_timer):
+                dataloader = self._prepare_dataloader(preprocessed_train, batch_size, use_balancing=True)
+                val_dataloader = self._prepare_dataloader(preprocessed_val, batch_size, use_balancing=False) if preprocessed_val is not None else None
+                
+            optimizer = self.optimizer_spec.create_optimizer(self.network)
+            scheduler = self.optimizer_spec.create_scheduler(optimizer)
+            
+            # MarginRankingLoss: loss = max(0, -label * (score_a - score_b) + margin)
+            # When label=1, we want score_a > score_b
+            # When label=-1, we want score_b > score_a
+            criterion = nn.MarginRankingLoss(margin=0.1)
+            
+            with Timer("epochs", verbosity="start+end", parent=train_timer) as epochs_timer:
+                for epoch in range(1, epochs + 1):
+                    result = self._train_epoch(epoch, dataloader, val_dataloader, optimizer, criterion, epochs_timer)
+                    
+                    self._log_epoch_result(result)
+                    
+                    if scheduler is not None:
+                        scheduler.step()
+            
+            self.finish_wandb_if_needed()
+
+    def predict(
+        self,
+        X: InputData,
+        batch_size: int = 32,
+    ) -> OutputData:
+        """
+        Predict scores for the given prompts and models.
+        
+        Args:
+            X: Input data with prompts and model_names
+            batch_size: Batch size for prediction
+            
+        Returns:
+            PromptRoutingOutput with scores for each model
+        """
+        if self._network is None:
+            raise RuntimeError("Model not trained or loaded yet")
+        
+        with Timer("predict", verbosity="start+end") as predict_timer:
+            self.last_timer = predict_timer
+            with Timer("preprocess_input", verbosity="start+end", parent=predict_timer):
+                preprocessed_input = self.preprocessor.preprocess_for_inference(
+                    prompts=X.prompts,
+                    model_names=X.model_names,
+                    model_embeddings=self.model_embeddings,
+                )
+            
+            prompt_features = torch.from_numpy(preprocessed_input.prompt_features).to(self.device)  # [n_prompts, prompt_features_dim]
+            model_embeddings = torch.from_numpy(preprocessed_input.model_embeddings).to(self.device)  # [n_models, model_embedding_dim]
+            
+            self.network.eval()
+            scores_dict: dict[str, np.ndarray] = {}
+            
+            with torch.no_grad():
+                for model_idx, model_name in enumerate(X.model_names):
+                    model_embedding = model_embeddings[model_idx]  # [model_embedding_dim]
+                    model_scores = []
+                    
+                    for i in range(0, len(X.prompts), batch_size):
+                        batch_prompts = X.prompts[i:i + batch_size]  # [batch_size]
+                        batch_features = prompt_features[i:i + batch_size]  # [batch_size, prompt_features_dim]
+                        batch_size_actual = len(batch_prompts)
+                        
+                        # Tokenize prompts
+                        tokenized: dict[str, torch.Tensor] = self.tokenizer(
+                            batch_prompts,
+                            padding=True,
+                            truncation=True,
+                            max_length=self.max_length,
+                            return_tensors="pt",
+                        )
+                        input_ids = tokenized["input_ids"].to(self.device)  # [batch_size, seq_len]
+                        attention_mask = tokenized["attention_mask"].to(self.device)  # [batch_size, seq_len]
+                        
+                        # Expand model embedding to batch
+                        batch_model_embeddings = model_embedding.unsqueeze(0).expand(batch_size_actual, -1)  # [batch_size, model_embedding_dim]
+                        
+                        batch_scores = self.network(
+                            input_ids,
+                            attention_mask,
+                            batch_features,
+                            batch_model_embeddings,
+                        )  # [batch_size]
+                        
+                        # Apply tanh to constrain to [-1, 1]
+                        batch_scores = torch.tanh(batch_scores)  # [batch_size]
+                        model_scores.append(batch_scores)
+                    
+                    all_scores = torch.cat(model_scores)  # [n_prompts]
+                    scores_dict[model_name] = all_scores.cpu().numpy()
+            
+            return PromptRoutingOutput(_scores=scores_dict)
+
+    def get_history(self) -> TrainingHistory:
+        """Get training history."""
+        return TrainingHistory.from_entries(self._history_entries)
+
+    def get_state_dict(self) -> dict[str, Any]:
+        """
+        Get state dictionary for saving the model.
+        
+        Returns:
+            State dictionary containing all model parameters and configuration
+        """
+        if self._network is None:
+            raise RuntimeError("Model not trained or loaded yet")
+        
+        if not self.embedding_model.is_initialized:
+            raise RuntimeError("Embedding model not initialized")
+        
+        return {
+            "transformer_model_name": self.transformer_model_name,
+            "lora_rank": self.lora_rank,
+            "lora_alpha": self.lora_alpha,
+            "lora_dropout": self.lora_dropout,
+            "max_length": self.max_length,
+            "optimizer_type": self.optimizer_spec.optimizer_type,
+            "optimizer_params": self.optimizer_spec.to_dict(),
+            "balance_model_samples": self.balance_model_samples,
+            "print_every": self.print_every,
+            "preprocessor_version": self.preprocessor.version,
+            "prompt_features_dim": self._prompt_features_dim,
+            "network_state_dict": self.network.cpu().state_dict(),
+            "history_entries": self._history_entries,
+            
+            "embedding_type": self.embedding_spec.embedding_type,
+            "embedding_spec": self.embedding_spec.model_dump(),
+            "min_model_comparisons": self.min_model_comparisons,
+            "embedding_model_epochs": self.embedding_model_epochs,
+            "embedding_model_state_dict": self.embedding_model.get_state_dict(),
+            "seed": self.seed,
+        }
+
+    @classmethod
+    def load_state_dict(cls, state_dict: dict[str, Any]) -> "TransformerEmbeddingModel":
+        """
+        Load model from state dictionary.
+        
+        Args:
+            state_dict: State dictionary from get_state_dict()
+            
+        Returns:
+            Loaded model instance
+        """
+        optimizer_spec = OptimizerSpecification.from_serialized(
+            state_dict["optimizer_type"],
+            state_dict["optimizer_params"],
+        )
+        
+        # Parse embedding spec using Pydantic TypeAdapter
+        embedding_spec_adapter = TypeAdapter(EmbeddingSpec)
+        embedding_spec = embedding_spec_adapter.validate_python(state_dict["embedding_spec"])
+        
+        model = cls(
+            transformer_model_name=state_dict["transformer_model_name"],
+            lora_rank=state_dict["lora_rank"],
+            lora_alpha=state_dict["lora_alpha"],
+            lora_dropout=state_dict["lora_dropout"],
+            max_length=state_dict["max_length"],
+            optimizer_spec=optimizer_spec,
+            balance_model_samples=state_dict["balance_model_samples"],
+            embedding_spec=embedding_spec,
+            min_model_comparisons=state_dict["min_model_comparisons"],
+            embedding_model_epochs=state_dict["embedding_model_epochs"],
+            print_every=state_dict["print_every"],
+            seed=state_dict["seed"],
+        )
+        
+        model.embedding_model = EmbeddingModelBase.load_from_state_dict(state_dict["embedding_model_state_dict"])
+
+        model._initialize_network(
+            prompt_features_dim=state_dict["prompt_features_dim"],
+        )
+        model.network.load_state_dict(
+            state_dict["network_state_dict"], 
+            map_location=model.device,
+        )
+        
+        model._history_entries = state_dict["history_entries"]
+        
+        return model
+
+    def _prepare_dataloader(
+        self, 
+        preprocessed_data: PreprocessedTrainingData, 
+        batch_size: int,
+        use_balancing: bool,
+    ) -> DataLoader[dict[str, torch.Tensor]]:
+        """
+        Prepare dataloader from preprocessed training data.
+        
+        Args:
+            preprocessed_data: Preprocessed training data
+            batch_size: Batch size
+            use_balancing: Whether to apply sample balancing
+            
+        Returns:
+            DataLoader for training/validation
+        """
+        dataset = self._PairwiseDataset(
+            pairs=preprocessed_data.pairs,
+            max_length=self.max_length,
+        )
+        
+        # Apply weighted sampling if balancing is enabled
+        sampler = None
+        shuffle = True
+        if self.balance_model_samples and use_balancing:
+            model_ids_a = [pair.model_id_a for pair in preprocessed_data.pairs]
+            model_ids_b = [pair.model_id_b for pair in preprocessed_data.pairs]
+            sampler = self._create_balanced_sampler(model_ids_a, model_ids_b)
+            shuffle = False  # Sampler is mutually exclusive with shuffle
+        
+        return DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            sampler=sampler,
+            collate_fn=self._collate_fn,
+        )
+
+    def _collate_fn(self, batch: list[dict]) -> dict[str, torch.Tensor]:
+        """Collate function for dataloader."""
+        prompts: list[str] = [item["prompt"] for item in batch]
+        
+        tokenized: dict[str, torch.Tensor] = self.tokenizer(
+            prompts,
+            padding=True,
+            truncation=True,
+            max_length=self.max_length,
+            return_tensors="pt",
+        )
+        
+        return {
+            "input_ids_a": tokenized["input_ids"],  # [batch_size, seq_len]
+            "attention_mask_a": tokenized["attention_mask"],  # [batch_size, seq_len]
+            "input_ids_b": tokenized["input_ids"],  # [batch_size, seq_len]
+            "attention_mask_b": tokenized["attention_mask"],  # [batch_size, seq_len]
+            "prompt_features_a": torch.stack([item["prompt_features"] for item in batch]),  # [batch_size, prompt_features_dim]
+            "prompt_features_b": torch.stack([item["prompt_features"] for item in batch]),  # [batch_size, prompt_features_dim]
+            "model_embedding_a": torch.stack([item["model_embedding_a"] for item in batch]),  # [batch_size, model_embedding_dim]
+            "model_embedding_b": torch.stack([item["model_embedding_b"] for item in batch]),  # [batch_size, model_embedding_dim]
+            "labels": torch.stack([item["label"] for item in batch]),  # [batch_size]
+        }
+
+    def _create_balanced_sampler(
+        self,
+        model_ids_a: list[int],
+        model_ids_b: list[int],
+    ) -> torch.utils.data.WeightedRandomSampler:
+        """
+        Create a weighted sampler to balance model representation in training.
+        
+        For each pair, we consider both models involved. The weight for a pair
+        is based on the rarest model in that pair.
+        
+        Args:
+            model_ids_a: List of model IDs for position A  # [n_pairs]
+            model_ids_b: List of model IDs for position B  # [n_pairs]
+            
+        Returns:
+            WeightedRandomSampler that balances model representation
+        """
+        # Count how many times each model appears
+        model_counts = Counter()
+        for model_id_a, model_id_b in zip(model_ids_a, model_ids_b):
+            model_counts[model_id_a] += 1
+            model_counts[model_id_b] += 1
+        
+        # Compute weight for each model (inverse frequency)
+        model_weights = {
+            model_id: 1.0 / count
+            for model_id, count in model_counts.items()
+        }
+        
+        # For each pair, assign weight based on the rarest model in the pair
+        # This ensures rare models get more representation
+        sample_weights = []
+        for model_id_a, model_id_b in zip(model_ids_a, model_ids_b):
+            weight = max(model_weights[model_id_a], model_weights[model_id_b])
+            sample_weights.append(weight)
+        
+        sample_weights_tensor = torch.tensor(sample_weights, dtype=torch.float32)
+        
+        return torch.utils.data.WeightedRandomSampler(
+            weights=sample_weights_tensor,
+            num_samples=len(sample_weights_tensor),
+            replacement=True,
+        )
+
+    def _train_epoch(
+        self, 
+        epoch: int,
+        dataloader: DataLoader[dict[str, torch.Tensor]],
+        val_dataloader: DataLoader[dict[str, torch.Tensor]] | None,
+        optimizer: optim.Optimizer,
+        criterion: nn.Module,
+        epochs_timer: Timer,
+    ) -> "TransformerEmbeddingModel.EpochResult":
+        with Timer(f"epoch_{epoch}", verbosity="start+end", parent=epochs_timer) as timer:
+            self.network.train()
+            total_loss = 0.0
+            total_accuracy = 0.0
+            n_batches = 0
+            
+            for batch in dataloader:
+                input_ids_a = batch["input_ids_a"].to(self.device)  # [batch_size, seq_len]
+                attention_mask_a = batch["attention_mask_a"].to(self.device)  # [batch_size, seq_len]
+                input_ids_b = batch["input_ids_b"].to(self.device)  # [batch_size, seq_len]
+                attention_mask_b = batch["attention_mask_b"].to(self.device)  # [batch_size, seq_len]
+                prompt_features_a = batch["prompt_features_a"].to(self.device)  # [batch_size, prompt_features_dim]
+                prompt_features_b = batch["prompt_features_b"].to(self.device)  # [batch_size, prompt_features_dim]
+                model_embedding_a = batch["model_embedding_a"].to(self.device)  # [batch_size, model_embedding_dim]
+                model_embedding_b = batch["model_embedding_b"].to(self.device)  # [batch_size, model_embedding_dim]
+                labels = batch["labels"].to(self.device)  # [batch_size]
+                
+                optimizer.zero_grad()
+                scores_a = self.network(
+                    input_ids_a,
+                    attention_mask_a,
+                    prompt_features_a,
+                    model_embedding_a,
+                )  # [batch_size]
+                scores_b = self.network(
+                    input_ids_b,
+                    attention_mask_b,
+                    prompt_features_b,
+                    model_embedding_b,
+                )  # [batch_size]
+                
+                loss: torch.Tensor = criterion(scores_a, scores_b, labels)
+                loss.backward()
+                
+                optimizer.step()
+                
+                total_loss += loss.item()
+                
+                with torch.no_grad():
+                    batch_accuracy = compute_pairwise_accuracy(scores_a, scores_b, labels)
+                    total_accuracy += batch_accuracy
+                
+                n_batches += 1
+            
+            avg_loss = total_loss / n_batches
+            avg_accuracy = total_accuracy / n_batches
+            
+            with Timer("perform_validation", verbosity="start+end", parent=timer):
+                val_loss, val_accuracy = self._perform_validation(val_dataloader, criterion, timer) if val_dataloader is not None else (None, None)
+            
+            entry = TrainingHistoryEntry(
+                epoch=epoch,
+                total_loss=avg_loss,
+                val_loss=val_loss,
+                train_accuracy=avg_accuracy,
+                val_accuracy=val_accuracy,
+            )
+            self._history_entries.append(entry)
+            
+            if self.wandb_details is not None:
+                self.log_to_wandb(entry)
+            
+        return self.EpochResult(
+            epoch=epoch,
+            total_loss=avg_loss,
+            train_accuracy=avg_accuracy,
+            val_loss=val_loss,
+            val_accuracy=val_accuracy,
+            duration=timer.elapsed_time,
+        )
+
+    def _perform_validation(
+        self,
+        val_dataloader: DataLoader[dict[str, torch.Tensor]],
+        criterion: nn.Module,
+        timer: Timer,
+    ) -> tuple[float, float]:
+        self.network.eval()
+        total_loss = 0.0
+        total_accuracy = 0.0
+        n_batches = 0
+        
+        with torch.no_grad():
+            for batch in val_dataloader:
+                input_ids_a = batch["input_ids_a"].to(self.device)  # [batch_size, seq_len]
+                attention_mask_a = batch["attention_mask_a"].to(self.device)  # [batch_size, seq_len]
+                input_ids_b = batch["input_ids_b"].to(self.device)  # [batch_size, seq_len]
+                attention_mask_b = batch["attention_mask_b"].to(self.device)  # [batch_size, seq_len]
+                prompt_features_a = batch["prompt_features_a"].to(self.device)  # [batch_size, prompt_features_dim]
+                prompt_features_b = batch["prompt_features_b"].to(self.device)  # [batch_size, prompt_features_dim]
+                model_embedding_a = batch["model_embedding_a"].to(self.device)  # [batch_size, model_embedding_dim]
+                model_embedding_b = batch["model_embedding_b"].to(self.device)  # [batch_size, model_embedding_dim]
+                labels = batch["labels"].to(self.device)  # [batch_size]
+                
+                scores_a = self.network(
+                    input_ids_a,
+                    attention_mask_a,
+                    prompt_features_a,
+                    model_embedding_a,
+                )  # [batch_size]
+                scores_b = self.network(
+                    input_ids_b,
+                    attention_mask_b,
+                    prompt_features_b,
+                    model_embedding_b,
+                )  # [batch_size]
+                
+                loss: torch.Tensor = criterion(scores_a, scores_b, labels)
+                batch_accuracy = compute_pairwise_accuracy(scores_a, scores_b, labels)
+                
+                total_loss += loss.item()
+                total_accuracy += batch_accuracy
+                n_batches += 1
+        
+        avg_loss = total_loss / n_batches
+        avg_accuracy = total_accuracy / n_batches
+        return avg_loss, avg_accuracy
+
+    def _load_embedding_model_if_specified(self) -> bool:
+        if self._embedding_model_source is None:
+            return False
+
+        loaded: TransformerEmbeddingModel = TransformerEmbeddingModel.load(self._embedding_model_source)
+        self.embedding_model = loaded.embedding_model
+        self.embedding_spec = loaded.embedding_spec
+        self.embedding_model_epochs = loaded.embedding_model_epochs
+
+        return True
+
+    def _log_epoch_result(self, result: "TransformerEmbeddingModel.EpochResult") -> None:
+        if self.print_every is None:
+            return
+        
+        if not result.epoch % self.print_every == 0:
+            return
+        
+        if result.val_loss is None or result.val_accuracy is None:
+            print(f"Epoch {result.epoch:>4}: loss = {result.total_loss:.4f}, accuracy = {(result.train_accuracy*100):.4f}% - {result.duration:.2f}s")
+        else:
+            print(f"Epoch {result.epoch:>4}: loss = {result.total_loss:.4f}/{result.val_loss:.4f}, accuracy = {(result.train_accuracy*100):.4f}%/{(result.val_accuracy*100):.4f}% - {result.duration:.2f}s")
+
+    @dataclass
+    class EpochResult:
+        epoch: int
+        total_loss: float
+        train_accuracy: float
+        val_loss: float | None
+        val_accuracy: float | None
+        duration: float
+
+    class _PairwiseDataset(Dataset):
+        """Dataset for pairwise comparisons."""
+        
+        def __init__(
+            self,
+            pairs: list[PreprocessedPromptPair],
+            max_length: int,
+        ) -> None:
+            self.pairs = pairs
+            self.max_length = max_length
+        
+        def __len__(self) -> int:
+            return len(self.pairs)
+        
+        def __getitem__(self, idx: int) -> dict:
+            pair = self.pairs[idx]
+            
+            # Return raw data, tokenization happens in collate_fn
+            return {
+                "prompt": pair.prompt,
+                "prompt_features": torch.from_numpy(pair.prompt_features),
+                "model_embedding_a": torch.from_numpy(pair.model_embedding_a),
+                "model_embedding_b": torch.from_numpy(pair.model_embedding_b),
+                "label": torch.tensor(1.0 if pair.winner_label == 0 else -1.0, dtype=torch.float32),
+            }
+
+    class _TransformerNetwork(nn.Module):
+        """Transformer-based network with LoRA fine-tuning."""
+        
+        def __init__(
+            self,
+            transformer_model_name: str,
+            prompt_features_dim: int,
+            model_embedding_dim: int,
+            lora_rank: int = 16,
+            lora_alpha: int = 32,
+            lora_dropout: float = 0.05,
+        ) -> None:
+            super().__init__()
+            
+            self.transformer = AutoModel.from_pretrained(transformer_model_name)
+            transformer_hidden_size = self.transformer.config.hidden_size
+                        
+            lora_config = LoraConfig(
+                r=lora_rank,
+                lora_alpha=lora_alpha,
+                lora_dropout=lora_dropout,
+                target_modules=["query", "value"],  # Common for BERT-like models
+                bias="none",
+            )
+            self.transformer = get_peft_model(self.transformer, lora_config)
+            print(f"LoRA applied successfully. Trainable parameters:")
+            self.transformer.print_trainable_parameters()
+            
+            combined_dim = transformer_hidden_size + prompt_features_dim + model_embedding_dim
+            self.scoring_head = nn.Sequential(
+                nn.Linear(combined_dim, 256),
+                nn.ReLU(),
+                nn.Dropout(0.2),
+                nn.Linear(256, 128),
+                nn.ReLU(),
+                nn.Dropout(0.2),
+                nn.Linear(128, 1),
+            )
+        
+        def forward(
+            self,
+            input_ids: torch.Tensor,  # [batch_size, seq_len]
+            attention_mask: torch.Tensor,  # [batch_size, seq_len]
+            prompt_features: torch.Tensor,  # [batch_size, prompt_features_dim]
+            model_embedding: torch.Tensor,  # [batch_size, model_embedding_dim]
+        ) -> torch.Tensor:
+            # Get transformer output
+            outputs = self.transformer(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+            )
+            
+            # Use [CLS] token embedding (first token)
+            prompt_embedding = outputs.last_hidden_state[:, 0, :]  # [batch_size, transformer_hidden_size]
+            
+            combined = torch.cat([prompt_embedding, prompt_features, model_embedding], dim=1)  # [batch_size, combined_dim]
+            output: torch.Tensor = self.scoring_head(combined)  # [batch_size, 1]
+            
+            return output.squeeze(-1)  # [batch_size]
