@@ -13,6 +13,7 @@ from src.models.greedy_ranking_model import GreedyRankingModel
 from src.models.mcmf_scoring_model import McmfScoringModel
 from src.models.least_squares_scoring_model import LeastSquaresScoringModel
 from src.models.gradient_boosting_model import GradientBoostingModel
+from src.models.transformer_embedding_model import TransformerEmbeddingModel
 from src.models.model_base import ModelBase
 from src.scripts.model_types import (
     DenseNetworkSpecification,
@@ -23,6 +24,7 @@ from src.scripts.model_types import (
     McmfScoringSpecification,
     LeastSquaresScoringSpecification,
     GradientBoostingSpecification,
+    TransformerEmbeddingSpecification,
 )
 from src.scripts.training_spec import TrainingSpecification
 from src.utils import data_split
@@ -97,6 +99,8 @@ def _create_starting_model(spec: TrainingSpecification) -> ModelBase:
             return _create_starting_least_squares_scoring(spec)
         case "gradient_boosting":
             return _create_starting_gradient_boosting(spec)
+        case "transformer_embedding":
+            return _create_starting_transformer_embedding(spec)
         case unknown:
             raise ValueError(f"Unknown model type: {unknown}")  # pyright: ignore[reportUnreachable]
 
@@ -247,6 +251,32 @@ def _create_starting_gradient_boosting(training_spec: TrainingSpecification) -> 
         embedding_model_epochs=model_spec.embedding_model_epochs,
         wandb_details=training_spec.wandb.to_wandb_details() if training_spec.wandb is not None else None,
         print_every=training_spec.log.print_every,
+    )
+
+
+def _create_starting_transformer_embedding(training_spec: TrainingSpecification) -> TransformerEmbeddingModel:
+    if training_spec.model.start_state is not None:
+        return TransformerEmbeddingModel.load(training_spec.model.start_state)
+    
+    if not isinstance(training_spec.model.spec, TransformerEmbeddingSpecification):
+        raise ValueError(f"Expected model specification to be of type {TransformerEmbeddingSpecification.__name__}, but found {type(training_spec.model.spec).__name__}")
+    
+    model_spec = training_spec.model.spec
+    return TransformerEmbeddingModel(
+        transformer_model_name=model_spec.transformer_model_name,
+        finetuning_spec=model_spec.finetuning_spec,
+        hidden_dims=model_spec.hidden_dims,
+        dropout=model_spec.dropout,
+        max_length=model_spec.max_length,
+        optimizer_spec=model_spec.optimizer,
+        balance_model_samples=model_spec.balance_model_samples,
+        embedding_spec=model_spec.embedding_spec,
+        load_embedding_model_from=model_spec.load_embedding_model_from,
+        min_model_comparisons=model_spec.min_model_comparisons,
+        embedding_model_epochs=model_spec.embedding_model_epochs,
+        wandb_details=training_spec.wandb.to_wandb_details() if training_spec.wandb is not None else None,
+        print_every=training_spec.log.print_every,
+        seed=model_spec.seed,
     )
 
 

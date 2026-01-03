@@ -3,9 +3,10 @@ from pydantic import BaseModel, Field
 
 from src.models.optimizers.optimizer_spec_union import OptimizerSpec
 from src.models.embedding_specs.embedding_spec_union import EmbeddingSpec
+from src.models.finetuning_specs.finetuning_spec_union import FineTuningSpec
 
 
-ModelType = Literal["dense_network", "dn_embedding", "simple_scoring", "elo_scoring", "greedy_ranking", "mcmf_scoring", "least_squares_scoring", "gradient_boosting"]
+ModelType = Literal["dense_network", "dn_embedding", "simple_scoring", "elo_scoring", "greedy_ranking", "mcmf_scoring", "least_squares_scoring", "gradient_boosting", "transformer_embedding"]
 
 
 class ModelSpecBase(BaseModel):
@@ -83,7 +84,23 @@ class GradientBoostingSpecification(ModelSpecBase):
     embedding_model_epochs: int = 10
 
 
+class TransformerEmbeddingSpecification(ModelSpecBase):
+    model_type: Literal["transformer_embedding"] = "transformer_embedding"
+    transformer_model_name: str = "sentence-transformers/all-MiniLM-L12-v2"
+    finetuning_spec: FineTuningSpec
+    hidden_dims: list[int]
+    dropout: float = 0.2
+    max_length: int = 256
+    optimizer: OptimizerSpec
+    balance_model_samples: bool = True
+    embedding_spec: EmbeddingSpec
+    load_embedding_model_from: str | None = None
+    min_model_comparisons: int = 20
+    embedding_model_epochs: int = 10
+    seed: int = 42
+
+
 ModelSpec = Annotated[
-    Union[DenseNetworkSpecification, DnEmbeddingSpecification, SimpleScoringSpecification, EloScoringSpecification, GreedyRankingSpecification, McmfScoringSpecification, LeastSquaresScoringSpecification, GradientBoostingSpecification], 
+    Union[DenseNetworkSpecification, DnEmbeddingSpecification, SimpleScoringSpecification, EloScoringSpecification, GreedyRankingSpecification, McmfScoringSpecification, LeastSquaresScoringSpecification, GradientBoostingSpecification, TransformerEmbeddingSpecification], 
     Field(discriminator="model_type")
 ]

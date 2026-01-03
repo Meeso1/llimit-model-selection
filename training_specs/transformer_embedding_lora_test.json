@@ -1,0 +1,53 @@
+{
+  "data": {
+    "max_samples": 1000,
+    "validation_split": 0.2,
+    "seed": 42
+  },
+  "epochs": 5,
+  "batch_size": 16,
+  "model": {
+    "name": "transformer-embedding-lora-test",
+    "spec": {
+      "model_type": "transformer_embedding",
+      "transformer_model_name": "sentence-transformers/all-MiniLM-L12-v2",
+      "finetuning_spec": {
+        "method": "lora",
+        "rank": 8,
+        "alpha": 16,
+        "dropout": 0.05,
+        "target_modules": "auto"
+      },
+      "hidden_dims": [128, 64],
+      "dropout": 0.2,
+      "max_length": 128,
+      "optimizer": {
+        "optimizer_type": "adamw",
+        "learning_rate": 0.0005,
+        "weight_decay": 0.01
+      },
+      "balance_model_samples": true,
+      "embedding_spec": {
+        "embedding_type": "frozen",
+        "encoder_model_name": "all-MiniLM-L6-v2",
+        "hidden_dims": [128, 64],
+        "optimizer": {
+          "optimizer_type": "adamw",
+          "learning_rate": 0.001,
+          "weight_decay": 0.01
+        },
+        "triplet_margin": 0.2,
+        "regularization_weight": 0.01,
+        "identity_positive_ratio": 0.8
+      },
+      "load_embedding_model_from": null,
+      "min_model_comparisons": 50,
+      "embedding_model_epochs": 3,
+      "seed": 42
+    }
+  },
+  "log": {
+    "print_every": 1
+  }
+}
+

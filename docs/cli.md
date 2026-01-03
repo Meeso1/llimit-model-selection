@@ -73,7 +73,7 @@ The training specification is a JSON file with the following structure:
 - `name`: Name to save the model under (required)
 - `start_state`: If provided, loads an existing model with this name as the starting point and ignores `spec` (optional)
 - `spec`: Model-specific specification (required if `start_state` is not provided)
-  - `model_type`: Type of model (currently only `"dense_network"`)
+  - `model_type`: Type of model - one of: `"dense_network"`, `"dn_embedding"`, `"simple_scoring"`, `"elo_scoring"`, `"greedy_ranking"`, `"mcmf_scoring"`, `"least_squares_scoring"`, `"gradient_boosting"`, `"transformer_embedding"`
   - For `dense_network`:
     - `embedding_model_name`: Sentence transformer model name
     - `hidden_dims`: List of hidden layer sizes
@@ -83,6 +83,20 @@ The training specification is a JSON file with the following structure:
       - `learning_rate`: Learning rate
       - `lr_decay_gamma`: Learning rate decay gamma (optional, can be `null`)
       - Additional optimizer-specific parameters (see `docs/optimizers.md`)
+  - For `transformer_embedding`:
+    - `transformer_model_name`: HuggingFace transformer model name (e.g., `"sentence-transformers/all-MiniLM-L12-v2"`)
+    - `finetuning_spec`: Fine-tuning specification (see below)
+    - `hidden_dims`: List of hidden layer sizes for the scoring head
+    - `dropout`: Dropout rate (default: 0.2)
+    - `max_length`: Maximum sequence length (default: 256)
+    - `optimizer`: Optimizer specification
+    - `balance_model_samples`: Whether to balance samples by model (default: true)
+    - `embedding_spec`: Embedding model specification (see `docs/models.md`)
+    - `load_embedding_model_from`: Path to load pre-trained embedding model from (optional)
+    - `min_model_comparisons`: Minimum comparisons per model to include (default: 20)
+    - `embedding_model_epochs`: Number of epochs to train embedding model (default: 10)
+    - `seed`: Random seed (default: 42)
+  - See `training_specs/` directory for examples of each model type
 
 **data**: Data configuration
 - `max_samples`: Maximum number of samples to use (dataset will be downsampled)
@@ -95,6 +109,57 @@ The training specification is a JSON file with the following structure:
 **epochs**: Number of training epochs
 
 **batch_size**: Batch size for training
+
+#### Fine-tuning Specifications
+
+For `transformer_embedding` models, the `finetuning_spec` field specifies how to fine-tune the transformer:
+
+**LoRA (Low-Rank Adaptation):**
+```json
+{
+  "method": "lora",
+  "rank": 16,
+  "alpha": 32,
+  "dropout": 0.05,
+  "target_modules": "auto"
+}
+```
+
+**QLoRA (Quantized LoRA):**
+```json
+{
+  "method": "qlora",
+  "rank": 16,
+  "alpha": 32,
+  "dropout": 0.05,
+  "target_modules": "auto",
+  "load_in_4bit": true,
+  "bnb_4bit_compute_dtype": "float16",
+  "bnb_4bit_quant_type": "nf4"
+}
+```
+
+**Last Layers:**
+```json
+{
+  "method": "last_layers",
+  "num_layers": 2
+}
+```
+
+**BitFit:**
+```json
+{
+  "method": "bitfit"
+}
+```
+
+**Full Fine-tuning:**
+```json
+{
+  "method": "full"
+}
+```
 
 ### Example
 
@@ -136,6 +201,72 @@ The training specification is a JSON file with the following structure:
   "batch_size": 64
 }
 ```
+
+### Transformer Embedding Example (with LoRA)
+
+```json
+{
+  "data": {
+    "max_samples": null,
+    "validation_split": 0.2,
+    "seed": 42
+  },
+  "epochs": 20,
+  "batch_size": 32,
+  "model": {
+    "name": "transformer-embedding-lora",
+    "spec": {
+      "model_type": "transformer_embedding",
+      "transformer_model_name": "sentence-transformers/all-MiniLM-L12-v2",
+      "finetuning_spec": {
+        "method": "lora",
+        "rank": 16,
+        "alpha": 32,
+        "dropout": 0.05,
+        "target_modules": "auto"
+      },
+      "hidden_dims": [256, 128],
+      "dropout": 0.2,
+      "max_length": 256,
+      "optimizer": {
+        "optimizer_type": "adamw",
+        "learning_rate": 0.0001,
+        "weight_decay": 0.01
+      },
+      "balance_model_samples": true,
+      "embedding_spec": {
+        "embedding_type": "attention",
+        "encoder_model_name": "all-MiniLM-L6-v2",
+        "h_emb": 128,
+        "h_scalar": 32,
+        "h_pair": 128,
+        "d_out": 64,
+        "pair_mlp_layers": 8,
+        "num_attention_heads": 8,
+        "dropout": 0.1,
+        "temperature": 0.07,
+        "pairs_per_model": 64,
+        "models_per_batch": 8,
+        "embeddings_per_model": 4,
+        "optimizer": {
+          "optimizer_type": "adamw",
+          "learning_rate": 0.0001,
+          "weight_decay": 0.995
+        }
+      },
+      "load_embedding_model_from": null,
+      "min_model_comparisons": 1000,
+      "embedding_model_epochs": 100,
+      "seed": 42
+    }
+  },
+  "log": {
+    "print_every": 1
+  }
+}
+```
+
+See `training_specs/transformer_embedding_lora.json` and `training_specs/transformer_embedding_lora_test.json` for complete examples.
 
 ## Inference
 
