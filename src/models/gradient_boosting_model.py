@@ -225,7 +225,7 @@ class GradientBoostingModel(ModelBase):
         data: TrainingData,
         validation_split: ValidationSplit | None = None,
         epochs: int = 10,
-        batch_size: int = 0,
+        batch_size: int = 32,
     ) -> None:
         """
         Train the gradient boosting model.
@@ -234,7 +234,7 @@ class GradientBoostingModel(ModelBase):
             data: Training data with prompts and comparisons
             validation_split: Validation split configuration
             epochs: Number of boosting rounds (trees to add)
-            batch_size: Not used for XGBoost, kept for API compatibility
+            batch_size: Used for embedding model training
         """
         with Timer("train", verbosity="start+end") as train_timer:
             self.last_timer = train_timer
