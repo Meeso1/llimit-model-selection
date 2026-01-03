@@ -297,7 +297,7 @@ class DnEmbeddingModel(ModelBase):
             "preprocessor_version": self.preprocessor.version,
             "prompt_embedding_dim": self._prompt_embedding_dim,
             "prompt_features_dim": self._prompt_features_dim,
-            "network_state_dict": self.network.state_dict(),
+            "network_state_dict": self.network.cpu().state_dict(),
             "history_entries": self._history_entries,
             
             "embedding_type": self.embedding_spec.embedding_type,
@@ -346,7 +346,10 @@ class DnEmbeddingModel(ModelBase):
             prompt_embedding_dim=state_dict["prompt_embedding_dim"],
             prompt_features_dim=state_dict["prompt_features_dim"],
         )
-        model.network.load_state_dict(state_dict["network_state_dict"])
+        model.network.load_state_dict(
+            state_dict["network_state_dict"], 
+            map_location=model.device,
+        )
         
         model._history_entries = state_dict["history_entries"]
         

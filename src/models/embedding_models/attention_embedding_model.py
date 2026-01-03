@@ -917,8 +917,8 @@ class AttentionEmbeddingModel(EmbeddingModelBase):
             "print_every": self.print_every,
             "optimizer_type": self.optimizer_spec.optimizer_type,
             "optimizer_params": self.optimizer_spec.to_dict(),
-            "pair_encoder_state": self._pair_encoder.state_dict(),
-            "set_aggregator_state": self._set_aggregator.state_dict(),
+            "pair_encoder_state": self._pair_encoder.cpu().state_dict(),
+            "set_aggregator_state": self._set_aggregator.cpu().state_dict(),
             "epoch_logs": self._epoch_logs,
             "model_embeddings": self._model_embeddings,
         }
@@ -964,14 +964,20 @@ class AttentionEmbeddingModel(EmbeddingModelBase):
             pair_mlp_layers=model.pair_mlp_layers,
             dropout=model.dropout,
         ).to(model.device)
-        model._pair_encoder.load_state_dict(state_dict["pair_encoder_state"])
+        model._pair_encoder.load_state_dict(
+            state_dict["pair_encoder_state"],
+            map_location=model.device
+        )
         
         model._set_aggregator = SetAggregator(
             h_pair=model.h_pair,
             d_out=model.d_out,
             num_attention_heads=model.num_attention_heads,
         ).to(model.device)
-        model._set_aggregator.load_state_dict(state_dict["set_aggregator_state"])
+        model._set_aggregator.load_state_dict(
+            state_dict["set_aggregator_state"],
+            map_location=model.device,
+        )
         
         # Load epoch logs and embeddings
         model._epoch_logs = state_dict["epoch_logs"]

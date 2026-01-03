@@ -213,7 +213,7 @@ class SimpleScoringModel(ModelBase):
             "tie_both_bad_epsilon": self.tie_both_bad_epsilon,
             "non_ranking_loss_coeff": self.non_ranking_loss_coeff,
             "min_model_occurrences": self.min_model_occurrences,
-            "network_state_dict": self.network.state_dict(),
+            "network_state_dict": self.network.cpu().state_dict(),
             "model_encoder": self._model_encoder.get_state_dict(),
             "history_entries": self._history_entries,
         }
@@ -245,7 +245,10 @@ class SimpleScoringModel(ModelBase):
         
         model._model_encoder = StringEncoder.load_state_dict(state_dict["model_encoder"])
         model._initialize_network(num_models=model._model_encoder.size)
-        model.network.load_state_dict(state_dict["network_state_dict"])
+        model.network.load_state_dict(
+            state_dict["network_state_dict"], 
+            map_location=model.device,
+        )
         model._history_entries = state_dict["history_entries"]
         
         return model

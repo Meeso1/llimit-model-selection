@@ -277,7 +277,7 @@ class DenseNetworkModel(ModelBase):
             "preprocessor_version": self.preprocessor.version,
             "embedding_dim": self._embedding_dim,
             "prompt_features_dim": self._prompt_features_dim,
-            "network_state_dict": self.network.state_dict(),
+            "network_state_dict": self.network.cpu().state_dict(),
             "model_encoder": self._model_encoder.get_state_dict(),
             "history_entries": self._history_entries,
         }
@@ -314,7 +314,10 @@ class DenseNetworkModel(ModelBase):
             prompt_features_dim=state_dict["prompt_features_dim"],
             num_models=model._model_encoder.size,
         )
-        model.network.load_state_dict(state_dict["network_state_dict"])
+        model.network.load_state_dict(
+            state_dict["network_state_dict"], 
+            map_location=model.device,
+        )
         
         model._history_entries = state_dict["history_entries"]
         

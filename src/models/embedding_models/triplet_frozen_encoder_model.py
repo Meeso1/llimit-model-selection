@@ -421,7 +421,7 @@ class TripletFrozenEncoderModel(TripletModelBase[TripletEmbedding]):
             "identity_positive_ratio": self.identity_positive_ratio,
             "preprocessor_seed": self.preprocessor_seed,
             "print_every": self.print_every,
-            "module_state_dict": self._module.state_dict(),
+            "module_state_dict": self._module.cpu().state_dict(),
             "epoch_logs": self._epoch_logs,
             "input_dim": self.input_dim,
             "model_embeddings": self.model_embeddings,
@@ -448,7 +448,10 @@ class TripletFrozenEncoderModel(TripletModelBase[TripletEmbedding]):
         )
         
         model._initialize_module(state_dict["input_dim"])
-        model._module.load_state_dict(state_dict["module_state_dict"])
+        model._module.load_state_dict(
+            state_dict["module_state_dict"],
+            map_location=model.device,
+        )
         model._model_embeddings = state_dict["model_embeddings"]
         model._epoch_logs = state_dict["epoch_logs"]
         
