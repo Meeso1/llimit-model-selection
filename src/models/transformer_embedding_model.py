@@ -21,6 +21,8 @@ from src.data_models.transformer_embedding_types import (
 )
 from src.models.embedding_specs.embedding_spec_union import EmbeddingSpec
 from src.models.embedding_models.embedding_model_base import EmbeddingModelBase
+from src.models.finetuning_specs.finetuning_spec_union import FineTuningSpec
+from src.models.finetuning_specs.lora_spec import LoraSpec
 from src.models.optimizers.adamw_spec import AdamWSpec
 from src.preprocessing.transformer_embedding_preprocessor import TransformerEmbeddingPreprocessor
 from src.utils.string_encoder import StringEncoder
@@ -30,15 +32,16 @@ from src.utils.timer import Timer
 from src.utils.accuracy import compute_pairwise_accuracy
 from src.utils.data_split import ValidationSplit, split_transformer_embedding_preprocessed_data
 from src.models.optimizers.optimizer_spec import OptimizerSpecification
+from src.models.finetuning_specs.finetuning_spec import FineTuningSpecification
 
 
 class TransformerEmbeddingModel(ModelBase):
     def __init__(
         self,
         transformer_model_name: str = "sentence-transformers/all-MiniLM-L12-v2",
-        lora_rank: int = 16,
-        lora_alpha: int = 32,
-        lora_dropout: float = 0.05,
+        finetuning_spec: FineTuningSpec | None = None,
+        hidden_dims: list[int] | None = None,
+        dropout: float = 0.2,
         max_length: int = 256,
         optimizer_spec: OptimizerSpecification | None = None,
         balance_model_samples: bool = True,
@@ -56,9 +59,9 @@ class TransformerEmbeddingModel(ModelBase):
             raise ValueError("Either embedding_spec or load_embedding_model_from must be specified")
         
         self.transformer_model_name = transformer_model_name
-        self.lora_rank = lora_rank
-        self.lora_alpha = lora_alpha
-        self.lora_dropout = lora_dropout
+        self.finetuning_spec = finetuning_spec if finetuning_spec is not None else LoraSpec(rank=16, alpha=32, dropout=0.05)
+        self.hidden_dims = hidden_dims if hidden_dims is not None else [256, 128]
+        self.dropout = dropout
         self.max_length = max_length
         self.optimizer_spec = optimizer_spec if optimizer_spec is not None else AdamWSpec(learning_rate=0.0001)
         self.balance_model_samples = balance_model_samples
@@ -119,9 +122,9 @@ class TransformerEmbeddingModel(ModelBase):
             transformer_model_name=self.transformer_model_name,
             prompt_features_dim=prompt_features_dim,
             model_embedding_dim=self.embedding_model.embedding_dim,
-            lora_rank=self.lora_rank,
-            lora_alpha=self.lora_alpha,
-            lora_dropout=self.lora_dropout,
+            finetuning_spec=self.finetuning_spec,
+            hidden_dims=self.hidden_dims,
+            dropout=self.dropout,
         ).to(self.device)
 
     def get_config_for_wandb(self) -> dict[str, Any]:
@@ -129,9 +132,10 @@ class TransformerEmbeddingModel(ModelBase):
         return {
             "model_type": "transformer_embedding",
             "transformer_model_name": self.transformer_model_name,
-            "lora_rank": self.lora_rank,
-            "lora_alpha": self.lora_alpha,
-            "lora_dropout": self.lora_dropout,
+            "finetuning_method": self.finetuning_spec.method,
+            "finetuning_spec": self.finetuning_spec.model_dump(),
+            "hidden_dims": self.hidden_dims,
+            "dropout": self.dropout,
             "max_length": self.max_length,
             "optimizer_type": self.optimizer_spec.optimizer_type,
             "optimizer_params": self.optimizer_spec.to_dict(),
@@ -311,9 +315,10 @@ class TransformerEmbeddingModel(ModelBase):
         
         return {
             "transformer_model_name": self.transformer_model_name,
-            "lora_rank": self.lora_rank,
-            "lora_alpha": self.lora_alpha,
-            "lora_dropout": self.lora_dropout,
+            "finetuning_method": self.finetuning_spec.method,
+            "finetuning_spec": self.finetuning_spec.model_dump(),
+            "hidden_dims": self.hidden_dims,
+            "dropout": self.dropout,
             "max_length": self.max_length,
             "optimizer_type": self.optimizer_spec.optimizer_type,
             "optimizer_params": self.optimizer_spec.to_dict(),
@@ -352,11 +357,16 @@ class TransformerEmbeddingModel(ModelBase):
         embedding_spec_adapter = TypeAdapter(EmbeddingSpec)
         embedding_spec = embedding_spec_adapter.validate_python(state_dict["embedding_spec"])
         
+        finetuning_spec = FineTuningSpecification.from_serialized(
+            state_dict["finetuning_method"],
+            state_dict["finetuning_spec"],
+        )
+        
         model = cls(
             transformer_model_name=state_dict["transformer_model_name"],
-            lora_rank=state_dict["lora_rank"],
-            lora_alpha=state_dict["lora_alpha"],
-            lora_dropout=state_dict["lora_dropout"],
+            finetuning_spec=finetuning_spec,
+            hidden_dims=state_dict["hidden_dims"],
+            dropout=state_dict["dropout"],
             max_length=state_dict["max_length"],
             optimizer_spec=optimizer_spec,
             balance_model_samples=state_dict["balance_model_samples"],
@@ -433,12 +443,9 @@ class TransformerEmbeddingModel(ModelBase):
         )
         
         return {
-            "input_ids_a": tokenized["input_ids"],  # [batch_size, seq_len]
-            "attention_mask_a": tokenized["attention_mask"],  # [batch_size, seq_len]
-            "input_ids_b": tokenized["input_ids"],  # [batch_size, seq_len]
-            "attention_mask_b": tokenized["attention_mask"],  # [batch_size, seq_len]
-            "prompt_features_a": torch.stack([item["prompt_features"] for item in batch]),  # [batch_size, prompt_features_dim]
-            "prompt_features_b": torch.stack([item["prompt_features"] for item in batch]),  # [batch_size, prompt_features_dim]
+            "input_ids": tokenized["input_ids"],  # [batch_size, seq_len]
+            "attention_mask": tokenized["attention_mask"],  # [batch_size, seq_len]
+            "prompt_features": torch.stack([item["prompt_features"] for item in batch]),  # [batch_size, prompt_features_dim]
             "model_embedding_a": torch.stack([item["model_embedding_a"] for item in batch]),  # [batch_size, model_embedding_dim]
             "model_embedding_b": torch.stack([item["model_embedding_b"] for item in batch]),  # [batch_size, model_embedding_dim]
             "labels": torch.stack([item["label"] for item in batch]),  # [batch_size]
@@ -505,27 +512,24 @@ class TransformerEmbeddingModel(ModelBase):
             n_batches = 0
             
             for batch in dataloader:
-                input_ids_a = batch["input_ids_a"].to(self.device)  # [batch_size, seq_len]
-                attention_mask_a = batch["attention_mask_a"].to(self.device)  # [batch_size, seq_len]
-                input_ids_b = batch["input_ids_b"].to(self.device)  # [batch_size, seq_len]
-                attention_mask_b = batch["attention_mask_b"].to(self.device)  # [batch_size, seq_len]
-                prompt_features_a = batch["prompt_features_a"].to(self.device)  # [batch_size, prompt_features_dim]
-                prompt_features_b = batch["prompt_features_b"].to(self.device)  # [batch_size, prompt_features_dim]
+                input_ids = batch["input_ids"].to(self.device)  # [batch_size, seq_len]
+                attention_mask = batch["attention_mask"].to(self.device)  # [batch_size, seq_len]
+                prompt_features = batch["prompt_features"].to(self.device)  # [batch_size, prompt_features_dim]
                 model_embedding_a = batch["model_embedding_a"].to(self.device)  # [batch_size, model_embedding_dim]
                 model_embedding_b = batch["model_embedding_b"].to(self.device)  # [batch_size, model_embedding_dim]
                 labels = batch["labels"].to(self.device)  # [batch_size]
                 
                 optimizer.zero_grad()
                 scores_a = self.network(
-                    input_ids_a,
-                    attention_mask_a,
-                    prompt_features_a,
+                    input_ids,
+                    attention_mask,
+                    prompt_features,
                     model_embedding_a,
                 )  # [batch_size]
                 scores_b = self.network(
-                    input_ids_b,
-                    attention_mask_b,
-                    prompt_features_b,
+                    input_ids,
+                    attention_mask,
+                    prompt_features,
                     model_embedding_b,
                 )  # [batch_size]
                 
@@ -582,26 +586,23 @@ class TransformerEmbeddingModel(ModelBase):
         
         with torch.no_grad():
             for batch in val_dataloader:
-                input_ids_a = batch["input_ids_a"].to(self.device)  # [batch_size, seq_len]
-                attention_mask_a = batch["attention_mask_a"].to(self.device)  # [batch_size, seq_len]
-                input_ids_b = batch["input_ids_b"].to(self.device)  # [batch_size, seq_len]
-                attention_mask_b = batch["attention_mask_b"].to(self.device)  # [batch_size, seq_len]
-                prompt_features_a = batch["prompt_features_a"].to(self.device)  # [batch_size, prompt_features_dim]
-                prompt_features_b = batch["prompt_features_b"].to(self.device)  # [batch_size, prompt_features_dim]
+                input_ids = batch["input_ids"].to(self.device)  # [batch_size, seq_len]
+                attention_mask = batch["attention_mask"].to(self.device)  # [batch_size, seq_len]
+                prompt_features = batch["prompt_features"].to(self.device)  # [batch_size, prompt_features_dim]
                 model_embedding_a = batch["model_embedding_a"].to(self.device)  # [batch_size, model_embedding_dim]
                 model_embedding_b = batch["model_embedding_b"].to(self.device)  # [batch_size, model_embedding_dim]
                 labels = batch["labels"].to(self.device)  # [batch_size]
                 
                 scores_a = self.network(
-                    input_ids_a,
-                    attention_mask_a,
-                    prompt_features_a,
+                    input_ids,
+                    attention_mask,
+                    prompt_features,
                     model_embedding_a,
                 )  # [batch_size]
                 scores_b = self.network(
-                    input_ids_b,
-                    attention_mask_b,
-                    prompt_features_b,
+                    input_ids,
+                    attention_mask,
+                    prompt_features,
                     model_embedding_b,
                 )  # [batch_size]
                 
@@ -675,43 +676,46 @@ class TransformerEmbeddingModel(ModelBase):
             }
 
     class _TransformerNetwork(nn.Module):
-        """Transformer-based network with LoRA fine-tuning."""
+        """Transformer-based network with configurable fine-tuning."""
         
         def __init__(
             self,
             transformer_model_name: str,
             prompt_features_dim: int,
             model_embedding_dim: int,
-            lora_rank: int = 16,
-            lora_alpha: int = 32,
-            lora_dropout: float = 0.05,
+            finetuning_spec: FineTuningSpec,
+            hidden_dims: list[int],
+            dropout: float,
         ) -> None:
             super().__init__()
             
-            self.transformer = AutoModel.from_pretrained(transformer_model_name)
-            transformer_hidden_size = self.transformer.config.hidden_size
-                        
-            lora_config = LoraConfig(
-                r=lora_rank,
-                lora_alpha=lora_alpha,
-                lora_dropout=lora_dropout,
-                target_modules=["query", "value"],  # Common for BERT-like models
-                bias="none",
-            )
-            self.transformer = get_peft_model(self.transformer, lora_config)
-            print(f"LoRA applied successfully. Trainable parameters:")
-            self.transformer.print_trainable_parameters()
+            quantization_config = finetuning_spec.get_quantization_config()
+            if quantization_config is not None:
+                self.transformer = AutoModel.from_pretrained(
+                    transformer_model_name,
+                    quantization_config=quantization_config,
+                    device_map="auto",
+                )
+            else:
+                self.transformer = AutoModel.from_pretrained(transformer_model_name)
             
-            combined_dim = transformer_hidden_size + prompt_features_dim + model_embedding_dim
-            self.scoring_head = nn.Sequential(
-                nn.Linear(combined_dim, 256),
-                nn.ReLU(),
-                nn.Dropout(0.2),
-                nn.Linear(256, 128),
-                nn.ReLU(),
-                nn.Dropout(0.2),
-                nn.Linear(128, 1),
-            )
+            transformer_hidden_size: int = self.transformer.config.hidden_size
+            
+            self.transformer = finetuning_spec.apply_to_model(self.transformer)
+            
+            # Build configurable scoring head
+            layers = []
+            prev_dim = transformer_hidden_size + prompt_features_dim + model_embedding_dim
+            
+            for hidden_dim in hidden_dims:
+                layers.append(nn.Linear(prev_dim, hidden_dim))
+                layers.append(nn.LeakyReLU(0.1))
+                layers.append(nn.Dropout(dropout))
+                prev_dim = hidden_dim
+            
+            layers.append(nn.Linear(prev_dim, 1))
+            
+            self.scoring_head = nn.Sequential(*layers)
         
         def forward(
             self,
