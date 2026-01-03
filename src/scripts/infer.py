@@ -9,6 +9,7 @@ from src.models.simple_scoring_model import SimpleScoringModel
 from src.models.elo_scoring_model import EloScoringModel
 from src.models.greedy_ranking_model import GreedyRankingModel
 from src.models.mcmf_scoring_model import McmfScoringModel
+from src.models.gradient_boosting_model import GradientBoostingModel
 from src.models.model_base import ModelBase
 from src.scripts.model_types import ModelType
 from src.constants import INFERENCE_OUTPUTS_PATH
@@ -76,6 +77,8 @@ def _load_model(model_type: ModelType, model_name: str) -> ModelBase:
             return GreedyRankingModel.load(model_name)
         case "mcmf_scoring":
             return McmfScoringModel.load(model_name)
+        case "gradient_boosting":
+            return GradientBoostingModel.load(model_name)
         case unknown:
             raise ValueError(f"Unknown model type: {unknown}")  # pyright: ignore[reportUnreachable]
 

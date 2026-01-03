@@ -5,7 +5,7 @@ from src.models.optimizers.optimizer_spec_union import OptimizerSpec
 from src.models.embedding_specs.embedding_spec_union import EmbeddingSpec
 
 
-ModelType = Literal["dense_network", "dn_embedding", "simple_scoring", "elo_scoring", "greedy_ranking", "mcmf_scoring", "least_squares_scoring"]
+ModelType = Literal["dense_network", "dn_embedding", "simple_scoring", "elo_scoring", "greedy_ranking", "mcmf_scoring", "least_squares_scoring", "gradient_boosting"]
 
 
 class ModelSpecBase(BaseModel):
@@ -69,7 +69,21 @@ class LeastSquaresScoringSpecification(ModelSpecBase):
     print_summary: bool = True
 
 
+class GradientBoostingSpecification(ModelSpecBase):
+    model_type: Literal["gradient_boosting"] = "gradient_boosting"
+    max_depth: int = 6
+    learning_rate: float = 0.1
+    colsample_bytree: float = 1.0
+    reg_alpha: float = 0.0
+    reg_lambda: float = 1.0
+    balance_model_samples: bool = True
+    embedding_model_name: str = "all-MiniLM-L6-v2"
+    embedding_spec: EmbeddingSpec
+    min_model_comparisons: int = 20
+    embedding_model_epochs: int = 10
+
+
 ModelSpec = Annotated[
-    Union[DenseNetworkSpecification, DnEmbeddingSpecification, SimpleScoringSpecification, EloScoringSpecification, GreedyRankingSpecification, McmfScoringSpecification, LeastSquaresScoringSpecification], 
+    Union[DenseNetworkSpecification, DnEmbeddingSpecification, SimpleScoringSpecification, EloScoringSpecification, GreedyRankingSpecification, McmfScoringSpecification, LeastSquaresScoringSpecification, GradientBoostingSpecification], 
     Field(discriminator="model_type")
 ]
