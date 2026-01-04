@@ -1,7 +1,11 @@
 # Data Loading and Processing
 
 ## Overview
-The project uses the `lmarena-human-preference-140k` dataset from HuggingFace. The raw data is loaded via the `datasets` library into a Pandas DataFrame and then converted into strongly-typed data models.
+The project supports multiple datasets from HuggingFace:
+- `lmarena-ai/arena-human-preference-140k` (lmarena)
+- `lmsys/chatbot_arena_conversations` (chatbot_arena)
+
+The raw data is loaded via the `datasets` library into a Pandas DataFrame and then converted into strongly-typed data models. Both datasets are processed into the same internal representation (`TrainingData`).
 
 ## Data Structure
 
@@ -20,9 +24,13 @@ This is the core unit of data, representing a single comparison between two mode
 ## Processing Logic (`src/data_loading.py`)
 
 ### Data Format
-The dataset stores conversations as numpy arrays of message dictionaries. Each message has:
+Both datasets store conversations as numpy arrays of message dictionaries. Each message has:
 - `role`: Either `"user"` or `"assistant"`
-- `content`: A numpy array of content items (dicts with `type="text"` and `text` field)
+- `content`: 
+  - In `lmarena_human_preference` dataset: A numpy array of content items (dicts with `type="text"` and `text` field)
+  - In `chatbot_arena` dataset: A string directly
+
+The data loading functions (`load_training_data_lmarena` and `load_training_data_chatbot_arena`) handle these format differences automatically.
 
 ### Parsing Steps
 1. **Text Extraction**: Content arrays are flattened into plain text strings by extracting all items with `type="text"`.
@@ -50,12 +58,38 @@ Train/validation splitting happens *after* preprocessing on the preprocessed pai
 **Preprocessor Version**: The preprocessor version (currently "v2") is included in the cache key. When new features are added or preprocessing logic changes, the version should be incremented to invalidate old cached data.
 
 ## Usage
-To load data:
+
+### Loading Data Programmatically
+To load data from specific datasets:
 ```python
-from src.data_loading import load_training_data
+from src.data_loading import load_training_data_lmarena, load_training_data_chatbot_arena
 import datasets
 
-dataset = datasets.load_dataset("lmarena-ai/arena-human-preference-140k")
-df = dataset["train"].to_pandas()
-training_data = load_training_data(df)
+# Load lmarena dataset
+lmarena_dataset = datasets.load_dataset("lmarena-ai/arena-human-preference-140k")
+lmarena_data = load_training_data_lmarena(lmarena_dataset["train"].to_pandas())
+
+# Load chatbot_arena dataset
+chatbot_dataset = datasets.load_dataset("lmsys/chatbot_arena_conversations")
+chatbot_data = load_training_data_chatbot_arena(chatbot_dataset["train"].to_pandas())
 ```
+
+### CLI Configuration
+When using the training CLI, specify the dataset in the `data` section of your training specification JSON:
+
+```json
+{
+  "data": {
+    "dataset": "lmarena_human_preference",  // or "chatbot_arena" or "both"
+    "max_samples": 10000,
+    "validation_split": 0.2,
+    "seed": 42
+  },
+  ...
+}
+```
+
+Available dataset options:
+- `"lmarena_human_preference"` (default): Uses only the lmarena-ai/arena-human-preference-140k dataset
+- `"chatbot_arena"`: Uses only the lmsys/chatbot_arena_conversations dataset
+- `"both"`: Combines both datasets into a single training set

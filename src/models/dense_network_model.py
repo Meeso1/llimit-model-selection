@@ -316,8 +316,8 @@ class DenseNetworkModel(ModelBase):
         )
         model.network.load_state_dict(
             state_dict["network_state_dict"], 
-            map_location=model.device,
         )
+        model.network.to(model.device)
         
         model._history_entries = state_dict["history_entries"]
         

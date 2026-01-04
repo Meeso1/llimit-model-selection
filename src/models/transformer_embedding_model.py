@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader, Dataset
 from collections import Counter
 from transformers import AutoModel, AutoTokenizer
 from pydantic import TypeAdapter
-from peft import LoraConfig, get_peft_model
+from transformers.modeling_outputs import BaseModelOutputWithPast
 
 from src.models.model_base import ModelBase
 from src.data_models.data_models import TrainingData, InputData, OutputData
@@ -25,7 +25,6 @@ from src.models.finetuning_specs.finetuning_spec_union import FineTuningSpec
 from src.models.finetuning_specs.lora_spec import LoraSpec
 from src.models.optimizers.adamw_spec import AdamWSpec
 from src.preprocessing.transformer_embedding_preprocessor import TransformerEmbeddingPreprocessor
-from src.utils.string_encoder import StringEncoder
 from src.utils.training_history import TrainingHistory, TrainingHistoryEntry
 from src.utils.wandb_details import WandbDetails
 from src.utils.timer import Timer
@@ -33,6 +32,7 @@ from src.utils.accuracy import compute_pairwise_accuracy
 from src.utils.data_split import ValidationSplit, split_transformer_embedding_preprocessed_data
 from src.models.optimizers.optimizer_spec import OptimizerSpecification
 from src.models.finetuning_specs.finetuning_spec import FineTuningSpecification
+from src.utils.transformer_pooling_utils import detect_pooling_method, pool_embeddings, PoolingMethod
 
 
 class TransformerEmbeddingModel(ModelBase):
@@ -86,6 +86,7 @@ class TransformerEmbeddingModel(ModelBase):
         self._network: TransformerEmbeddingModel._TransformerNetwork | None = None
         self._tokenizer: AutoTokenizer | None = None
         self._history_entries: list[TrainingHistoryEntry] = []
+        self._pooling_method: PoolingMethod | None = None
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
@@ -118,6 +119,11 @@ class TransformerEmbeddingModel(ModelBase):
     ) -> None:
         self._prompt_features_dim = prompt_features_dim
         self._tokenizer = AutoTokenizer.from_pretrained(self.transformer_model_name)
+        self._pooling_method = detect_pooling_method(self.transformer_model_name)
+        
+        if self.print_every is not None:
+            print(f"Detected pooling method for {self.transformer_model_name}: {self._pooling_method}")
+        
         self._network = self._TransformerNetwork(
             transformer_model_name=self.transformer_model_name,
             prompt_features_dim=prompt_features_dim,
@@ -125,6 +131,8 @@ class TransformerEmbeddingModel(ModelBase):
             finetuning_spec=self.finetuning_spec,
             hidden_dims=self.hidden_dims,
             dropout=self.dropout,
+            pooling_method=self._pooling_method,
+            quiet=self.print_every is None,
         ).to(self.device)
 
     def get_config_for_wandb(self) -> dict[str, Any]:
@@ -384,8 +392,8 @@ class TransformerEmbeddingModel(ModelBase):
         )
         model.network.load_state_dict(
             state_dict["network_state_dict"], 
-            map_location=model.device,
         )
+        model.network.to(model.device)
         
         model._history_entries = state_dict["history_entries"]
         
@@ -686,8 +694,12 @@ class TransformerEmbeddingModel(ModelBase):
             finetuning_spec: FineTuningSpec,
             hidden_dims: list[int],
             dropout: float,
+            pooling_method: PoolingMethod,
+            quiet: bool = False,
         ) -> None:
             super().__init__()
+            
+            self.pooling_method = pooling_method
             
             quantization_config = finetuning_spec.get_quantization_config()
             if quantization_config is not None:
@@ -701,7 +713,7 @@ class TransformerEmbeddingModel(ModelBase):
             
             transformer_hidden_size: int = self.transformer.config.hidden_size
             
-            self.transformer = finetuning_spec.apply_to_model(self.transformer)
+            self.transformer = finetuning_spec.apply_to_model(self.transformer, quiet=quiet)
             
             # Build configurable scoring head
             layers = []
@@ -724,14 +736,16 @@ class TransformerEmbeddingModel(ModelBase):
             prompt_features: torch.Tensor,  # [batch_size, prompt_features_dim]
             model_embedding: torch.Tensor,  # [batch_size, model_embedding_dim]
         ) -> torch.Tensor:
-            # Get transformer output
-            outputs = self.transformer(
+            outputs: BaseModelOutputWithPast = self.transformer(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
             )
             
-            # Use [CLS] token embedding (first token)
-            prompt_embedding = outputs.last_hidden_state[:, 0, :]  # [batch_size, transformer_hidden_size]
+            prompt_embedding = pool_embeddings(
+                outputs.last_hidden_state,  # [batch_size, seq_len, transformer_hidden_size]
+                attention_mask,  # [batch_size, seq_len]
+                self.pooling_method,
+            )  # [batch_size, transformer_hidden_size]
             
             combined = torch.cat([prompt_embedding, prompt_features, model_embedding], dim=1)  # [batch_size, combined_dim]
             output: torch.Tensor = self.scoring_head(combined)  # [batch_size, 1]

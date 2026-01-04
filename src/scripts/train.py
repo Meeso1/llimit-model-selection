@@ -56,7 +56,7 @@ def train(spec: TrainingSpecification) -> None:
 
     model = _create_starting_model(spec)
 
-    training_data = _load_lmarena_human_preference()
+    training_data = _load_training_data(spec.data.dataset)
     if spec.data.max_samples is not None:
         downsampled = data_split.downsample(training_data, spec.data.max_samples, spec.data.seed)
         print(f"Downsampled data size: {len(downsampled.entries)}")
@@ -280,9 +280,43 @@ def _create_starting_transformer_embedding(training_spec: TrainingSpecification)
     )
 
 
+def _load_training_data(dataset_type: str) -> TrainingData:
+    """
+    Load training data based on the specified dataset type.
+    
+    Args:
+        dataset_type: One of 'lmarena', 'chatbot_arena', or 'both'
+    
+    Returns:
+        TrainingData instance with loaded entries
+    """
+    match dataset_type:
+        case "lmarena_human_preference":
+            return _load_lmarena_human_preference()
+        case "chatbot_arena":
+            return _load_chatbot_arena()
+        case "both":
+            lmarena_data = _load_lmarena_human_preference()
+            chatbot_arena_data = _load_chatbot_arena()
+            combined_entries = lmarena_data.entries + chatbot_arena_data.entries
+            print(f"Successfully loaded {len(combined_entries)} entries total (lmarena: {len(lmarena_data.entries)}, chatbot_arena: {len(chatbot_arena_data.entries)})")
+            return TrainingData(entries=combined_entries)
+        case _:
+            raise ValueError(f"Unknown dataset type: {dataset_type}")
+
+
 def _load_lmarena_human_preference() -> TrainingData:
+    """Load data from lmarena-ai/arena-human-preference-140k dataset."""
     dataset = datasets.load_dataset("lmarena-ai/arena-human-preference-140k")
     training_data = data_loading.load_training_data_lmarena(dataset["train"].to_pandas())
-    print(f"Successfully loaded {len(training_data.entries)} entries")
+    print(f"Successfully loaded {len(training_data.entries)} entries from lmarena_human_preference dataset")
+    return training_data
+
+
+def _load_chatbot_arena() -> TrainingData:
+    """Load data from lmsys/chatbot_arena_conversations dataset."""
+    dataset = datasets.load_dataset("lmsys/chatbot_arena_conversations")
+    training_data = data_loading.load_training_data_chatbot_arena(dataset["train"].to_pandas())
+    print(f"Successfully loaded {len(training_data.entries)} entries from chatbot_arena dataset")
     return training_data
 

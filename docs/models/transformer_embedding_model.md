@@ -23,7 +23,10 @@ The model consists of three main components:
 #### 2. Transformer Encoder
 - Pre-trained transformer model (e.g., `sentence-transformers/all-MiniLM-L12-v2`)
 - Tokenizes and encodes prompts into dense representations
-- Uses [CLS] token embedding as the prompt representation
+- **Automatically detects the appropriate pooling method** for the model:
+  - **Mean pooling**: Averages all token embeddings (most common for sentence transformers)
+  - **CLS token**: Uses the [CLS] token embedding (for BERT-style models)
+  - **Last token**: Uses the final token (for decoder-only models)
 - Supports various fine-tuning methods:
   - **LoRA**: Low-rank adaptation (most parameter-efficient)
   - **QLoRA**: Quantized LoRA (even more memory efficient)
@@ -206,11 +209,21 @@ scores = loaded_model.predict(input_data, batch_size=32)
 - **Last layers**: Medium (trains ~10-30% of parameters)
 - **Full fine-tuning**: Slow (trains all parameters)
 
+### Pooling Method
+The model automatically detects the correct pooling strategy from the transformer's configuration:
+- **Mean pooling** is used for most sentence-transformer models (BGE, MiniLM, MPNet, E5)
+- **CLS token** is used for classification-trained BERT models
+- **Last token** is used for decoder-only/causal models
+- Falls back to mean pooling if detection fails (safest default)
+
+This ensures optimal performance across different transformer architectures.
+
 ### Recommendations
 - Start with LoRA (rank=16, alpha=32) for most tasks
 - Use QLoRA if memory is limited
 - Use higher ranks (32-64) for more complex tasks
 - Use full fine-tuning only with large datasets (>100K samples)
+- Prefer sentence-transformer models (e.g., `all-mpnet-base-v2`, `bge-base-en-v1.5`) for best embedding quality
 
 ## Validation
 
@@ -236,6 +249,7 @@ Scores are constrained to [-1, 1] range using `tanh` activation.
 ## Related Files
 
 - Implementation: `src/models/transformer_embedding_model.py`
+- Pooling utilities: `src/utils/transformer_pooling_utils.py`
 - Data types: `src/data_models/transformer_embedding_types.py`
 - Preprocessor: `src/preprocessing/transformer_embedding_preprocessor.py`
 - Training specs: `training_specs/transformer_embedding_*.json`

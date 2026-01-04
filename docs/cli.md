@@ -49,6 +49,7 @@ The training specification is a JSON file with the following structure:
     }
   },
   "data": {
+    "dataset": "lmarena_human_preference",
     "max_samples": 10000,
     "valiation_split": 0.2,
     "seed": 42
@@ -99,6 +100,7 @@ The training specification is a JSON file with the following structure:
   - See `training_specs/` directory for examples of each model type
 
 **data**: Data configuration
+- `dataset`: Dataset to use - one of: `"lmarena_human_preference"` (default), `"chatbot_arena"`, or `"both"` (combines both datasets)
 - `max_samples`: Maximum number of samples to use (dataset will be downsampled)
 - `valiation_split`: Fraction of data to use for validation (between 0 and 1)
 - `seed`: Random seed for reproducibility
@@ -190,6 +192,7 @@ For `transformer_embedding` models, the `finetuning_spec` field specifies how to
     }
   },
   "data": {
+    "dataset": "lmarena_human_preference",
     "max_samples": 50000,
     "valiation_split": 0.15,
     "seed": 42
@@ -207,6 +210,7 @@ For `transformer_embedding` models, the `finetuning_spec` field specifies how to
 ```json
 {
   "data": {
+    "dataset": "lmarena_human_preference",
     "max_samples": null,
     "validation_split": 0.2,
     "seed": 42

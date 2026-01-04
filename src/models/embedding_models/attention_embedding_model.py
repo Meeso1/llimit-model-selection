@@ -24,6 +24,7 @@ from src.models.optimizers.adamw_spec import AdamWSpec
 from src.utils.data_split import ValidationSplit, split_attention_embedding_preprocessed_data
 from src.utils.accuracy import compute_embedding_accuracy
 from src.utils.timer import Timer
+from src.utils.best_model_tracker import BestModelTracker
 
 
 class PairEncoder(nn.Module):
@@ -330,6 +331,7 @@ class AttentionEmbeddingModel(EmbeddingModelBase):
         self._model_embeddings: dict[str, np.ndarray] | None = None
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self._best_model_tracker = BestModelTracker()
         self.last_timer: Timer | None = None
     
     @property
@@ -443,9 +445,28 @@ class AttentionEmbeddingModel(EmbeddingModelBase):
                     self._epoch_logs.append(epoch_log)
                         
                     self._log_epoch_result(epoch_log)
+                    
+                    accuracy_to_track = val_universal_accuracy if val_universal_accuracy is not None else train_universal_accuracy
+                    self._best_model_tracker.record_state(
+                        accuracy=accuracy_to_track,
+                        module_dict={
+                            'pair_encoder': self._pair_encoder.state_dict(),
+                            'set_aggregator': self._set_aggregator.state_dict(),
+                        },
+                        epoch=epoch
+                    )
                         
                     if scheduler is not None:
                         scheduler.step()
+            
+            # Revert to best model parameters if available
+            best_state, best_epoch = self._best_model_tracker.get_best_state()
+            if best_state is not None:
+                accuracy_type = "val" if validation_split.val_fraction > 0 else "train"
+                print(f"\nReverting to best model parameters from epoch {best_epoch} "
+                      f"({accuracy_type}_accuracy={self._best_model_tracker.best_accuracy:.4f})")
+                self._pair_encoder.load_state_dict(best_state['pair_encoder'])
+                self._set_aggregator.load_state_dict(best_state['set_aggregator'])
             
             # Compute final embeddings for all models
             with Timer("compute_model_embeddings", verbosity="start+end", parent=train_timer):
@@ -966,8 +987,8 @@ class AttentionEmbeddingModel(EmbeddingModelBase):
         ).to(model.device)
         model._pair_encoder.load_state_dict(
             state_dict["pair_encoder_state"],
-            map_location=model.device
         )
+        model._pair_encoder.to(model.device)
         
         model._set_aggregator = SetAggregator(
             h_pair=model.h_pair,
@@ -976,8 +997,8 @@ class AttentionEmbeddingModel(EmbeddingModelBase):
         ).to(model.device)
         model._set_aggregator.load_state_dict(
             state_dict["set_aggregator_state"],
-            map_location=model.device,
         )
+        model._set_aggregator.to(model.device)
         
         # Load epoch logs and embeddings
         model._epoch_logs = state_dict["epoch_logs"]

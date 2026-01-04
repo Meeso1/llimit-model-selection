@@ -1,7 +1,11 @@
+from typing import Literal
 from pydantic import BaseModel, Field, model_validator
 
 from src.scripts.model_types import ModelSpec
 from src.utils.wandb_details import WandbDetails
+
+
+DatasetType = Literal["lmarena_human_preference", "chatbot_arena", "both"]
 
 
 class WandbDetailsSpecification(BaseModel):
@@ -42,6 +46,10 @@ class ModelSpecification(BaseModel):
 
 
 class DataSpecification(BaseModel):
+    dataset: DatasetType = Field(
+        default="lmarena_human_preference",
+        description="Dataset to use: 'lmarena_human_preference', 'chatbot_arena', or 'both' (combines both datasets)",
+    )
     max_samples: int | None = Field(default=None, description="Sample dataset to this size before preprocessing etc. (use provided seed)")
     validation_split: float = Field(description="Data fraction to use as validation set")
     seed: int

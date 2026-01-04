@@ -450,8 +450,8 @@ class TripletFrozenEncoderModel(TripletModelBase[TripletEmbedding]):
         model._initialize_module(state_dict["input_dim"])
         model._module.load_state_dict(
             state_dict["module_state_dict"],
-            map_location=model.device,
         )
+        model._module.to(model.device)
         model._model_embeddings = state_dict["model_embeddings"]
         model._epoch_logs = state_dict["epoch_logs"]
         
