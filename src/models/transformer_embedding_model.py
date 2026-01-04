@@ -49,6 +49,7 @@ class TransformerEmbeddingModel(ModelBase):
         load_embedding_model_from: str | None = None,
         min_model_comparisons: int = 20,
         embedding_model_epochs: int = 10,
+        scoring_head_lr_multiplier: float = 1.0,
         wandb_details: WandbDetails | None = None,
         print_every: int | None = None,
         seed: int = 42,
@@ -68,6 +69,7 @@ class TransformerEmbeddingModel(ModelBase):
         self.print_every = print_every
         self.min_model_comparisons = min_model_comparisons
         self.embedding_model_epochs = embedding_model_epochs
+        self.scoring_head_lr_multiplier = scoring_head_lr_multiplier
         self.seed = seed
         
         self.embedding_spec = embedding_spec
@@ -153,6 +155,7 @@ class TransformerEmbeddingModel(ModelBase):
             "embedding_spec": self.embedding_spec.model_dump(),
             "min_model_comparisons": self.min_model_comparisons,
             "embedding_model_epochs": self.embedding_model_epochs,
+            "scoring_head_lr_multiplier": self.scoring_head_lr_multiplier,
         }
 
     def train(
@@ -211,8 +214,13 @@ class TransformerEmbeddingModel(ModelBase):
             with Timer("prepare_dataloaders", verbosity="start+end", parent=train_timer):
                 dataloader = self._prepare_dataloader(preprocessed_train, batch_size, use_balancing=True)
                 val_dataloader = self._prepare_dataloader(preprocessed_val, batch_size, use_balancing=False) if preprocessed_val is not None else None
-                
-            optimizer = self.optimizer_spec.create_optimizer(self.network)
+            
+            optimizer = self.optimizer_spec.create_optimizer(
+                self.network,
+                lr_multipliers={
+                    self.network.scoring_head: self.scoring_head_lr_multiplier,
+                },
+            )
             scheduler = self.optimizer_spec.create_scheduler(optimizer)
             
             # MarginRankingLoss: loss = max(0, -label * (score_a - score_b) + margin)
@@ -343,6 +351,7 @@ class TransformerEmbeddingModel(ModelBase):
             "embedding_model_epochs": self.embedding_model_epochs,
             "embedding_model_state_dict": self.embedding_model.get_state_dict(),
             "seed": self.seed,
+            "scoring_head_lr_multiplier": self.scoring_head_lr_multiplier,
         }
 
     @classmethod
@@ -381,6 +390,7 @@ class TransformerEmbeddingModel(ModelBase):
             embedding_spec=embedding_spec,
             min_model_comparisons=state_dict["min_model_comparisons"],
             embedding_model_epochs=state_dict["embedding_model_epochs"],
+            scoring_head_lr_multiplier=state_dict.get("scoring_head_lr_multiplier", 1.0),
             print_every=state_dict["print_every"],
             seed=state_dict["seed"],
         )

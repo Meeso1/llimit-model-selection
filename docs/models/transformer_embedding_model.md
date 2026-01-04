@@ -136,10 +136,16 @@ The model supports weighted sampling to handle imbalanced model representation:
 
 ### Optimizer
 - `optimizer_spec`: Optimizer configuration (AdamW, Adam, or Muon)
+- `scoring_head_lr_multiplier`: Learning rate multiplier for the scoring head (default: 1.0)
+  - The scoring head (newly initialized) often benefits from a higher learning rate than the fine-tuned transformer
+  - Typical values: 1.0-10.0 (e.g., 5.0 means scoring head trains 5x faster)
+  - Internally converted to module-based LR multiplier and passed to optimizer
+  - Can be combined with any optimizer (AdamW, Adam, Muon)
 - Typical learning rates:
-  - LoRA/QLoRA: 1e-4 to 5e-4
-  - Last layers: 1e-5 to 1e-4
-  - Full fine-tuning: 1e-5 to 5e-5
+  - **Transformer (LoRA/QLoRA)**: 1e-4 to 5e-4
+  - **Transformer (Last layers)**: 1e-5 to 1e-4
+  - **Transformer (Full fine-tuning)**: 1e-5 to 5e-5
+  - **Scoring head**: Base LR × multiplier (e.g., 1e-4 × 5.0 = 5e-4)
 
 ### Embedding Model
 - `embedding_spec`: Configuration for the model embedding component
@@ -181,6 +187,7 @@ model = TransformerEmbeddingModel(
     ),
     min_model_comparisons=1000,
     embedding_model_epochs=10,
+    scoring_head_lr_multiplier=5.0,
     seed=42,
 )
 

@@ -274,6 +274,7 @@ def _create_starting_transformer_embedding(training_spec: TrainingSpecification)
         load_embedding_model_from=model_spec.load_embedding_model_from,
         min_model_comparisons=model_spec.min_model_comparisons,
         embedding_model_epochs=model_spec.embedding_model_epochs,
+        scoring_head_lr_multiplier=model_spec.scoring_head_lr_multiplier,
         wandb_details=training_spec.wandb.to_wandb_details() if training_spec.wandb is not None else None,
         print_every=training_spec.log.print_every,
         seed=model_spec.seed,

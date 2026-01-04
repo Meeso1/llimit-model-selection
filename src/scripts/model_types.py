@@ -97,6 +97,7 @@ class TransformerEmbeddingSpecification(ModelSpecBase):
     load_embedding_model_from: str | None = None
     min_model_comparisons: int = 20
     embedding_model_epochs: int = 10
+    scoring_head_lr_multiplier: float = 1.0
     seed: int = 42
 
 

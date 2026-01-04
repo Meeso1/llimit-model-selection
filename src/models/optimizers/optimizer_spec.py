@@ -22,25 +22,37 @@ class OptimizerSpecification(BaseModel):
     learning_rate: float
     lr_decay_gamma: float | None = None
 
-    def create_optimizer(self, model: nn.Module) -> optim.Optimizer:
+    def create_optimizer(
+        self,
+        model: nn.Module,
+        lr_multipliers: dict[nn.Module, float] | None = None,
+    ) -> optim.Optimizer:
         """
         Create an optimizer instance for the given model.
         
         Args:
             model: PyTorch model to optimize
+            lr_multipliers: Optional dict mapping specific modules to learning rate multipliers.
+                          For example, {model.scoring_head: 5.0} would give the scoring head
+                          a learning rate 5x higher than the base learning rate.
             
         Returns:
             Configured optimizer instance
         """
-        return self.create_optimizer_for_multiple([model])
+        return self.create_optimizer_for_multiple([model], lr_multipliers)
     
     @abstractmethod
-    def create_optimizer_for_multiple(self, models: list[nn.Module]) -> optim.Optimizer:
+    def create_optimizer_for_multiple(
+        self,
+        models: list[nn.Module],
+        lr_multipliers: dict[nn.Module, float] | None = None,
+    ) -> optim.Optimizer:
         """
         Create an optimizer instance for the given models.
         
         Args:
             models: List of PyTorch models to optimize
+            lr_multipliers: Optional dict mapping specific modules to learning rate multipliers
             
         Returns:
             Configured optimizer instance
