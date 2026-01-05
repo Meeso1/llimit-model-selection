@@ -147,6 +147,13 @@ optimizer_spec = MuonSpec(
 
 **Requirements:** PyTorch 2.4+ (torch.optim.Muon is built-in)
 
+**Implementation Details:**
+- Inherits from `torch.optim.Optimizer` for full PyTorch integration
+- Creates two internal optimizers: `torch.optim.Muon` and `torch.optim.AdamW`
+- Automatically syncs learning rate changes from schedulers to internal optimizers
+- Fully compatible with PyTorch LR schedulers (e.g., `ExponentialLR`, `CosineAnnealingLR`)
+- Properly implements `step()`, `zero_grad()`, `state_dict()`, and `load_state_dict()`
+
 **Note:** 
 - Best suited for transformer-based models with ≥2D weight matrices
 - Supports optimizing parameters from multiple models simultaneously

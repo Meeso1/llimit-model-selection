@@ -1,11 +1,12 @@
 """Hybrid optimizer that combines Muon (for ≥2D params) with AdamW (for other params)."""
 
 from typing import Any
+import torch
 import torch.nn as nn
 import torch.optim as optim
 
 
-class HybridMuonOptimizer:
+class HybridMuonOptimizer(optim.Optimizer):
     """
     Hybrid optimizer that uses Muon for ≥2D transformer parameters
     and AdamW for everything else (biases, norms, scoring head).
@@ -15,6 +16,9 @@ class HybridMuonOptimizer:
     components (e.g., pre-trained vs newly initialized).
     
     Supports optimizing parameters from multiple models simultaneously.
+    
+    Inherits from torch.optim.Optimizer to properly work with LR schedulers
+    and other PyTorch optimization tooling.
     """
     
     def __init__(
@@ -76,7 +80,7 @@ class HybridMuonOptimizer:
         
         # Create Muon optimizer using torch.optim.Muon
         if len(muon_params) > 0:
-            self.muon: optim.Optimizer | None = optim.Muon(
+            self._muon: optim.Optimizer | None = optim.Muon(
                 muon_params,
                 lr=muon_lr,
                 momentum=muon_momentum,
@@ -84,7 +88,7 @@ class HybridMuonOptimizer:
             )
             print(f"Muon optimizer: {len(muon_params)} parameters (≥2D transformer weights) @ lr={muon_lr}")
         else:
-            self.muon = None
+            self._muon = None
         
         # Create AdamW with parameter groups for different learning rates
         if len(adamw_lr_to_params) > 0:
@@ -93,7 +97,7 @@ class HybridMuonOptimizer:
                 for lr, params in sorted(adamw_lr_to_params.items())
             ]
             
-            self.adamw: optim.Optimizer = optim.AdamW(
+            self._adamw: optim.Optimizer = optim.AdamW(
                 adamw_param_groups,
                 betas=adamw_betas,
                 weight_decay=adamw_weight_decay,
@@ -108,33 +112,92 @@ class HybridMuonOptimizer:
                     print(f"  - {len(params)} parameters @ lr={lr:.6f} (multiplier={multiplier:.1f})")
         else:
             # Shouldn't happen, but create empty optimizer as fallback
-            self.adamw = optim.AdamW([], lr=adamw_lr)
+            self._adamw = optim.AdamW([], lr=adamw_lr)
+        
+        # Collect all param groups for the parent Optimizer class
+        # We need to initialize the parent with all parameters
+        param_groups = []
+        if self._muon is not None:
+            param_groups.extend(self._muon.param_groups)
+        param_groups.extend(self._adamw.param_groups)
+        
+        # Set defaults (used by parent class)
+        defaults = {
+            'lr': adamw_lr,  # Default LR (most params use AdamW)
+        }
+        
+        # Initialize parent Optimizer class
+        # We pass the param groups directly since we've already created them
+        super().__init__(param_groups, defaults)
     
-    def step(self) -> None:
+    def _sync_lr_to_internal_optimizers(self) -> None:
+        """
+        Sync learning rates from self.param_groups (managed by parent/schedulers)
+        to internal optimizers' param_groups.
+        """
+        # Sync LR changes from parent param_groups to internal optimizers
+        muon_groups_count = len(self._muon.param_groups) if self._muon is not None else 0
+        
+        for i, group in enumerate(self.param_groups):
+            if i < muon_groups_count:
+                # This is a Muon param group
+                self._muon.param_groups[i]['lr'] = group['lr']
+            else:
+                # This is an AdamW param group
+                adamw_idx = i - muon_groups_count
+                self._adamw.param_groups[adamw_idx]['lr'] = group['lr']
+    
+    def step(self, closure=None) -> None:
         """Perform optimization step for both optimizers."""
-        if self.muon is not None:
-            self.muon.step()
-        self.adamw.step()
+        # Sync learning rates from parent param_groups to internal optimizers
+        # (LR schedulers modify parent's param_groups)
+        self._sync_lr_to_internal_optimizers()
+        
+        # Perform optimization step on both internal optimizers
+        if self._muon is not None:
+            self._muon.step()
+        self._adamw.step()
+        
+        # Handle closure if provided (required by Optimizer interface)
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+        return loss
     
-    def zero_grad(self, set_to_none: bool = False) -> None:
+    def zero_grad(self, set_to_none: bool = True) -> None:
         """Zero gradients for both optimizers."""
-        if self.muon is not None:
-            self.muon.zero_grad(set_to_none=set_to_none)
-        self.adamw.zero_grad(set_to_none=set_to_none)
+        if self._muon is not None:
+            self._muon.zero_grad(set_to_none=set_to_none)
+        self._adamw.zero_grad(set_to_none=set_to_none)
     
     def state_dict(self) -> dict[str, Any]:
         """Return state dictionary containing both optimizer states."""
-        state = {
-            'adamw': self.adamw.state_dict(),
+        # Get parent state dict (includes param_groups and state)
+        parent_state = super().state_dict()
+        
+        # Add internal optimizer states for full recovery
+        parent_state['_internal_optimizers'] = {
+            'adamw': self._adamw.state_dict(),
         }
-        if self.muon is not None:
-            state['muon'] = self.muon.state_dict()
-        return state
+        if self._muon is not None:
+            parent_state['_internal_optimizers']['muon'] = self._muon.state_dict()
+        
+        return parent_state
     
     def load_state_dict(self, state_dict: dict[str, Any]) -> None:
         """Load state dictionary for both optimizers."""
-        if 'adamw' in state_dict:
-            self.adamw.load_state_dict(state_dict['adamw'])
-        if self.muon is not None and 'muon' in state_dict:
-            self.muon.load_state_dict(state_dict['muon'])
+        # Load parent state (param_groups and state)
+        super().load_state_dict(state_dict)
+        
+        # Load internal optimizer states if available
+        if '_internal_optimizers' in state_dict:
+            internal = state_dict['_internal_optimizers']
+            if 'adamw' in internal:
+                self._adamw.load_state_dict(internal['adamw'])
+            if self._muon is not None and 'muon' in internal:
+                self._muon.load_state_dict(internal['muon'])
+        
+        # Sync LRs to internal optimizers
+        self._sync_lr_to_internal_optimizers()
 
