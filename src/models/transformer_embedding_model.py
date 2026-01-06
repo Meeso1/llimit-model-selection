@@ -401,7 +401,8 @@ class TransformerEmbeddingModel(ModelBase):
             prompt_features_dim=state_dict["prompt_features_dim"],
         )
         model.network.load_state_dict(
-            state_dict["network_state_dict"], 
+            state_dict["network_state_dict"],
+            strict=False,
         )
         model.network.to(model.device)
         
