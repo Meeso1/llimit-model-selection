@@ -52,6 +52,8 @@ class TransformerEmbeddingModel(ModelBase):
         scoring_head_lr_multiplier: float = 1.0,
         wandb_details: WandbDetails | None = None,
         print_every: int | None = None,
+        save_every: int | None = None,
+        checkpoint_name: str | None = None,
         seed: int = 42,
     ) -> None:
         super().__init__(wandb_details)
@@ -67,17 +69,15 @@ class TransformerEmbeddingModel(ModelBase):
         self.optimizer_spec = optimizer_spec if optimizer_spec is not None else AdamWSpec(learning_rate=0.0001)
         self.balance_model_samples = balance_model_samples
         self.print_every = print_every
+        self.save_every = save_every
+        self.checkpoint_name = checkpoint_name or "transformer-embedding-model"
         self.min_model_comparisons = min_model_comparisons
         self.embedding_model_epochs = embedding_model_epochs
         self.scoring_head_lr_multiplier = scoring_head_lr_multiplier
         self.seed = seed
         
         self.embedding_spec = embedding_spec
-        self.embedding_model = self.embedding_spec.create_model(
-            min_model_comparisons=min_model_comparisons,
-            preprocessor_seed=seed,
-            print_every=print_every,
-        ) if embedding_spec is not None else None
+        self.embedding_model: EmbeddingModelBase | None = None
         
         self.preprocessor = TransformerEmbeddingPreprocessor(
             min_model_comparisons=min_model_comparisons,
@@ -89,6 +89,9 @@ class TransformerEmbeddingModel(ModelBase):
         self._tokenizer: AutoTokenizer | None = None
         self._history_entries: list[TrainingHistoryEntry] = []
         self._pooling_method: PoolingMethod | None = None
+        self._optimizer_state: dict[str, Any] | None = None
+        self._scheduler_state: dict[str, Any] | None = None
+        self._epochs_completed: int = 0
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
@@ -168,14 +171,29 @@ class TransformerEmbeddingModel(ModelBase):
         with Timer("train", verbosity="start+end") as train_timer:
             self.last_timer = train_timer
             
+            with Timer("init_or_load_embedding_model", verbosity="start+end", parent=train_timer):
+                if self.embedding_model is None:
+                    if self._embedding_model_source is not None:
+                        self._load_embedding_model_from_source()
+                    elif self.embedding_spec is not None:
+                        self.embedding_model = self.embedding_spec.create_model(
+                            min_model_comparisons=self.min_model_comparisons,
+                            preprocessor_seed=self.seed,
+                            print_every=self.print_every,
+                        )
+                    else:
+                        raise RuntimeError("No embedding model available and no way to create one")
+            
             with Timer("train_embedding_model", verbosity="start+end", parent=train_timer):
-                if not self._load_embedding_model_if_specified():
+                if not self.embedding_model.is_initialized:
                     self.embedding_model.train(
                         data, 
                         validation_split=validation_split, 
                         epochs=self.embedding_model_epochs, 
                         batch_size=batch_size,
                     )
+                elif self.print_every is not None:
+                    print("Embedding model is already trained")
             
             with Timer("preprocess", verbosity="start+end", parent=train_timer):
                 preprocessed_data = self.preprocessor.preprocess(data)
@@ -215,13 +233,7 @@ class TransformerEmbeddingModel(ModelBase):
                 dataloader = self._prepare_dataloader(preprocessed_train, batch_size, use_balancing=True)
                 val_dataloader = self._prepare_dataloader(preprocessed_val, batch_size, use_balancing=False) if preprocessed_val is not None else None
             
-            optimizer = self.optimizer_spec.create_optimizer(
-                self.network,
-                lr_multipliers={
-                    self.network.scoring_head: self.scoring_head_lr_multiplier,
-                },
-            )
-            scheduler = self.optimizer_spec.create_scheduler(optimizer)
+            optimizer, scheduler = self._create_optimizer_and_scheduler()
             
             # MarginRankingLoss: loss = max(0, -label * (score_a - score_b) + margin)
             # When label=1, we want score_a > score_b
@@ -229,13 +241,23 @@ class TransformerEmbeddingModel(ModelBase):
             criterion = nn.MarginRankingLoss(margin=0.1)
             
             with Timer("epochs", verbosity="start+end", parent=train_timer) as epochs_timer:
-                for epoch in range(1, epochs + 1):
+                for epoch in range(self._epochs_completed + 1, self._epochs_completed + epochs + 1):
                     result = self._train_epoch(epoch, dataloader, val_dataloader, optimizer, criterion, epochs_timer)
                     
                     self._log_epoch_result(result)
                     
                     if scheduler is not None:
                         scheduler.step()
+                    
+                    self._epochs_completed = epoch
+                    
+                    if self.save_every is not None and epoch % self.save_every == 0:
+                        checkpoint_name = f"{self.checkpoint_name}@ep{epoch}"
+                        print(f"Saving checkpoint: {checkpoint_name}")
+                        self.save(checkpoint_name)
+            
+            self._optimizer_state = optimizer.state_dict()
+            self._scheduler_state = scheduler.state_dict() if scheduler is not None else None
             
             self.finish_wandb_if_needed()
 
@@ -338,12 +360,17 @@ class TransformerEmbeddingModel(ModelBase):
             "max_length": self.max_length,
             "optimizer_type": self.optimizer_spec.optimizer_type,
             "optimizer_params": self.optimizer_spec.to_dict(),
+            "optimizer_state": self._optimizer_state,
+            "scheduler_state": self._scheduler_state,
             "balance_model_samples": self.balance_model_samples,
             "print_every": self.print_every,
+            "save_every": self.save_every,
+            "checkpoint_name": self.checkpoint_name,
             "preprocessor_version": self.preprocessor.version,
             "prompt_features_dim": self._prompt_features_dim,
             "network_state_dict": self.network.cpu().state_dict(),
             "history_entries": self._history_entries,
+            "epochs_completed": self._epochs_completed,
             
             "embedding_type": self.embedding_spec.embedding_type,
             "embedding_spec": self.embedding_spec.model_dump(),
@@ -392,6 +419,8 @@ class TransformerEmbeddingModel(ModelBase):
             embedding_model_epochs=state_dict["embedding_model_epochs"],
             scoring_head_lr_multiplier=state_dict.get("scoring_head_lr_multiplier", 1.0),
             print_every=state_dict["print_every"],
+            save_every=state_dict.get("save_every", None),
+            checkpoint_name=state_dict.get("checkpoint_name", None),
             seed=state_dict["seed"],
         )
         
@@ -407,6 +436,9 @@ class TransformerEmbeddingModel(ModelBase):
         model.network.to(model.device)
         
         model._history_entries = state_dict["history_entries"]
+        model._optimizer_state = state_dict.get("optimizer_state")
+        model._scheduler_state = state_dict.get("scheduler_state")
+        model._epochs_completed = state_dict.get("epochs_completed", 0)
         
         return model
 
@@ -469,6 +501,27 @@ class TransformerEmbeddingModel(ModelBase):
             "model_embedding_b": torch.stack([item["model_embedding_b"] for item in batch]),  # [batch_size, model_embedding_dim]
             "labels": torch.stack([item["label"] for item in batch]),  # [batch_size]
         }
+        
+    def _create_optimizer_and_scheduler(self) -> tuple[optim.Optimizer, optim.lr_scheduler._LRScheduler | None]:
+        optimizer = self.optimizer_spec.create_optimizer(
+            self.network,
+            lr_multipliers={
+                self.network.scoring_head: self.scoring_head_lr_multiplier,
+            },
+        )
+        
+        if self._optimizer_state is not None:
+            optimizer.load_state_dict(self._optimizer_state)
+            if self.print_every is not None:
+                print("Restored optimizer state from checkpoint")
+        
+        scheduler = self.optimizer_spec.create_scheduler(optimizer)
+        if scheduler is not None and self._scheduler_state is not None:
+            scheduler.load_state_dict(self._scheduler_state)
+            if self.print_every is not None:
+                print("Restored scheduler state from checkpoint")
+                
+        return optimizer, scheduler
 
     def _create_balanced_sampler(
         self,
@@ -636,16 +689,17 @@ class TransformerEmbeddingModel(ModelBase):
         avg_accuracy = total_accuracy / n_batches
         return avg_loss, avg_accuracy
 
-    def _load_embedding_model_if_specified(self) -> bool:
+    def _load_embedding_model_from_source(self) -> None:
         if self._embedding_model_source is None:
-            return False
+            raise RuntimeError("No embedding model source specified")
 
         loaded: TransformerEmbeddingModel = TransformerEmbeddingModel.load(self._embedding_model_source)
         self.embedding_model = loaded.embedding_model
         self.embedding_spec = loaded.embedding_spec
         self.embedding_model_epochs = loaded.embedding_model_epochs
-
-        return True
+        
+        if self.print_every is not None:
+            print(f"Loaded embedding model from {self._embedding_model_source}")
 
     def _log_epoch_result(self, result: "TransformerEmbeddingModel.EpochResult") -> None:
         if self.print_every is None:

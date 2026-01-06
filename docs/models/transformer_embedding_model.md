@@ -46,7 +46,11 @@ Training happens in two phases:
 
 ### Phase 1: Embedding Model Training
 - Trains embeddings for LLM models
-- Can be skipped if `load_embedding_model_from` is specified
+- The embedding model is **lazy-initialized** at the start of training:
+  - If loading from a saved model, the embedding model is already initialized
+  - If `load_embedding_model_from` is specified, loads the embedding model from that file
+  - Otherwise, creates a new embedding model from `embedding_spec`
+- Training is skipped if the embedding model is already initialized
 - Uses triplet loss or attention-based learning
 - Filters models by minimum number of comparisons
 
@@ -57,6 +61,25 @@ Training happens in two phases:
   loss = max(0, -label * (score_a - score_b) + margin)
   ```
   where `label = 1` means model A should win, `-1` means model B should win
+
+### Training Continuation
+The model fully supports resuming training after being loaded:
+- **Optimizer state**: Saved and restored, preserving momentum and adaptive learning rates
+- **Scheduler state**: Saved and restored, preserving learning rate decay
+- **Epoch tracking**: Tracks completed epochs, new training continues from the next epoch
+- **Embedding model**: Already initialized, skips retraining
+
+Example:
+```python
+# Initial training
+model = TransformerEmbeddingModel(...)
+model.train(data, epochs=10)  # Trains epochs 1-10
+model.save("checkpoint.pkl")
+
+# Resume training later
+loaded = TransformerEmbeddingModel.load("checkpoint.pkl")
+loaded.train(data, epochs=5)  # Trains epochs 11-15
+```
 
 ## Data Format
 
