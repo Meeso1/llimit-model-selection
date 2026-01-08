@@ -18,6 +18,7 @@ from src.utils.training_history import TrainingHistory, TrainingHistoryEntry
 from src.utils.wandb_details import WandbDetails
 from src.utils.string_encoder import StringEncoder
 from src.utils.timer import Timer
+from src.utils.torch_utils import state_dict_to_cpu
 from src.utils.accuracy import compute_pairwise_accuracy
 from src.models.optimizers.optimizer_spec import OptimizerSpecification
 from src.models.optimizers.adamw_spec import AdamWSpec
@@ -213,7 +214,7 @@ class SimpleScoringModel(ModelBase):
             "tie_both_bad_epsilon": self.tie_both_bad_epsilon,
             "non_ranking_loss_coeff": self.non_ranking_loss_coeff,
             "min_model_occurrences": self.min_model_occurrences,
-            "network_state_dict": self.network.cpu().state_dict(),
+            "network_state_dict": state_dict_to_cpu(self.network.state_dict()),
             "model_encoder": self._model_encoder.get_state_dict(),
             "history_entries": self._history_entries,
         }

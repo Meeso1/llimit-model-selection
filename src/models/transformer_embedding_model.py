@@ -28,6 +28,7 @@ from src.preprocessing.transformer_embedding_preprocessor import TransformerEmbe
 from src.utils.training_history import TrainingHistory, TrainingHistoryEntry
 from src.utils.wandb_details import WandbDetails
 from src.utils.timer import Timer
+from src.utils.torch_utils import state_dict_to_cpu
 from src.utils.accuracy import compute_pairwise_accuracy
 from src.utils.data_split import ValidationSplit, split_transformer_embedding_preprocessed_data
 from src.models.optimizers.optimizer_spec import OptimizerSpecification
@@ -123,7 +124,7 @@ class TransformerEmbeddingModel(ModelBase):
         prompt_features_dim: int,
     ) -> None:
         self._prompt_features_dim = prompt_features_dim
-        self._tokenizer = AutoTokenizer.from_pretrained(self.transformer_model_name)
+        self._tokenizer = AutoTokenizer.from_pretrained(self.transformer_model_name, use_fast=("deberta" not in self.transformer_model_name)) # TODO: Fix this - fast tokenizer fails for deberta models
         self._pooling_method = detect_pooling_method(self.transformer_model_name)
         
         if self.print_every is not None:
@@ -368,7 +369,7 @@ class TransformerEmbeddingModel(ModelBase):
             "checkpoint_name": self.checkpoint_name,
             "preprocessor_version": self.preprocessor.version,
             "prompt_features_dim": self._prompt_features_dim,
-            "network_state_dict": self.network.cpu().state_dict(),
+            "network_state_dict": state_dict_to_cpu(self.network.state_dict()),
             "history_entries": self._history_entries,
             "epochs_completed": self._epochs_completed,
             
@@ -700,6 +701,8 @@ class TransformerEmbeddingModel(ModelBase):
         
         if self.print_every is not None:
             print(f"Loaded embedding model from {self._embedding_model_source}")
+            
+        loaded._network.to("cpu")
 
     def _log_epoch_result(self, result: "TransformerEmbeddingModel.EpochResult") -> None:
         if self.print_every is None:

@@ -17,6 +17,7 @@ from src.preprocessing.triplet_frozen_encoder_preprocessor import TripletFrozenE
 from src.utils.accuracy import compute_embedding_accuracy
 from src.utils.data_split import split_preprocessed_behavior_data
 from src.utils.timer import Timer
+from src.utils.torch_utils import state_dict_to_cpu
 from src.models.triplet_model_base import TripletModelBase
 from src.models.optimizers.optimizer_spec import OptimizerSpecification
 from src.models.optimizers.adamw_spec import AdamWSpec
@@ -421,7 +422,7 @@ class TripletFrozenEncoderModel(TripletModelBase[TripletEmbedding]):
             "identity_positive_ratio": self.identity_positive_ratio,
             "preprocessor_seed": self.preprocessor_seed,
             "print_every": self.print_every,
-            "module_state_dict": self._module.cpu().state_dict(),
+            "module_state_dict": state_dict_to_cpu(self._module.state_dict()),
             "epoch_logs": self._epoch_logs,
             "input_dim": self.input_dim,
             "model_embeddings": self.model_embeddings,

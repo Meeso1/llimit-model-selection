@@ -24,6 +24,7 @@ from src.models.optimizers.adamw_spec import AdamWSpec
 from src.utils.data_split import ValidationSplit, split_attention_embedding_preprocessed_data
 from src.utils.accuracy import compute_embedding_accuracy
 from src.utils.timer import Timer
+from src.utils.torch_utils import state_dict_to_cpu
 from src.utils.best_model_tracker import BestModelTracker
 
 
@@ -938,8 +939,8 @@ class AttentionEmbeddingModel(EmbeddingModelBase):
             "print_every": self.print_every,
             "optimizer_type": self.optimizer_spec.optimizer_type,
             "optimizer_params": self.optimizer_spec.to_dict(),
-            "pair_encoder_state": self._pair_encoder.cpu().state_dict(),
-            "set_aggregator_state": self._set_aggregator.cpu().state_dict(),
+            "pair_encoder_state": state_dict_to_cpu(self._pair_encoder.state_dict()),
+            "set_aggregator_state": state_dict_to_cpu(self._set_aggregator.state_dict()),
             "epoch_logs": self._epoch_logs,
             "model_embeddings": self._model_embeddings,
         }

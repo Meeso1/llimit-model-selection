@@ -22,6 +22,7 @@ from src.utils.string_encoder import StringEncoder
 from src.utils.training_history import TrainingHistory, TrainingHistoryEntry
 from src.utils.wandb_details import WandbDetails
 from src.utils.timer import Timer
+from src.utils.torch_utils import state_dict_to_cpu
 from src.utils.accuracy import compute_pairwise_accuracy
 from src.utils.data_split import ValidationSplit, split_dn_embedding_preprocessed_data
 from src.models.optimizers.optimizer_spec import OptimizerSpecification
@@ -317,7 +318,7 @@ class DnEmbeddingModel(ModelBase):
             "preprocessor_version": self.preprocessor.version,
             "prompt_embedding_dim": self._prompt_embedding_dim,
             "prompt_features_dim": self._prompt_features_dim,
-            "network_state_dict": self.network.cpu().state_dict(),
+            "network_state_dict": state_dict_to_cpu(self.network.state_dict()),
             "history_entries": self._history_entries,
             "epochs_completed": self._epochs_completed,
             
