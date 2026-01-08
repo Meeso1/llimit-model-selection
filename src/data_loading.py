@@ -1,7 +1,57 @@
 import pandas as pd
 import numpy as np
 import warnings
-from src.data_models.data_models import TrainingData, EvaluationEntry, EvaluationMessage
+from src.data_models.data_models import (
+    TrainingData, 
+    EvaluationEntry, 
+    EvaluationMessage,
+    CategoryTag,
+    CreativeWritingTag,
+    CriteriaTag,
+    IfTag,
+    MathTag,
+)
+
+
+def _parse_category_tag(category_tag_dict: dict) -> CategoryTag:
+    """
+    Parses a category_tag dictionary into a CategoryTag dataclass.
+    Expects all required fields to be present.
+    """
+    creative_writing_data = category_tag_dict["creative_writing_v0.1"]
+    creative_writing = CreativeWritingTag(
+        creative_writing=creative_writing_data["creative_writing"],
+        score=creative_writing_data["score"]
+    )
+    
+    criteria_data = category_tag_dict["criteria_v0.1"]
+    criteria = CriteriaTag(
+        complexity=criteria_data["complexity"],
+        creativity=criteria_data["creativity"],
+        domain_knowledge=criteria_data["domain_knowledge"],
+        problem_solving=criteria_data["problem_solving"],
+        real_world=criteria_data["real_world"],
+        specificity=criteria_data["specificity"],
+        technical_accuracy=criteria_data["technical_accuracy"]
+    )
+    
+    if_data = category_tag_dict["if_v0.1"]
+    if_tag = IfTag(
+        if_=if_data["if"],
+        score=if_data["score"]
+    )
+    
+    math_data = category_tag_dict["math_v0.1"]
+    math_tag = MathTag(
+        math=math_data["math"]
+    )
+    
+    return CategoryTag(
+        creative_writing_v0_1=creative_writing,
+        criteria_v0_1=criteria,
+        if_v0_1=if_tag,
+        math_v0_1=math_tag
+    )
 
 
 def _extract_text(content: np.ndarray | str, row_id: str) -> str:
@@ -101,6 +151,13 @@ def load_training_data_lmarena(df: pd.DataFrame) -> TrainingData:
             if winner not in ["model_a", "model_b", "tie", "both_bad"]:
                 raise ValueError(f"Row {row_id}: Invalid winner value '{winner}'")
             
+            category_tag = None
+            if "category_tag" in row and pd.notna(row["category_tag"]):
+                try:
+                    category_tag = _parse_category_tag(row["category_tag"])
+                except (KeyError, TypeError) as e:
+                    warnings.warn(f"Row {row_id}: Failed to parse category_tag: {str(e)}", UserWarning)
+            
             entry = EvaluationEntry(
                 model_a=row["model_a"],
                 model_b=row["model_b"],
@@ -111,7 +168,8 @@ def load_training_data_lmarena(df: pd.DataFrame) -> TrainingData:
                 user_prompt=prompt_a,
                 model_a_response=response_a,
                 model_b_response=response_b,
-                timestamp=str(row["timestamp"])
+                timestamp=str(row["timestamp"]),
+                category_tag=category_tag
             )
             entries.append(entry)
             
@@ -168,7 +226,8 @@ def load_training_data_chatbot_arena(df: pd.DataFrame) -> TrainingData:
                 user_prompt=prompt_a,
                 model_a_response=response_a,
                 model_b_response=response_b,
-                timestamp=str(row["tstamp"])
+                timestamp=str(row["tstamp"]),
+                category_tag=None  # Chatbot arena dataset doesn't have category tags
             )
             entries.append(entry)
             

@@ -11,6 +11,42 @@ class EvaluationMessage:
 
 
 @dataclass
+class CreativeWritingTag:
+    creative_writing: bool
+    score: str
+
+
+@dataclass
+class CriteriaTag:
+    complexity: bool
+    creativity: bool
+    domain_knowledge: bool
+    problem_solving: bool
+    real_world: bool
+    specificity: bool
+    technical_accuracy: bool
+
+
+@dataclass
+class IfTag:
+    if_: bool  # 'if' is a Python keyword, so we use 'if_'
+    score: int
+
+
+@dataclass
+class MathTag:
+    math: bool
+
+
+@dataclass
+class CategoryTag:
+    creative_writing_v0_1: CreativeWritingTag
+    criteria_v0_1: CriteriaTag
+    if_v0_1: IfTag
+    math_v0_1: MathTag
+
+
+@dataclass
 class EvaluationEntry:
     model_a: str
     model_b: str
@@ -22,6 +58,7 @@ class EvaluationEntry:
     model_a_response: str
     model_b_response: str
     timestamp: str
+    category_tag: CategoryTag | None = None
 
 
 @dataclass
