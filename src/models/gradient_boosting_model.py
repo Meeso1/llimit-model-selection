@@ -11,17 +11,16 @@ import tempfile
 
 from src.models.model_base import ModelBase
 from src.data_models.data_models import TrainingData, InputData, OutputData
-from src.data_models.dn_embedding_network_types import PreprocessedPromptPair, PreprocessedTrainingData, PromptRoutingOutput
+from src.data_models.gradient_boosting_types import PreprocessedPromptPair, PreprocessedTrainingData, PromptRoutingOutput
 from src.models.embedding_specs.embedding_spec_union import EmbeddingSpec
-from src.models.embedding_specs.frozen_embedding_spec import FrozenEmbeddingSpec
 from src.models.embedding_models.embedding_model_base import EmbeddingModelBase
-from src.models.optimizers.adamw_spec import AdamWSpec
-from src.preprocessing.prompt_embedding_preprocessor import PromptEmbeddingPreprocessor
+from src.preprocessing.prompt_embedding_with_categories_preprocessor import PromptEmbeddingWithCategoriesPreprocessor
 from src.utils.string_encoder import StringEncoder
 from src.utils.training_history import TrainingHistory, TrainingHistoryEntry
 from src.utils.wandb_details import WandbDetails
 from src.utils.timer import Timer
 from src.utils.data_split import ValidationSplit, split_dn_embedding_preprocessed_data
+import warnings
 
 
 def margin_ranking_objective(preds: np.ndarray, dtrain: xgb.DMatrix) -> tuple[np.ndarray, np.ndarray]:
@@ -141,6 +140,8 @@ class GradientBoostingModel(ModelBase):
         colsample_bytree: float = 1.0,
         reg_alpha: float = 0.0,
         reg_lambda: float = 1.0,
+        use_prompt_embeddings: bool = True,
+        use_prompt_categories: bool = False,
         balance_model_samples: bool = True,
         embedding_model_name: str = "all-MiniLM-L6-v2",
         embedding_spec: EmbeddingSpec | None = None,
@@ -162,6 +163,9 @@ class GradientBoostingModel(ModelBase):
         self.reg_alpha = reg_alpha
         self.reg_lambda = reg_lambda
         
+        self.use_prompt_embeddings = use_prompt_embeddings
+        self.use_prompt_categories = use_prompt_categories
+        
         self.balance_model_samples = balance_model_samples
         self.embedding_model_name = embedding_model_name
         self.print_every = print_every
@@ -176,7 +180,7 @@ class GradientBoostingModel(ModelBase):
             print_every=print_every,
         ) if embedding_spec is not None else None
         
-        self.preprocessor = PromptEmbeddingPreprocessor(
+        self.preprocessor = PromptEmbeddingWithCategoriesPreprocessor(
             embedding_model_name=embedding_model_name,
             min_model_comparisons=min_model_comparisons,
         )
@@ -184,6 +188,7 @@ class GradientBoostingModel(ModelBase):
         self._embedding_model_source: str | None = load_embedding_model_from
         self._prompt_embedding_dim: int | None = None
         self._prompt_features_dim: int | None = None
+        self._prompt_categories_dim: int | None = None
         self._model_embedding_dim: int | None = None
         self._history_entries: list[TrainingHistoryEntry] = []
         self._xgb_model: xgb.Booster | None = None
@@ -202,9 +207,11 @@ class GradientBoostingModel(ModelBase):
         prompt_embedding_dim: int,
         prompt_features_dim: int,
         model_embedding_dim: int,
+        prompt_categories_dim: int,
     ) -> None:
         self._prompt_embedding_dim = prompt_embedding_dim
         self._prompt_features_dim = prompt_features_dim
+        self._prompt_categories_dim = prompt_categories_dim
         self._model_embedding_dim = model_embedding_dim
 
     def get_config_for_wandb(self) -> dict[str, Any]:
@@ -223,6 +230,8 @@ class GradientBoostingModel(ModelBase):
             "embedding_spec": self.embedding_spec.model_dump(),
             "min_model_comparisons": self.min_model_comparisons,
             "embedding_model_epochs": self.embedding_model_epochs,
+            "use_prompt_embeddings": self.use_prompt_embeddings,
+            "use_prompt_categories": self.use_prompt_categories,
         }
 
     def train(
@@ -241,6 +250,16 @@ class GradientBoostingModel(ModelBase):
             epochs: Number of boosting rounds (trees to add)
             batch_size: Used for embedding model training
         """
+        if self.use_prompt_categories:
+            missing_categories = sum(1 for entry in data.entries if entry.category_tag is None)
+            if missing_categories > 0:
+                warnings.warn(
+                    f"use_prompt_categories=True but {missing_categories}/{len(data.entries)} "
+                    f"({missing_categories/len(data.entries)*100:.1f}%) training entries have no category_tag. "
+                    f"These will use zero vectors for categories.",
+                    UserWarning
+                )
+        
         with Timer("train", verbosity="start+end") as train_timer:
             self.last_timer = train_timer
             
@@ -261,6 +280,7 @@ class GradientBoostingModel(ModelBase):
                     PreprocessedPromptPair(
                         prompt_embedding=pair.prompt_embedding,
                         prompt_features=pair.prompt_features,
+                        prompt_categories=pair.prompt_categories,
                         model_embedding_a=self.model_embeddings[encoded_prompts.model_encoder.decode(pair.model_id_a)],
                         model_embedding_b=self.model_embeddings[encoded_prompts.model_encoder.decode(pair.model_id_b)],
                         model_id_a=pair.model_id_a,
@@ -278,6 +298,7 @@ class GradientBoostingModel(ModelBase):
                 prompt_embedding_dim=preprocessed_pairs[0].prompt_embedding.shape[0],
                 prompt_features_dim=encoded_prompts.prompt_features_dim,
                 model_embedding_dim=preprocessed_pairs[0].model_embedding_a.shape[0],
+                prompt_categories_dim=encoded_prompts.prompt_categories_dim,
             )
             
             with Timer("split_preprocessed_data", verbosity="start+end", parent=train_timer):
@@ -353,13 +374,13 @@ class GradientBoostingModel(ModelBase):
                 prompt_indices = []  # Track which prompt each row belongs to
                 model_names_flat = []  # Track which model each row is for
                 
-                for prompt_idx, (prompt_emb, prompt_feat) in enumerate(
-                    zip(encoded_prompts.prompt_embeddings, encoded_prompts.prompt_features)
+                for prompt_idx, (prompt_emb, prompt_feat, prompt_categories) in enumerate(
+                    zip(encoded_prompts.prompt_embeddings, encoded_prompts.prompt_features, encoded_prompts.prompt_categories)
                 ):
                     for model_name in X.model_names:
                         model_emb = self.model_embeddings[model_name]
-                        # Concatenate: [prompt_embedding, prompt_features, model_embedding]
-                        features = np.concatenate([prompt_emb, prompt_feat, model_emb])
+                        # Concatenate: [prompt_embedding, prompt_features, model_embedding, categories] (possibly missing embeddings and categories, based on configuration)
+                        features = self._create_features(prompt_emb, prompt_feat, model_emb, prompt_categories)
                         all_features.append(features)
                         prompt_indices.append(prompt_idx)
                         model_names_flat.append(model_name)
@@ -421,6 +442,7 @@ class GradientBoostingModel(ModelBase):
             "preprocessor_version": self.preprocessor.version,
             "prompt_embedding_dim": self._prompt_embedding_dim,
             "prompt_features_dim": self._prompt_features_dim,
+            "prompt_categories_dim": self._prompt_categories_dim,
             "model_embedding_dim": self._model_embedding_dim,
             "xgb_model_bytes": xgb_model_bytes,
             "history_entries": self._history_entries,
@@ -436,6 +458,9 @@ class GradientBoostingModel(ModelBase):
             "colsample_bytree": self.colsample_bytree,
             "reg_alpha": self.reg_alpha,
             "reg_lambda": self.reg_lambda,
+            
+            "use_prompt_embeddings": self.use_prompt_embeddings,
+            "use_prompt_categories": self.use_prompt_categories,
         }
 
     @classmethod
@@ -466,6 +491,8 @@ class GradientBoostingModel(ModelBase):
             reg_lambda=state_dict["reg_lambda"],
             print_every=state_dict["print_every"],
             seed=state_dict["seed"],
+            use_prompt_embeddings=state_dict.get("use_prompt_embeddings", True),
+            use_prompt_categories=state_dict.get("use_prompt_categories", False),
         )
         
         model.embedding_model = EmbeddingModelBase.load_from_state_dict(state_dict["embedding_model_state_dict"])
@@ -474,6 +501,7 @@ class GradientBoostingModel(ModelBase):
             prompt_embedding_dim=state_dict["prompt_embedding_dim"],
             prompt_features_dim=state_dict["prompt_features_dim"],
             model_embedding_dim=state_dict["model_embedding_dim"],
+            prompt_categories_dim=state_dict.get("prompt_categories_dim", 0),
         )
         
         # Load XGBoost model from bytes
@@ -522,33 +550,53 @@ class GradientBoostingModel(ModelBase):
             # Create feature vector for each model in the comparison
             # Format: [prompt_embedding, prompt_features, model_embedding]
             
-            # Sample 1: Model A
-            features_a = np.concatenate([
-                pair.prompt_embedding,
-                pair.prompt_features,
-                pair.model_embedding_a,
-            ])
-            label_a = 1.0 if pair.winner_label == 0 else 0.0
-            features_list.append(features_a)
-            labels_list.append(label_a)
-            model_ids_list.append(pair.model_id_a)
-            
-            # Sample 2: Model B
-            features_b = np.concatenate([
-                pair.prompt_embedding,
-                pair.prompt_features,
-                pair.model_embedding_b,
-            ])
-            label_b = 1.0 if pair.winner_label == 1 else 0.0
-            features_list.append(features_b)
-            labels_list.append(label_b)
-            model_ids_list.append(pair.model_id_b)
+            (features_a, features_b), (label_a, label_b) = self._create_sample_pair(pair)
+            features_list.extend([features_a, features_b])
+            labels_list.extend([label_a, label_b])
+            model_ids_list.extend([pair.model_id_a, pair.model_id_b])
         
         X = np.array(features_list)  # [n_samples, feature_dim]
         y = np.array(labels_list)  # [n_samples]
         sample_weights = self._compute_sample_weights(model_ids_list) if use_balancing else None # [n_samples]
         
         return xgb.DMatrix(X, label=y, weight=sample_weights) if sample_weights is not None else xgb.DMatrix(X, label=y)
+    
+    def _create_sample_pair(self, pair: PreprocessedPromptPair) -> tuple[tuple[np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray]]:
+        # Sample 1: Model A
+        features_a = self._create_features(pair.prompt_embedding, pair.prompt_features, pair.model_embedding_a, pair.prompt_categories)
+        label_a = 1.0 if pair.winner_label == 0 else 0.0
+        
+        # Sample 2: Model B
+        features_b = self._create_features(pair.prompt_embedding, pair.prompt_features, pair.model_embedding_b, pair.prompt_categories)
+        label_b = 1.0 if pair.winner_label == 1 else 0.0
+        
+        return (features_a, features_b), (label_a, label_b)
+    
+    def _create_features(
+        self, 
+        prompt_embedding: np.ndarray, 
+        prompt_features: np.ndarray, 
+        model_embedding: np.ndarray,
+        prompt_categories: np.ndarray,
+    ) -> np.ndarray:
+        result = np.concatenate([
+            prompt_features,
+            model_embedding,
+        ])
+        
+        if self.use_prompt_embeddings:
+            result = np.concatenate([
+                result,
+                prompt_embedding,
+            ])
+        
+        if self.use_prompt_categories and prompt_categories is not None:
+            result = np.concatenate([
+                result,
+                prompt_categories,
+            ])
+        
+        return result
 
     def _compute_sample_weights(
         self,

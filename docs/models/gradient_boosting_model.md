@@ -58,8 +58,24 @@ This approach allows:
 ### Feature Vector
 The input to XGBoost is a concatenated feature vector:
 ```
-[prompt_embedding (dim: N), prompt_features (dim: M), model_embedding (dim: K)]
+[prompt_embedding (dim: N), prompt_features (dim: M), model_embedding (dim: K), prompt_categories (dim: C)]
 ```
+
+Note: `prompt_embedding` and `prompt_categories` are optional and controlled by constructor parameters:
+- `use_prompt_embeddings`: Include prompt embeddings in features (default: True)
+- `use_prompt_categories`: Include prompt categories in features (default: False)
+
+### Prompt Categories
+When `use_prompt_categories=True`, the model incorporates categorical information about prompts into the feature vector:
+- **Structure**: 11-dimensional vector encoding prompt tags
+  - Creative writing (1 dim): Whether the prompt involves creative writing
+  - Criteria (7 dims): complexity, creativity, domain_knowledge, problem_solving, real_world, specificity, technical_accuracy
+  - Instruction-following (2 dims): IF tag boolean and score
+  - Math (1 dim): Whether the prompt involves math
+
+- **Missing Categories**: If a training entry lacks category tags, a zero vector is used
+- **Warning**: The model warns if `use_prompt_categories=True` but some training entries are missing categories
+- **Inference**: During inference, category features are set to zero vectors (categories are not computed for inference prompts)
 
 ## Sample Balancing
 
@@ -84,6 +100,8 @@ The model supports sample balancing to handle imbalanced model representation:
 - `epochs`: Number of boosting rounds (trees to add)
 - `embedding_model_epochs`: Epochs for embedding model training
 - `balance_model_samples`: Whether to apply sample balancing via sample weights
+- `use_prompt_embeddings`: Include prompt embeddings in features (default: True)
+- `use_prompt_categories`: Include prompt category features in training (default: False)
 
 ## Prediction
 
@@ -141,6 +159,7 @@ model = GradientBoostingModel(
     max_depth=6,
     learning_rate=0.1,
     epochs=100,  # Number of trees
+    use_prompt_categories=True,  # Enable category features (optional)
 )
 
 model.train(data, validation_split=validation_split, epochs=100)
