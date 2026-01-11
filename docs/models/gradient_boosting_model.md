@@ -67,10 +67,10 @@ Note: `prompt_embedding` and `prompt_categories` are optional and controlled by 
 
 ### Prompt Categories
 When `use_prompt_categories=True`, the model incorporates categorical information about prompts into the feature vector:
-- **Structure**: 11-dimensional vector encoding prompt tags
-  - Creative writing (1 dim): Whether the prompt involves creative writing
+- **Structure**: 12-dimensional vector encoding prompt tags
+  - Creative writing (2 dims): Boolean indicator + score (Literal["no", "yes", None] normalized to 0.0/1.0)
   - Criteria (7 dims): complexity, creativity, domain_knowledge, problem_solving, real_world, specificity, technical_accuracy
-  - Instruction-following (2 dims): IF tag boolean and score
+  - Instruction-following (2 dims): IF tag boolean + score (0-5 normalized to 0.0-1.0)
   - Math (1 dim): Whether the prompt involves math
 
 - **Missing Categories**: If a training entry lacks category tags, a zero vector is used

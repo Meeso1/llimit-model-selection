@@ -73,7 +73,7 @@ class LeastSquaresScoringModel(ModelBase):
             self.last_timer = train_timer
             
             with Timer("preprocess", verbosity="start+end", parent=train_timer):
-                filtered_data, self._model_encoder = self._filter_and_fit_encoder(data)
+                filtered_data, self._model_encoder, _ = self._filter_and_fit_encoder(data)
             
             validation_split = validation_split or ValidationSplit(val_fraction=0, seed=42)
             train_data, val_data = train_val_split(
@@ -153,11 +153,11 @@ class LeastSquaresScoringModel(ModelBase):
         
         return model
 
-    def _filter_and_fit_encoder(self, data: TrainingData) -> tuple[TrainingData, StringEncoder]:
-        filtered_data = filter_out_rare_models(data, self.min_model_occurrences)
-        filtered_data = filter_out_empty_entries(filtered_data)
-        filtered_data = filter_out_both_bad(filtered_data)
-        filtered_data = filter_out_ties(filtered_data)
+    def _filter_and_fit_encoder(self, data: TrainingData) -> tuple[TrainingData, StringEncoder, list[int]]:
+        filtered_data, indexes = filter_out_rare_models(data, self.min_model_occurrences)
+        filtered_data, indexes = filter_out_empty_entries(filtered_data, indexes)
+        filtered_data, indexes = filter_out_both_bad(filtered_data, indexes)
+        filtered_data, indexes = filter_out_ties(filtered_data, indexes)
         if len(filtered_data.entries) == 0:
             raise ValueError(
                 "No valid training data after filtering. "
@@ -167,7 +167,7 @@ class LeastSquaresScoringModel(ModelBase):
 
         model_encoder = create_encoder(filtered_data)
         
-        return filtered_data, model_encoder
+        return filtered_data, model_encoder, indexes
 
     def _compute_least_squares_scores(
         self,

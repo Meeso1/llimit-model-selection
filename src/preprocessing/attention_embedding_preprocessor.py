@@ -50,7 +50,7 @@ class AttentionEmbeddingPreprocessor:
         self.embedding_model_name = embedding_model_name
         self.min_model_comparisons = min_model_comparisons
         self.seed = seed
-        self.version = "v1"
+        self.version = "v2"
         self._embedding_model: SentenceTransformer | None = None
         self.last_timer: Timer | None = None
     
@@ -84,20 +84,19 @@ class AttentionEmbeddingPreprocessor:
                 return Jars.preprocessed_data.get(cache_key)
             
             with Timer("filter_data", verbosity="start+end", parent=timer):
-                filtered_data = self._filter_data(data)
+                filtered_data, indexes = self._filter_data(data)
             
             with Timer("extract_features", verbosity="start+end", parent=timer):
-                pairs_by_model, scaler_state = self._extract_features(filtered_data, timer)
+                pairs_by_model, scaler_state = self._extract_features(filtered_data, indexes, timer)
             
             # Create model ID mapping
             model_ids = sorted(pairs_by_model.keys())
             model_id_to_index = {model_id: i for i, model_id in enumerate(model_ids)}
             
             # Create ModelSetSamples
-            samples = [
-                ModelSetSample(pairs=pairs_by_model[model_id], model_id=model_id)
-                for model_id in model_ids
-            ]
+            samples = []
+            for model_id, (pairs, indexes) in pairs_by_model.items():
+                samples.append(ModelSetSample(pairs=pairs, model_id=model_id, indexes=indexes))
             
             preprocessed_data = PreprocessedAttentionEmbeddingData(
                 samples=samples,
@@ -109,9 +108,9 @@ class AttentionEmbeddingPreprocessor:
             
             return preprocessed_data
     
-    def _filter_data(self, data: TrainingData) -> TrainingData:
-        filtered_data = filter_out_rare_models(data, self.min_model_comparisons)
-        filtered_data = filter_out_empty_entries(filtered_data)
+    def _filter_data(self, data: TrainingData) -> tuple[TrainingData, list[int]]:
+        filtered_data, indexes = filter_out_rare_models(data, self.min_model_comparisons)
+        filtered_data, indexes = filter_out_empty_entries(filtered_data, indexes)
         if len(filtered_data.entries) == 0:
             raise ValueError(
                 "No valid training data after filtering. "
@@ -119,13 +118,14 @@ class AttentionEmbeddingPreprocessor:
                 "Try lowering min_model_comparisons or providing more training data."
             )
         
-        return filtered_data
+        return filtered_data, indexes
     
     def _extract_features(
         self, 
         data: TrainingData,
+        indexes: list[int],
         timer: Timer
-    ) -> tuple[dict[str, list[ProcessedPair]], ScalerState]:
+    ) -> tuple[dict[str, tuple[list[ProcessedPair], list[int]]], ScalerState]:
         """
         Extract all features for each (prompt, response) pair.
         
@@ -176,8 +176,9 @@ class AttentionEmbeddingPreprocessor:
         
         # Group by model
         pairs_by_model: dict[str, list[ProcessedPair]] = defaultdict(list)
+        indexes_by_model: dict[str, list[int]] = defaultdict(list)
         
-        for i, ((prompt, response), model_id) in enumerate(unique_pairs.items()):
+        for i, (index, ((prompt, response), model_id)) in enumerate(zip(indexes, unique_pairs.items())):
             processed_pair = ProcessedPair(
                 prompt_emb=prompt_embeddings[i],
                 response_emb=response_embeddings[i],
@@ -185,8 +186,13 @@ class AttentionEmbeddingPreprocessor:
                 model_id=model_id,
             )
             pairs_by_model[model_id].append(processed_pair)
-        
-        return dict(pairs_by_model), scaler_state
+            indexes_by_model[model_id].append(index)
+            
+        result = {
+            model_id: (pairs, indexes_by_model[model_id])
+            for model_id, pairs in pairs_by_model.items()
+        }
+        return result, scaler_state
     
     def _embed_texts(self, texts: list[str]) -> np.ndarray:
         """

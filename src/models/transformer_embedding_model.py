@@ -221,6 +221,7 @@ class TransformerEmbeddingModel(ModelBase):
                     pairs=preprocessed_pairs,
                     prompt_features_dim=preprocessed_data.prompt_features_dim,
                     model_encoder=preprocessed_data.model_encoder,
+                    filtered_indexes=preprocessed_data.filtered_indexes,
                 )
             
             with Timer("split_preprocessed_data", verbosity="start+end", parent=train_timer):

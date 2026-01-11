@@ -19,4 +19,5 @@ class PreprocessedTrainingData:
     """Training data after preprocessing - contains model IDs and encoder."""
     comparisons: list[PreprocessedComparison]
     model_encoder: StringEncoder
+    filtered_indexes: list[int]
 

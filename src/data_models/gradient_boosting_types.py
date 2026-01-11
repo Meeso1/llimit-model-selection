@@ -26,6 +26,7 @@ class PreprocessedTrainingData:
     prompt_features_dim: int
     prompt_categories_dim: int
     model_encoder: StringEncoder
+    filtered_indexes: list[int]
 
 
 @dataclass

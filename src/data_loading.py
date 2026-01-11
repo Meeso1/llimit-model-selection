@@ -21,7 +21,7 @@ def _parse_category_tag(category_tag_dict: dict) -> CategoryTag:
     creative_writing_data = category_tag_dict["creative_writing_v0.1"]
     creative_writing = CreativeWritingTag(
         creative_writing=creative_writing_data["creative_writing"],
-        score=creative_writing_data["score"]
+        score=creative_writing_data["score"] if creative_writing_data["score"] in ["no", "yes"] else None
     )
     
     criteria_data = category_tag_dict["criteria_v0.1"]

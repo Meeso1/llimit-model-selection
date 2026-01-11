@@ -42,7 +42,7 @@ class PromptEmbeddingPreprocessor:
         """
         self.embedding_model_name = embedding_model_name
         self.min_model_comparisons = min_model_comparisons
-        self.version = "v2"
+        self.version = "v4"
         self._model: SentenceTransformer | None = None
         self.last_timer: Timer | None = None
 
@@ -75,8 +75,8 @@ class PromptEmbeddingPreprocessor:
                 return Jars.preprocessed_data.get(cache_key)
             
             with Timer("filter_entries_and_fit_encoder", verbosity="start+end", parent=timer):
-                filtered_data, model_encoder = self._filter_data_and_fit_encoder(data)
-            
+                filtered_data, model_encoder, filtered_indexes = self._filter_data_and_fit_encoder(data)
+                
             with Timer("extract_prompt_features", verbosity="start+end", parent=timer) as prompt_features_timer:
                 prompt_features_list = [
                     extract_all_prompt_features(
@@ -103,7 +103,7 @@ class PromptEmbeddingPreprocessor:
                         winner_label=winner_label,
                     )
                 )
-            
+                
             embedding_dim = pairs[0].prompt_embedding.shape[0]
             prompt_features_dim = pairs[0].prompt_features.shape[0]
             preprocessed_data = PreprocessedTrainingData(
@@ -111,17 +111,18 @@ class PromptEmbeddingPreprocessor:
                 embedding_dim=embedding_dim,
                 prompt_features_dim=prompt_features_dim,
                 model_encoder=model_encoder,
+                filtered_indexes=filtered_indexes,
             )
             
             Jars.preprocessed_data.add(cache_key, preprocessed_data)
             
             return preprocessed_data
 
-    def _filter_data_and_fit_encoder(self, data: TrainingData) -> tuple[TrainingData, StringEncoder]:
-        filtered_data = filter_out_ties(data)
-        filtered_data = filter_out_both_bad(filtered_data)
-        filtered_data = filter_out_empty_entries(filtered_data)
-        filtered_data = filter_out_rare_models(filtered_data, self.min_model_comparisons)
+    def _filter_data_and_fit_encoder(self, data: TrainingData) -> tuple[TrainingData, StringEncoder, list[int]]:
+        filtered_data, indexes = filter_out_rare_models(data, self.min_model_comparisons)
+        filtered_data, indexes = filter_out_ties(filtered_data, indexes)
+        filtered_data, indexes = filter_out_both_bad(filtered_data, indexes)
+        filtered_data, indexes = filter_out_empty_entries(filtered_data, indexes)
         if len(filtered_data.entries) == 0:
             raise ValueError(
                 "No valid training data after filtering. "
@@ -131,7 +132,7 @@ class PromptEmbeddingPreprocessor:
 
         model_encoder = create_encoder(filtered_data)
         
-        return filtered_data, model_encoder
+        return filtered_data, model_encoder, indexes
 
     def _generate_cache_key(self, data: TrainingData) -> str:
         """

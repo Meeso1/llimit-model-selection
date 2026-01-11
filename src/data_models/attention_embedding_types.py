@@ -16,6 +16,7 @@ class ModelSetSample:
     """A set of pairs from a single model."""
     pairs: list[ProcessedPair]
     model_id: str
+    indexes: list[int]
 
 
 @dataclass
@@ -31,4 +32,3 @@ class PreprocessedAttentionEmbeddingData:
     samples: list[ModelSetSample]
     model_id_to_index: dict[str, int]  # Mapping from model ID to integer index
     scaler_state: ScalerState  # Fitted scaler for inference
-

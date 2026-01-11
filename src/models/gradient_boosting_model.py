@@ -174,11 +174,7 @@ class GradientBoostingModel(ModelBase):
         self.seed = seed
         
         self.embedding_spec = embedding_spec        
-        self.embedding_model = self.embedding_spec.create_model(
-            min_model_comparisons=min_model_comparisons,
-            preprocessor_seed=seed,
-            print_every=print_every,
-        ) if embedding_spec is not None else None
+        self.embedding_model: EmbeddingModelBase | None = None
         
         self.preprocessor = PromptEmbeddingWithCategoriesPreprocessor(
             embedding_model_name=embedding_model_name,
@@ -263,8 +259,23 @@ class GradientBoostingModel(ModelBase):
         with Timer("train", verbosity="start+end") as train_timer:
             self.last_timer = train_timer
             
+            with Timer("encode_prompts", verbosity="start+end", parent=train_timer):
+                preprocessed_without_model_embeddings = self.preprocessor.preprocess(data)
+            
             with Timer("train_embedding_model", verbosity="start+end", parent=train_timer):
-                if not self._load_embedding_model_if_specified():
+                if self.embedding_model is None:
+                    if self._embedding_model_source is not None:
+                        self._load_embedding_model()
+                    elif self.embedding_spec is not None:
+                        self.embedding_model = self.embedding_spec.create_model(
+                            min_model_comparisons=self.min_model_comparisons,
+                            preprocessor_seed=self.seed,
+                            print_every=self.print_every,
+                        )
+                    else:
+                        raise RuntimeError("No embedding model available and no way to create one")
+                    
+                if not self.embedding_model.is_initialized:
                     self.embedding_model.train(
                         data, 
                         validation_split=validation_split, 
@@ -272,33 +283,34 @@ class GradientBoostingModel(ModelBase):
                         batch_size=batch_size,
                     )
             
-            with Timer("encode_prompts", verbosity="start+end", parent=train_timer):
-                encoded_prompts = self.preprocessor.preprocess(data)
-            
             with Timer("prepare_preprocessed_data", verbosity="start+end", parent=train_timer):
                 preprocessed_pairs = [
                     PreprocessedPromptPair(
                         prompt_embedding=pair.prompt_embedding,
                         prompt_features=pair.prompt_features,
                         prompt_categories=pair.prompt_categories,
-                        model_embedding_a=self.model_embeddings[encoded_prompts.model_encoder.decode(pair.model_id_a)],
-                        model_embedding_b=self.model_embeddings[encoded_prompts.model_encoder.decode(pair.model_id_b)],
+                        model_embedding_a=self.model_embeddings[preprocessed_without_model_embeddings.model_encoder.decode(pair.model_id_a)],
+                        model_embedding_b=self.model_embeddings[preprocessed_without_model_embeddings.model_encoder.decode(pair.model_id_b)],
                         model_id_a=pair.model_id_a,
                         model_id_b=pair.model_id_b,
                         winner_label=pair.winner_label,
                     )
-                    for pair in encoded_prompts.pairs
+                    for pair in preprocessed_without_model_embeddings.pairs
                 ]
                 preprocessed_data = PreprocessedTrainingData(
                     pairs=preprocessed_pairs,
-                    prompt_features_dim=encoded_prompts.prompt_features_dim,
+                    prompt_features_dim=preprocessed_without_model_embeddings.prompt_features_dim,
+                    filtered_indexes=preprocessed_without_model_embeddings.filtered_indexes,
+                    model_encoder=preprocessed_without_model_embeddings.model_encoder,
+                    embedding_dim=preprocessed_without_model_embeddings.embedding_dim,
+                    prompt_categories_dim=preprocessed_without_model_embeddings.prompt_categories_dim,
                 )
             
             self._initialize_dimensions(
-                prompt_embedding_dim=preprocessed_pairs[0].prompt_embedding.shape[0],
-                prompt_features_dim=encoded_prompts.prompt_features_dim,
-                model_embedding_dim=preprocessed_pairs[0].model_embedding_a.shape[0],
-                prompt_categories_dim=encoded_prompts.prompt_categories_dim,
+                prompt_embedding_dim=preprocessed_data.embedding_dim,
+                prompt_features_dim=preprocessed_without_model_embeddings.prompt_features_dim,
+                model_embedding_dim=self.embedding_model.embedding_dim,
+                prompt_categories_dim=preprocessed_without_model_embeddings.prompt_categories_dim,
             )
             
             with Timer("split_preprocessed_data", verbosity="start+end", parent=train_timer):
@@ -735,16 +747,11 @@ class GradientBoostingModel(ModelBase):
             duration=timer.elapsed_time,
         )
 
-    def _load_embedding_model_if_specified(self) -> bool:
-        if self._embedding_model_source is None:
-            return False
-        
+    def _load_embedding_model(self) -> None:
         loaded: GradientBoostingModel = GradientBoostingModel.load(self._embedding_model_source)
         self.embedding_model = loaded.embedding_model
         self.embedding_spec = loaded.embedding_spec
         self.embedding_model_epochs = loaded.embedding_model_epochs
-
-        return True
 
     def _log_epoch_result(self, result: "GradientBoostingModel.EpochResult") -> None:
         if self.print_every is None:

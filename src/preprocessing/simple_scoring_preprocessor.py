@@ -27,7 +27,7 @@ class SimpleScoringPreprocessor:
             Preprocessed training data with encoded model IDs
         """
         validate_winner_types(data)
-        filtered_data = filter_out_rare_models(data, self.min_model_occurrences)
+        filtered_data, indexes = filter_out_rare_models(data, self.min_model_occurrences)
         model_encoder = create_encoder(filtered_data)
         
         comparisons = []
@@ -51,5 +51,6 @@ class SimpleScoringPreprocessor:
         return PreprocessedTrainingData(
             comparisons=comparisons,
             model_encoder=model_encoder,
+            filtered_indexes=indexes,
         )
 

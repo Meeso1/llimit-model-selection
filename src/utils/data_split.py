@@ -116,11 +116,15 @@ def split_dense_network_preprocessed_data(
     train_pairs = [preprocessed_data.pairs[i] for i in train_indices]
     val_pairs = [preprocessed_data.pairs[i] for i in val_indices]
     
+    train_indexes = [preprocessed_data.filtered_indexes[i] for i in train_indices]
+    val_indexes = [preprocessed_data.filtered_indexes[i] for i in val_indices]
+    
     train_preprocessed = DenseNetworkPreprocessedTrainingData(
         pairs=train_pairs,
         embedding_dim=preprocessed_data.embedding_dim,
         prompt_features_dim=preprocessed_data.prompt_features_dim,
         model_encoder=preprocessed_data.model_encoder,
+        filtered_indexes=train_indexes,
     )
     
     val_preprocessed = DenseNetworkPreprocessedTrainingData(
@@ -128,6 +132,7 @@ def split_dense_network_preprocessed_data(
         embedding_dim=preprocessed_data.embedding_dim,
         prompt_features_dim=preprocessed_data.prompt_features_dim,
         model_encoder=preprocessed_data.model_encoder,
+        filtered_indexes=val_indexes,
     )
     
     return train_preprocessed, val_preprocessed
@@ -200,16 +205,21 @@ def split_transformer_embedding_preprocessed_data(
     train_pairs = [preprocessed_data.pairs[i] for i in train_indices]
     val_pairs = [preprocessed_data.pairs[i] for i in val_indices]
     
+    train_indexes = [preprocessed_data.filtered_indexes[i] for i in train_indices]
+    val_indexes = [preprocessed_data.filtered_indexes[i] for i in val_indices]
+    
     train_preprocessed = TransformerEmbeddingPreprocessedTrainingData(
         pairs=train_pairs,
         prompt_features_dim=preprocessed_data.prompt_features_dim,
         model_encoder=preprocessed_data.model_encoder,
+        filtered_indexes=train_indexes,
     )
     
     val_preprocessed = TransformerEmbeddingPreprocessedTrainingData(
         pairs=val_pairs,
         prompt_features_dim=preprocessed_data.prompt_features_dim,
         model_encoder=preprocessed_data.model_encoder,
+        filtered_indexes=val_indexes,
     )
     
     return train_preprocessed, val_preprocessed
@@ -243,14 +253,19 @@ def split_simple_scoring_preprocessed_data(
     train_comparisons = [preprocessed_data.comparisons[i] for i in train_indices]
     val_comparisons = [preprocessed_data.comparisons[i] for i in val_indices]
     
+    train_indexes = [preprocessed_data.filtered_indexes[i] for i in train_indices]
+    val_indexes = [preprocessed_data.filtered_indexes[i] for i in val_indices]
+    
     train_preprocessed = SimplePreprocessedTrainingData(
         comparisons=train_comparisons,
         model_encoder=preprocessed_data.model_encoder,
+        filtered_indexes=train_indexes,
     )
     
     val_preprocessed = SimplePreprocessedTrainingData(
         comparisons=val_comparisons,
         model_encoder=preprocessed_data.model_encoder,
+        filtered_indexes=val_indexes,
     )
     
     return train_preprocessed, val_preprocessed
@@ -313,8 +328,15 @@ def split_attention_embedding_preprocessed_data(
     val_samples = []
     for model_set in preprocessed_data.samples:
         train_indices, val_indices = _compute_split_indices(len(model_set.pairs), val_fraction, seed)
-        train_samples.append(ModelSetSample([model_set.pairs[i] for i in train_indices], model_set.model_id))
-        val_samples.append(ModelSetSample([model_set.pairs[i] for i in val_indices], model_set.model_id))
+        
+        train_model_set = [model_set.pairs[i] for i in train_indices]
+        val_model_set = [model_set.pairs[i] for i in val_indices]
+        
+        train_indexes = [model_set.indexes[i] for i in train_indices]
+        val_indexes = [model_set.indexes[i] for i in val_indices]
+        
+        train_samples.append(ModelSetSample(train_model_set, model_set.model_id, train_indexes))
+        val_samples.append(ModelSetSample(val_model_set, model_set.model_id, val_indexes))
     
     train_preprocessed = PreprocessedAttentionEmbeddingData(
         samples=train_samples,

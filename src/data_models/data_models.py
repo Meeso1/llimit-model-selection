@@ -13,7 +13,7 @@ class EvaluationMessage:
 @dataclass
 class CreativeWritingTag:
     creative_writing: bool
-    score: str
+    score: Literal["no", "yes", None]
 
 
 @dataclass
@@ -30,7 +30,7 @@ class CriteriaTag:
 @dataclass
 class IfTag:
     if_: bool  # 'if' is a Python keyword, so we use 'if_'
-    score: int
+    score: int | None # 0-5 or None
 
 
 @dataclass

@@ -77,7 +77,7 @@ class TripletFrozenEncoderPreprocessor:
                 return Jars.preprocessed_data.get(cache_key)
             
             with Timer("filter", verbosity="start+end", parent=timer):
-                filtered_data = self._filter_data(data)
+                filtered_data, _ = self._filter_data(data)
 
             with Timer("make_triplets", verbosity="start+end", parent=timer):
                 triplets = self._construct_triplets(filtered_data)
@@ -111,7 +111,7 @@ class TripletFrozenEncoderPreprocessor:
             
         return result
 
-    def _filter_data(self, data: TrainingData) -> TrainingData:
+    def _filter_data(self, data: TrainingData) -> tuple[TrainingData, list[int]]:
         """
         Filter out invalid and rare model entries.
         
@@ -121,9 +121,9 @@ class TripletFrozenEncoderPreprocessor:
         Returns:
             Filtered training data
         """
-        filtered_data = filter_out_rare_models(data, self.min_model_comparisons)
-        filtered_data = filter_out_empty_entries(filtered_data)
-        filtered_data = filter_out_both_bad(filtered_data)
+        filtered_data, indexes = filter_out_rare_models(data, self.min_model_comparisons)
+        filtered_data, indexes = filter_out_empty_entries(filtered_data, indexes)
+        filtered_data, indexes = filter_out_both_bad(filtered_data, indexes)
         if len(filtered_data.entries) == 0:
             raise ValueError(
                 "No valid training data after filtering. "
@@ -131,7 +131,7 @@ class TripletFrozenEncoderPreprocessor:
                 "Try lowering min_model_comparisons or providing more training data."
             )   
         
-        return filtered_data
+        return filtered_data, indexes
 
     def _construct_triplets(self, data: TrainingData) -> list[TrainingTriplet]:
         all_examples = self._make_all_examples(data.entries)

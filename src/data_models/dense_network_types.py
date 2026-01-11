@@ -22,6 +22,7 @@ class PreprocessedTrainingData:
     embedding_dim: int
     prompt_features_dim: int
     model_encoder: StringEncoder
+    filtered_indexes: list[int]
 
 
 @dataclass

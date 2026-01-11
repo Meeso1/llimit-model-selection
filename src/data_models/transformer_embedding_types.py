@@ -23,6 +23,7 @@ class PreprocessedTrainingData:
     pairs: list[PreprocessedPromptPair]
     prompt_features_dim: int
     model_encoder: StringEncoder
+    filtered_indexes: list[int]
 
 
 @dataclass
