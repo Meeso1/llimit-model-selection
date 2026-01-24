@@ -4,14 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from src.data_models.data_models import InputData
-from src.models.dense_network_model import DenseNetworkModel
-from src.models.simple_scoring_model import SimpleScoringModel
-from src.models.elo_scoring_model import EloScoringModel
-from src.models.greedy_ranking_model import GreedyRankingModel
-from src.models.mcmf_scoring_model import McmfScoringModel
-from src.models.gradient_boosting_model import GradientBoostingModel
-from src.models.model_base import ModelBase
-from src.scripts.model_types import ModelType
+from src.models.model_loading import ModelType, load_model
 from src.constants import INFERENCE_OUTPUTS_PATH
 
 
@@ -63,24 +56,6 @@ def infer(
         json.dump(result_dict, f, indent=4)
 
     print(f"Inference results saved to: {output_path}")
-
-
-def load_model(model_type: ModelType, model_name: str) -> ModelBase:
-    match model_type:
-        case "dense_network":
-            return DenseNetworkModel.load(model_name)
-        case "simple_scoring":
-            return SimpleScoringModel.load(model_name)
-        case "elo_scoring":
-            return EloScoringModel.load(model_name)
-        case "greedy_ranking":
-            return GreedyRankingModel.load(model_name)
-        case "mcmf_scoring":
-            return McmfScoringModel.load(model_name)
-        case "gradient_boosting":
-            return GradientBoostingModel.load(model_name)
-        case unknown:
-            raise ValueError(f"Unknown model type: {unknown}")  # pyright: ignore[reportUnreachable]
 
 
 def _make_default_output_path(model_name: str) -> str:

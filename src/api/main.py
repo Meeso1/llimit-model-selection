@@ -4,7 +4,7 @@ from fastapi import FastAPI, HTTPException
 
 from src.api.inference import InferenceService
 from src.api.dtos import InferenceRequest, InferenceResponse, HealthResponse
-from src.scripts.model_types import ModelType
+from src.models.model_loading import ModelType
 
 inference_service: InferenceService | None = None
 

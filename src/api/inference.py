@@ -2,8 +2,7 @@
 
 from src.data_models.data_models import InputData
 from src.models.model_base import ModelBase
-from src.scripts.model_types import ModelType
-from src.scripts import infer
+from src.models.model_loading import ModelType, load_model
 
 
 class InferenceService:
@@ -54,7 +53,7 @@ class InferenceService:
             and self._loaded_model is not None:
             return self._loaded_model
         
-        self._loaded_model = infer.load_model(model_type, model_name)
+        self._loaded_model = load_model(model_type, model_name)
         self._loaded_model_type = model_type
         self._loaded_model_name = model_name
         return self._loaded_model

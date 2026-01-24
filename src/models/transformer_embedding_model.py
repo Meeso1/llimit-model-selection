@@ -34,6 +34,8 @@ from src.utils.data_split import ValidationSplit, split_transformer_embedding_pr
 from src.models.optimizers.optimizer_spec import OptimizerSpecification
 from src.models.finetuning_specs.finetuning_spec import FineTuningSpecification
 from src.utils.transformer_pooling_utils import detect_pooling_method, pool_embeddings, PoolingMethod
+from src.models.model_outputs_cache import ModelOutputsCache
+from src.models import model_loading
 
 
 class TransformerEmbeddingModel(ModelBase):
@@ -51,6 +53,7 @@ class TransformerEmbeddingModel(ModelBase):
         min_model_comparisons: int = 20,
         embedding_model_epochs: int = 10,
         scoring_head_lr_multiplier: float = 1.0,
+        base_model_name: str | None = None,
         wandb_details: WandbDetails | None = None,
         print_every: int | None = None,
         save_every: int | None = None,
@@ -83,6 +86,9 @@ class TransformerEmbeddingModel(ModelBase):
         self.preprocessor = TransformerEmbeddingPreprocessor(
             min_model_comparisons=min_model_comparisons,
         )
+
+        self._base_model_name: str | None = base_model_name
+        self._model_outputs_cache: ModelOutputsCache | None = None
         
         self._embedding_model_source: str | None = load_embedding_model_from
         self._prompt_features_dim: int | None = None
@@ -160,6 +166,7 @@ class TransformerEmbeddingModel(ModelBase):
             "min_model_comparisons": self.min_model_comparisons,
             "embedding_model_epochs": self.embedding_model_epochs,
             "scoring_head_lr_multiplier": self.scoring_head_lr_multiplier,
+            "base_model": self._base_model_name,
         }
 
     def train(
@@ -171,6 +178,9 @@ class TransformerEmbeddingModel(ModelBase):
     ) -> None:
         with Timer("train", verbosity="start+end") as train_timer:
             self.last_timer = train_timer
+            
+            with Timer("load_base_model", verbosity="start+end", parent=train_timer):
+                self._load_base_model()
             
             with Timer("init_or_load_embedding_model", verbosity="start+end", parent=train_timer):
                 if self.embedding_model is None:
@@ -222,6 +232,13 @@ class TransformerEmbeddingModel(ModelBase):
                     prompt_features_dim=preprocessed_data.prompt_features_dim,
                     model_encoder=preprocessed_data.model_encoder,
                     filtered_indexes=preprocessed_data.filtered_indexes,
+                )
+
+            with Timer("cache_base_model_predictions", verbosity="start+end", parent=train_timer):
+                self._model_outputs_cache.compute_and_cache(
+                    entries=[data.entries[i] for i in preprocessed_data.filtered_indexes],
+                    indexes=preprocessed_data.filtered_indexes,
+                    timer=train_timer,
                 )
             
             with Timer("split_preprocessed_data", verbosity="start+end", parent=train_timer):
@@ -283,6 +300,11 @@ class TransformerEmbeddingModel(ModelBase):
         
         with Timer("predict", verbosity="start+end") as predict_timer:
             self.last_timer = predict_timer
+
+            with Timer("predict_base_model", verbosity="start+end", parent=predict_timer):
+                base_result = self._model_outputs_cache.predict(X, batch_size=batch_size) \
+                    if self._model_outputs_cache is not None else None
+
             with Timer("preprocess_input", verbosity="start+end", parent=predict_timer):
                 preprocessed_input = self.preprocessor.preprocess_for_inference(
                     prompts=X.prompts,
@@ -333,6 +355,14 @@ class TransformerEmbeddingModel(ModelBase):
                     
                     all_scores = torch.cat(model_scores)  # [n_prompts]
                     scores_dict[model_name] = all_scores.cpu().numpy()
+
+                # Add base model scores if available
+                if base_result is not None:
+                    accumulated = {}
+                    for model_name, computed_scores in scores_dict.items():
+                        base_scores = base_result.scores.get(model_name, np.zeros_like(computed_scores))
+                        accumulated[model_name] = computed_scores + base_scores
+                    scores_dict = accumulated
             
             return PromptRoutingOutput(_scores=scores_dict)
 
@@ -381,6 +411,9 @@ class TransformerEmbeddingModel(ModelBase):
             "embedding_model_state_dict": self.embedding_model.get_state_dict(),
             "seed": self.seed,
             "scoring_head_lr_multiplier": self.scoring_head_lr_multiplier,
+
+            "base_model_name": self._base_model_name,
+            "base_model_state_dict": self._model_outputs_cache.get_state_dict(),
         }
 
     @classmethod
@@ -420,6 +453,7 @@ class TransformerEmbeddingModel(ModelBase):
             min_model_comparisons=state_dict["min_model_comparisons"],
             embedding_model_epochs=state_dict["embedding_model_epochs"],
             scoring_head_lr_multiplier=state_dict.get("scoring_head_lr_multiplier", 1.0),
+            base_model_name=state_dict.get("base_model_name", None),
             print_every=state_dict["print_every"],
             save_every=state_dict.get("save_every", None),
             checkpoint_name=state_dict.get("checkpoint_name", None),
@@ -441,6 +475,11 @@ class TransformerEmbeddingModel(ModelBase):
         model._optimizer_state = state_dict.get("optimizer_state")
         model._scheduler_state = state_dict.get("scheduler_state")
         model._epochs_completed = state_dict.get("epochs_completed", 0)
+        
+        if model._base_model_name is not None:
+            model_type, _ = model._base_model_name.split("/", 1)
+            base_model = model_loading.load_model_from_state_dict(model_type, state_dict["base_model_state_dict"])
+            model._model_outputs_cache = ModelOutputsCache(base_model, quiet=model.print_every is not None)
         
         return model
 
@@ -502,6 +541,7 @@ class TransformerEmbeddingModel(ModelBase):
             "model_embedding_a": torch.stack([item["model_embedding_a"] for item in batch]),  # [batch_size, model_embedding_dim]
             "model_embedding_b": torch.stack([item["model_embedding_b"] for item in batch]),  # [batch_size, model_embedding_dim]
             "labels": torch.stack([item["label"] for item in batch]),  # [batch_size]
+            "original_indices": torch.tensor([item["original_index"] for item in batch], dtype=torch.long),  # [batch_size]
         }
         
     def _create_optimizer_and_scheduler(self) -> tuple[optim.Optimizer, optim.lr_scheduler._LRScheduler | None]:
@@ -607,6 +647,8 @@ class TransformerEmbeddingModel(ModelBase):
                     model_embedding_b,
                 )  # [batch_size]
                 
+                scores_a, scores_b = self._augment_with_base_scores(scores_a, scores_b, batch["original_indices"])
+                
                 loss: torch.Tensor = criterion(scores_a, scores_b, labels)
                 loss.backward()
                 
@@ -680,6 +722,8 @@ class TransformerEmbeddingModel(ModelBase):
                     model_embedding_b,
                 )  # [batch_size]
                 
+                scores_a, scores_b = self._augment_with_base_scores(scores_a, scores_b, batch["original_indices"])
+                
                 loss: torch.Tensor = criterion(scores_a, scores_b, labels)
                 batch_accuracy = compute_pairwise_accuracy(scores_a, scores_b, labels)
                 
@@ -704,6 +748,45 @@ class TransformerEmbeddingModel(ModelBase):
             print(f"Loaded embedding model from {self._embedding_model_source}")
             
         loaded._network.to("cpu")
+
+    def _augment_with_base_scores(
+        self, 
+        scores_a: torch.Tensor, 
+        scores_b: torch.Tensor, 
+        original_indices: list[int],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if self._model_outputs_cache is None:
+            return scores_a, scores_b
+
+        assert len(scores_a) == len(scores_b) == len(original_indices), "Number of scores and original indices must match"
+
+        base_scores_a, base_scores_b = self._model_outputs_cache.get_base_scores(original_indices, self.device)
+        scores_a = scores_a + torch.tensor(base_scores_a, device=self.device)  # [batch_size]
+        scores_b = scores_b + torch.tensor(base_scores_b, device=self.device)  # [batch_size]
+
+        return scores_a, scores_b
+    
+    def _load_base_model(self) -> None:
+        """Load the base model from the specification string."""
+        if self._base_model_name is None or self._model_outputs_cache is not None:
+            return
+        
+        if "/" not in self._base_model_name:
+            raise ValueError("Base model must be of the form 'model_type/model_name'")
+                
+        model_type, model_name = self._base_model_name.split("/", 1)
+        
+        if self.print_every is not None:
+            print(f"Loading base model: {self._base_model_name}")
+        
+        loaded_model = model_loading.load_model(model_type, model_name)
+        self._model_outputs_cache = ModelOutputsCache(
+            model=loaded_model,
+            quiet=self.print_every is not None,
+        )
+        
+        if self.print_every is not None:
+            print(f"Base model loaded")
 
     def _log_epoch_result(self, result: "TransformerEmbeddingModel.EpochResult") -> None:
         if self.print_every is None:
@@ -732,9 +815,13 @@ class TransformerEmbeddingModel(ModelBase):
         def __init__(
             self,
             pairs: list[PreprocessedPromptPair],
+            indexes: list[int],
             max_length: int,
         ) -> None:
+            assert len(pairs) == len(indexes), "Number of pairs and indexes must match"
+
             self.pairs = pairs
+            self.indexes = indexes
             self.max_length = max_length
         
         def __len__(self) -> int:
@@ -742,7 +829,8 @@ class TransformerEmbeddingModel(ModelBase):
         
         def __getitem__(self, idx: int) -> dict:
             pair = self.pairs[idx]
-            
+            original_index = self.indexes[idx]
+
             # Return raw data, tokenization happens in collate_fn
             return {
                 "prompt": pair.prompt,
@@ -750,6 +838,7 @@ class TransformerEmbeddingModel(ModelBase):
                 "model_embedding_a": torch.from_numpy(pair.model_embedding_a),
                 "model_embedding_b": torch.from_numpy(pair.model_embedding_b),
                 "label": torch.tensor(1.0 if pair.winner_label == 0 else -1.0, dtype=torch.float32),
+                "original_index": original_index,
             }
 
     class _TransformerNetwork(nn.Module):

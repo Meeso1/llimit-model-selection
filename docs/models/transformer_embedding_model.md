@@ -44,6 +44,14 @@ The model consists of three main components:
 
 Training happens in two phases:
 
+### Phase 0: Base Model Loading (Optional)
+- If a `base_model` is specified (in `type/name` format, e.g., `"transformer_embedding/my-base-model"` or `"gradient_boosting/baseline-model"`), it is loaded before training
+- The base model can be **any model type** that implements the ModelBase interface
+- Base model predictions are computed **once before all epochs** using the model's `predict()` method and cached for efficiency
+- The cache is built using the **original unfiltered training data**, indexed by original entry position
+- During training, the current model's scores are added to the cached base model scores
+- This allows the model to learn incremental improvements on top of the base model
+
 ### Phase 1: Embedding Model Training
 - Trains embeddings for LLM models
 - The embedding model is **lazy-initialized** at the start of training:
@@ -61,6 +69,10 @@ Training happens in two phases:
   loss = max(0, -label * (score_a - score_b) + margin)
   ```
   where `label = 1` means model A should win, `-1` means model B should win
+- If a base model is used, the final scores used for loss calculation are:
+  ```
+  final_score = current_model_score + base_model_score
+  ```
 
 ### Training Continuation
 The model fully supports resuming training after being loaded:
@@ -179,6 +191,12 @@ The model supports weighted sampling to handle imbalanced model representation:
 ### Training
 - `balance_model_samples`: Whether to use weighted sampling (default: true)
 - `seed`: Random seed for reproducibility
+- `base_model`: Optional base model to build upon (format: `"type/name"`, e.g., `"transformer_embedding/my-base-model"` or `"gradient_boosting/baseline"`)
+  - The base model can be **any model type** (TransformerEmbeddingModel, GradientBoostingModel, DnEmbeddingModel, etc.)
+  - Base model predictions are computed once using its `predict()` API and cached
+  - Cache is indexed by original data positions (before preprocessing/filtering)
+  - Current model learns to add incremental improvements to the base model
+  - Base model's state is included when saving the trained model
 
 ## Usage Example
 
@@ -188,6 +206,8 @@ python -m src.scripts.cli train --spec-file training_specs/transformer_embedding
 ```
 
 ### Python API
+
+#### Basic Usage
 ```python
 from src.models.transformer_embedding_model import TransformerEmbeddingModel
 from src.models.finetuning_specs.lora_spec import LoraSpec
@@ -225,6 +245,40 @@ loaded_model = TransformerEmbeddingModel.load("my-transformer-model")
 
 # Predict
 scores = loaded_model.predict(input_data, batch_size=32)
+```
+
+#### Using a Base Model
+```python
+# Create a model that builds upon a previously trained base model
+incremental_model = TransformerEmbeddingModel(
+    transformer_model_name="sentence-transformers/all-MiniLM-L12-v2",
+    finetuning_spec=LoraSpec(rank=16, alpha=32, dropout=0.05),
+    hidden_dims=[256, 128],
+    dropout=0.2,
+    max_length=256,
+    optimizer_spec=AdamWSpec(learning_rate=0.0001, weight_decay=0.01),
+    balance_model_samples=True,
+    embedding_spec=FrozenEmbeddingSpec(
+        encoder_model_name="all-MiniLM-L6-v2",
+        hidden_dims=[128, 64],
+        optimizer=AdamWSpec(learning_rate=0.001),
+    ),
+    min_model_comparisons=1000,
+    embedding_model_epochs=10,
+    scoring_head_lr_multiplier=5.0,
+    base_model="gradient_boosting/baseline-v1",  # Use GradientBoosting as base
+    seed=42,
+)
+
+# Train - the model will learn to add corrections to the base model
+incremental_model.train(training_data, validation_split=ValidationSplit(0.2, 42), epochs=20, batch_size=32)
+
+# Save - includes the base model state
+incremental_model.save("my-incremental-model")
+
+# Load and predict - automatically uses base model + learned corrections
+loaded = TransformerEmbeddingModel.load("my-incremental-model")
+scores = loaded.predict(input_data, batch_size=32)
 ```
 
 ## Performance Considerations
@@ -276,9 +330,23 @@ The model outputs a dictionary mapping model names to score arrays:
 
 Scores are constrained to [-1, 1] range using `tanh` activation.
 
+## Base Model Caching
+
+When using a base model, the model employs an efficient caching strategy:
+
+1. **Before Training**: Base model predictions are computed once for all training and validation pairs
+2. **Cached Storage**: Predictions are stored on the device (GPU/CPU) for fast access
+3. **During Training**: For each batch, cached predictions are retrieved by pair index and added to current model predictions
+4. **Memory Efficiency**: Only stores predictions (scalars), not intermediate activations
+5. **No Recomputation**: Base model forward passes are never repeated during training
+
+This caching mechanism makes training with base models almost as fast as training without them, since the base model inference happens only once.
+
 ## Related Files
 
 - Implementation: `src/models/transformer_embedding_model.py`
+- Base model cache: `src/models/base_model_cache.py`
+- Model loading utilities: `src/models/model_loading.py`
 - Pooling utilities: `src/utils/transformer_pooling_utils.py`
 - Data types: `src/data_models/transformer_embedding_types.py`
 - Preprocessor: `src/preprocessing/transformer_embedding_preprocessor.py`

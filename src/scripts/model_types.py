@@ -4,9 +4,7 @@ from pydantic import BaseModel, Field
 from src.models.optimizers.optimizer_spec_union import OptimizerSpec
 from src.models.embedding_specs.embedding_spec_union import EmbeddingSpec
 from src.models.finetuning_specs.finetuning_spec_union import FineTuningSpec
-
-
-ModelType = Literal["dense_network", "dn_embedding", "simple_scoring", "elo_scoring", "greedy_ranking", "mcmf_scoring", "least_squares_scoring", "gradient_boosting", "transformer_embedding"]
+from src.models.model_loading import ModelType
 
 
 class ModelSpecBase(BaseModel):
@@ -98,6 +96,7 @@ class TransformerEmbeddingSpecification(ModelSpecBase):
     min_model_comparisons: int = 20
     embedding_model_epochs: int = 10
     scoring_head_lr_multiplier: float = 1.0
+    base_model: str | None = None
     seed: int = 42
 
 
