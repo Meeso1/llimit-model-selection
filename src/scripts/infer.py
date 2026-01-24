@@ -52,7 +52,7 @@ def infer(
     batch_size: int,
     output_path: str,
 ) -> None:
-    model = _load_model(model_type, model_name)
+    model = load_model(model_type, model_name)
 
     input_data = InputData(prompts=requested_prompts, model_names=models_to_score)
     result =  model.predict(input_data, batch_size)
@@ -65,7 +65,7 @@ def infer(
     print(f"Inference results saved to: {output_path}")
 
 
-def _load_model(model_type: ModelType, model_name: str) -> ModelBase:
+def load_model(model_type: ModelType, model_name: str) -> ModelBase:
     match model_type:
         case "dense_network":
             return DenseNetworkModel.load(model_name)

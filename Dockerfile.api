@@ -1,4 +1,4 @@
-# Use a CUDA-enabled base image for GPU-accelerated training
+# Use a CUDA-enabled base image for GPU-accelerated inference
 FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
 
 # Install system dependencies
@@ -34,20 +34,15 @@ COPY pyproject.toml uv.lock .python-version ./
 RUN uv python install 3.13 && \
     uv sync --frozen --no-install-project
 
-# Pre-download the HuggingFace dataset into the image
-# This avoids the "few minutes" download during pod startup
-RUN uv run python -c "import datasets; datasets.load_dataset('lmarena-ai/arena-human-preference-140k')"
-
 # Copy the rest of the project
 # This includes the source code and any pre-existing LFS files in your local copy
 COPY . .
 
-# Remove `saved_models` - they are needed in API container, but not here
-RUN rm -rf saved_models
-
 # Final sync to install the project itself
 RUN uv sync --frozen
 
-# Default to bash for interactive use in RunPod
-CMD ["/bin/bash"]
+# Expose the API port
+EXPOSE 8000
 
+# Run the FastAPI application with uvicorn
+CMD ["uv", "run", "uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

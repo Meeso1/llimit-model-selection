@@ -10,7 +10,6 @@ __pycache__/
 
 # Project-specific large data directories
 data/
-saved_models/
 inferrence_outputs/
 
 # IDE / Editor
