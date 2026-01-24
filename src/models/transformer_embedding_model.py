@@ -413,7 +413,7 @@ class TransformerEmbeddingModel(ModelBase):
             "scoring_head_lr_multiplier": self.scoring_head_lr_multiplier,
 
             "base_model_name": self._base_model_name,
-            "base_model_state_dict": self._model_outputs_cache.get_state_dict(),
+            "base_model_state_dict": self._model_outputs_cache.model.get_state_dict() if self._model_outputs_cache is not None else None,
         }
 
     @classmethod

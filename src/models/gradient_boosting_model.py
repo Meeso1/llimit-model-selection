@@ -20,6 +20,8 @@ from src.utils.training_history import TrainingHistory, TrainingHistoryEntry
 from src.utils.wandb_details import WandbDetails
 from src.utils.timer import Timer
 from src.utils.data_split import ValidationSplit, split_dn_embedding_preprocessed_data
+from src.models.model_outputs_cache import ModelOutputsCache
+from src.models import model_loading
 import warnings
 
 
@@ -148,6 +150,7 @@ class GradientBoostingModel(ModelBase):
         load_embedding_model_from: str | None = None,
         min_model_comparisons: int = 20,
         embedding_model_epochs: int = 10,
+        base_model_name: str | None = None,
         wandb_details: WandbDetails | None = None,
         print_every: int | None = None,
         seed: int = 42,
@@ -180,6 +183,9 @@ class GradientBoostingModel(ModelBase):
             embedding_model_name=embedding_model_name,
             min_model_comparisons=min_model_comparisons,
         )
+        
+        self._base_model_name: str | None = base_model_name
+        self._model_outputs_cache: ModelOutputsCache | None = None
         
         self._embedding_model_source: str | None = load_embedding_model_from
         self._prompt_embedding_dim: int | None = None
@@ -228,6 +234,7 @@ class GradientBoostingModel(ModelBase):
             "embedding_model_epochs": self.embedding_model_epochs,
             "use_prompt_embeddings": self.use_prompt_embeddings,
             "use_prompt_categories": self.use_prompt_categories,
+            "base_model": self._base_model_name,
         }
 
     def train(
@@ -258,6 +265,9 @@ class GradientBoostingModel(ModelBase):
         
         with Timer("train", verbosity="start+end") as train_timer:
             self.last_timer = train_timer
+            
+            with Timer("load_base_model", verbosity="start+end", parent=train_timer):
+                self._load_base_model()
             
             with Timer("encode_prompts", verbosity="start+end", parent=train_timer):
                 preprocessed_without_model_embeddings = self.preprocessor.preprocess(data)
@@ -306,6 +316,14 @@ class GradientBoostingModel(ModelBase):
                     prompt_categories_dim=preprocessed_without_model_embeddings.prompt_categories_dim,
                 )
             
+            with Timer("cache_base_model_predictions", verbosity="start+end", parent=train_timer):
+                if self._model_outputs_cache is not None:
+                    self._model_outputs_cache.compute_and_cache(
+                        entries=[data.entries[i] for i in preprocessed_data.filtered_indexes],
+                        indexes=preprocessed_data.filtered_indexes,
+                        timer=train_timer,
+                    )
+            
             self._initialize_dimensions(
                 prompt_embedding_dim=preprocessed_data.embedding_dim,
                 prompt_features_dim=preprocessed_without_model_embeddings.prompt_features_dim,
@@ -346,7 +364,7 @@ class GradientBoostingModel(ModelBase):
                         params, 
                         dtrain, 
                         dval, 
-                        rounds_timer
+                        rounds_timer,
                     )
                     
                     self._log_epoch_result(result)
@@ -373,6 +391,11 @@ class GradientBoostingModel(ModelBase):
         
         with Timer("predict", verbosity="start+end") as predict_timer:
             self.last_timer = predict_timer
+            
+            with Timer("predict_base_model", verbosity="start+end", parent=predict_timer):
+                base_result = self._model_outputs_cache.predict(X, batch_size=batch_size) \
+                    if self._model_outputs_cache is not None else None
+            
             with Timer("preprocess_input", verbosity="start+end", parent=predict_timer):
                 encoded_prompts = self.preprocessor.preprocess_for_inference(
                     prompts=X.prompts,
@@ -405,18 +428,26 @@ class GradientBoostingModel(ModelBase):
             
             with Timer("organize_scores", verbosity="start+end", parent=predict_timer):
                 # Organize scores by model
-                scores_dict: dict[str, np.ndarray] = {model: [] for model in X.model_names}
+                scores_dict: dict[str, list[float]] = {model: [] for model in X.model_names}
                 
                 for score, prompt_idx, model_name in zip(raw_scores, prompt_indices, model_names_flat):
                     scores_dict[model_name].append(score)
                 
                 # Convert to numpy arrays
-                scores_dict = {
+                scores_dict_np: dict[str, np.ndarray] = {
                     model: np.array(scores)  # [n_prompts]
                     for model, scores in scores_dict.items()
                 }
+                
+                # Add base model scores if available
+                if base_result is not None:
+                    accumulated = {}
+                    for model_name, computed_scores in scores_dict_np.items():
+                        base_scores = base_result.scores.get(model_name, np.zeros_like(computed_scores))
+                        accumulated[model_name] = computed_scores + base_scores
+                    scores_dict_np = accumulated
             
-            return PromptRoutingOutput(_scores=scores_dict)
+            return PromptRoutingOutput(_scores=scores_dict_np)
 
     def get_history(self) -> TrainingHistory:
         """Get training history."""
@@ -473,6 +504,9 @@ class GradientBoostingModel(ModelBase):
             
             "use_prompt_embeddings": self.use_prompt_embeddings,
             "use_prompt_categories": self.use_prompt_categories,
+            
+            "base_model_name": self._base_model_name,
+            "base_model_state_dict": self._model_outputs_cache.model.get_state_dict() if self._model_outputs_cache is not None else None,
         }
 
     @classmethod
@@ -501,6 +535,7 @@ class GradientBoostingModel(ModelBase):
             colsample_bytree=state_dict["colsample_bytree"],
             reg_alpha=state_dict["reg_alpha"],
             reg_lambda=state_dict["reg_lambda"],
+            base_model_name=state_dict.get("base_model_name", None),
             print_every=state_dict["print_every"],
             seed=state_dict["seed"],
             use_prompt_embeddings=state_dict.get("use_prompt_embeddings", True),
@@ -531,6 +566,12 @@ class GradientBoostingModel(ModelBase):
         
         model._history_entries = state_dict["history_entries"]
         
+        # Load base model if present
+        if model._base_model_name is not None and state_dict.get("base_model_state_dict") is not None:
+            model_type, _ = model._base_model_name.split("/", 1)
+            base_model = model_loading.load_model_from_state_dict(model_type, state_dict["base_model_state_dict"])
+            model._model_outputs_cache = ModelOutputsCache(base_model, quiet=model.print_every is None)
+        
         return model
 
     def _prepare_xgboost_data(
@@ -557,8 +598,9 @@ class GradientBoostingModel(ModelBase):
         features_list = []  # [n_samples, feature_dim]
         labels_list = []  # [n_samples]
         model_ids_list = []  # For balancing
+        indexes_list = []  # Track original indexes for each pair
         
-        for pair in preprocessed_data.pairs:
+        for pair_idx, pair in zip(preprocessed_data.filtered_indexes, preprocessed_data.pairs):
             # Create feature vector for each model in the comparison
             # Format: [prompt_embedding, prompt_features, model_embedding]
             
@@ -566,12 +608,20 @@ class GradientBoostingModel(ModelBase):
             features_list.extend([features_a, features_b])
             labels_list.extend([label_a, label_b])
             model_ids_list.extend([pair.model_id_a, pair.model_id_b])
+            indexes_list.append(pair_idx)
         
         X = np.array(features_list)  # [n_samples, feature_dim]
         y = np.array(labels_list)  # [n_samples]
         sample_weights = self._compute_sample_weights(model_ids_list) if use_balancing else None # [n_samples]
         
-        return xgb.DMatrix(X, label=y, weight=sample_weights) if sample_weights is not None else xgb.DMatrix(X, label=y)
+        dmatrix = xgb.DMatrix(X, label=y, weight=sample_weights) if sample_weights is not None else xgb.DMatrix(X, label=y)
+        
+        # Set base margins (base model scores) if available
+        if self._model_outputs_cache is not None:
+            base_margins = self._get_base_margins(indexes_list)
+            dmatrix.set_base_margin(base_margins)
+        
+        return dmatrix
     
     def _create_sample_pair(self, pair: PreprocessedPromptPair) -> tuple[tuple[np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray]]:
         # Sample 1: Model A
@@ -715,6 +765,7 @@ class GradientBoostingModel(ModelBase):
             train_accuracy = evals_result['train']['pairwise_acc'][0]
             
             # Compute margin ranking loss manually for logging
+            # Note: XGBoost predictions already include base margins
             train_pred = self._xgb_model.predict(dtrain)  # [n_train_samples]
             train_loss = self._compute_margin_loss(train_pred, dtrain)
             
@@ -752,6 +803,54 @@ class GradientBoostingModel(ModelBase):
         self.embedding_model = loaded.embedding_model
         self.embedding_spec = loaded.embedding_spec
         self.embedding_model_epochs = loaded.embedding_model_epochs
+    
+    def _load_base_model(self) -> None:
+        """Load the base model from the specification string."""
+        if self._base_model_name is None or self._model_outputs_cache is not None:
+            return
+        
+        if "/" not in self._base_model_name:
+            raise ValueError("Base model must be of the form 'model_type/model_name'")
+                
+        model_type, model_name = self._base_model_name.split("/", 1)
+        
+        if self.print_every is not None:
+            print(f"Loading base model: {self._base_model_name}")
+        
+        loaded_model = model_loading.load_model(model_type, model_name)
+        self._model_outputs_cache = ModelOutputsCache(
+            model=loaded_model,
+            quiet=self.print_every is None,
+        )
+        
+        if self.print_every is not None:
+            print(f"Base model loaded")
+    
+    def _get_base_margins(
+        self,
+        indexes: list[int],
+    ) -> np.ndarray:
+        """
+        Get base model scores as margins for XGBoost.
+        
+        Args:
+            indexes: Original data indexes for each pair [n_pairs]
+            
+        Returns:
+            Base margins [n_samples] where samples are ordered as pairs [a_1, b_1, a_2, b_2, ...]
+        """
+        if self._model_outputs_cache is None:
+            raise RuntimeError("Model outputs cache not initialized")
+        
+        # Get base scores for all pairs
+        base_scores_a, base_scores_b = self._model_outputs_cache.get_base_scores(indexes)
+        
+        # Convert to numpy array and interleave [a_1, b_1, a_2, b_2, ...]
+        base_margins = np.empty(len(indexes) * 2, dtype=np.float32)
+        base_margins[0::2] = base_scores_a  # Every even index
+        base_margins[1::2] = base_scores_b  # Every odd index
+        
+        return base_margins
 
     def _log_epoch_result(self, result: "GradientBoostingModel.EpochResult") -> None:
         if self.print_every is None:

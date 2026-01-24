@@ -249,6 +249,7 @@ def _create_starting_gradient_boosting(training_spec: TrainingSpecification) -> 
         embedding_spec=model_spec.embedding_spec,
         min_model_comparisons=model_spec.min_model_comparisons,
         embedding_model_epochs=model_spec.embedding_model_epochs,
+        base_model_name=model_spec.base_model,
         wandb_details=training_spec.wandb.to_wandb_details() if training_spec.wandb is not None else None,
         print_every=training_spec.log.print_every,
     )

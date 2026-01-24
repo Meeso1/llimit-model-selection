@@ -80,6 +80,7 @@ class GradientBoostingSpecification(ModelSpecBase):
     embedding_spec: EmbeddingSpec
     min_model_comparisons: int = 20
     embedding_model_epochs: int = 10
+    base_model: str | None = None
 
 
 class TransformerEmbeddingSpecification(ModelSpecBase):
