@@ -1,7 +1,7 @@
 """Gradient boosting model for prompt routing."""
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 import numpy as np
 import os
 from collections import Counter
@@ -19,10 +19,13 @@ from src.utils.string_encoder import StringEncoder
 from src.utils.training_history import TrainingHistory, TrainingHistoryEntry
 from src.utils.wandb_details import WandbDetails
 from src.utils.timer import Timer
-from src.utils.data_split import ValidationSplit, split_dn_embedding_preprocessed_data
+from src.utils.data_split import ValidationSplit, split_gradient_boosting_preprocessed_data
 from src.models.model_outputs_cache import ModelOutputsCache
 from src.models import model_loading
 import warnings
+
+
+FeatureType = Literal["prompt_features", "prompt_embedding", "prompt_categories", "model_embedding"]
 
 
 def margin_ranking_objective(preds: np.ndarray, dtrain: xgb.DMatrix) -> tuple[np.ndarray, np.ndarray]:
@@ -142,9 +145,8 @@ class GradientBoostingModel(ModelBase):
         colsample_bytree: float = 1.0,
         reg_alpha: float = 0.0,
         reg_lambda: float = 1.0,
-        use_prompt_embeddings: bool = True,
-        use_prompt_categories: bool = False,
         balance_model_samples: bool = True,
+        input_features: list[FeatureType] = ["prompt_features", "model_embedding", "prompt_embedding"],
         embedding_model_name: str = "all-MiniLM-L6-v2",
         embedding_spec: EmbeddingSpec | None = None,
         load_embedding_model_from: str | None = None,
@@ -160,14 +162,16 @@ class GradientBoostingModel(ModelBase):
         if load_embedding_model_from is None and embedding_spec is None:
             raise ValueError("Either embedding_spec or load_embedding_model_from must be specified")
         
+        if len(input_features) == 0:
+            raise ValueError("input_features must contain at least one feature type")
+        
         self.max_depth = max_depth
         self.learning_rate = learning_rate
         self.colsample_bytree = colsample_bytree
         self.reg_alpha = reg_alpha
         self.reg_lambda = reg_lambda
         
-        self.use_prompt_embeddings = use_prompt_embeddings
-        self.use_prompt_categories = use_prompt_categories
+        self.input_features = list(set(input_features))
         
         self.balance_model_samples = balance_model_samples
         self.embedding_model_name = embedding_model_name
@@ -253,11 +257,11 @@ class GradientBoostingModel(ModelBase):
             epochs: Number of boosting rounds (trees to add)
             batch_size: Used for embedding model training
         """
-        if self.use_prompt_categories:
+        if "prompt_categories" in self.input_features:
             missing_categories = sum(1 for entry in data.entries if entry.category_tag is None)
             if missing_categories > 0:
                 warnings.warn(
-                    f"use_prompt_categories=True but {missing_categories}/{len(data.entries)} "
+                    f"prompt_categories in input_features but {missing_categories}/{len(data.entries)} "
                     f"({missing_categories/len(data.entries)*100:.1f}%) training entries have no category_tag. "
                     f"These will use zero vectors for categories.",
                     UserWarning
@@ -332,7 +336,7 @@ class GradientBoostingModel(ModelBase):
             )
             
             with Timer("split_preprocessed_data", verbosity="start+end", parent=train_timer):
-                preprocessed_train, preprocessed_val = split_dn_embedding_preprocessed_data(
+                preprocessed_train, preprocessed_val = split_gradient_boosting_preprocessed_data(
                     preprocessed_data,
                     val_fraction=validation_split.val_fraction if validation_split is not None else 0,
                     seed=validation_split.seed if validation_split is not None else 42,
@@ -414,7 +418,7 @@ class GradientBoostingModel(ModelBase):
                 ):
                     for model_name in X.model_names:
                         model_emb = self.model_embeddings[model_name]
-                        # Concatenate: [prompt_embedding, prompt_features, model_embedding, categories] (possibly missing embeddings and categories, based on configuration)
+                        # Concatenate: [prompt_embedding, prompt_features, model_embedding, categories] (missing some based on input_features)
                         features = self._create_features(prompt_emb, prompt_feat, model_emb, prompt_categories)
                         all_features.append(features)
                         prompt_indices.append(prompt_idx)
@@ -502,8 +506,7 @@ class GradientBoostingModel(ModelBase):
             "reg_alpha": self.reg_alpha,
             "reg_lambda": self.reg_lambda,
             
-            "use_prompt_embeddings": self.use_prompt_embeddings,
-            "use_prompt_categories": self.use_prompt_categories,
+            "input_features": self.input_features,
             
             "base_model_name": self._base_model_name,
             "base_model_state_dict": self._model_outputs_cache.model.get_state_dict() if self._model_outputs_cache is not None else None,
@@ -538,8 +541,7 @@ class GradientBoostingModel(ModelBase):
             base_model_name=state_dict.get("base_model_name", None),
             print_every=state_dict["print_every"],
             seed=state_dict["seed"],
-            use_prompt_embeddings=state_dict.get("use_prompt_embeddings", True),
-            use_prompt_categories=state_dict.get("use_prompt_categories", False),
+            input_features=state_dict.get("input_features", ["prompt_features", "model_embedding", "prompt_embedding"]),
         )
         
         model.embedding_model = EmbeddingModelBase.load_from_state_dict(state_dict["embedding_model_state_dict"])
@@ -641,24 +643,21 @@ class GradientBoostingModel(ModelBase):
         model_embedding: np.ndarray,
         prompt_categories: np.ndarray,
     ) -> np.ndarray:
-        result = np.concatenate([
-            prompt_features,
-            model_embedding,
-        ])
+        result = []
         
-        if self.use_prompt_embeddings:
-            result = np.concatenate([
-                result,
-                prompt_embedding,
-            ])
+        if "prompt_features" in self.input_features:
+            result.append(prompt_features)
+        if "model_embedding" in self.input_features:
+            result.append(model_embedding)
+        if "prompt_embedding" in self.input_features:
+            result.append(prompt_embedding)
+        if "prompt_categories" in self.input_features:
+            result.append(prompt_categories)
+            
+        if len(result) == 0:
+            raise ValueError("No input features specified")
         
-        if self.use_prompt_categories and prompt_categories is not None:
-            result = np.concatenate([
-                result,
-                prompt_categories,
-            ])
-        
-        return result
+        return np.concatenate(result)
 
     def _compute_sample_weights(
         self,

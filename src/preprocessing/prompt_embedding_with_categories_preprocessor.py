@@ -129,7 +129,7 @@ class PromptEmbeddingWithCategoriesPreprocessor:
             prompt_embeddings=preprocessed.prompt_embeddings, # [n_prompts, embedding_dim]
             prompt_features=preprocessed.prompt_features,  # [n_prompts, prompt_features_dim]
             prompt_categories=np.stack(categories), # [n_prompts, prompt_categories_dim]
-            model_embeddings=preprocessed.model_embeddings, # [n_models, model_embedding_dim]
+            model_ids=preprocessed.model_ids, # [n_models]
         )
         
     def _compute_categories(self, entries: list[EvaluationEntry]) -> list[np.ndarray]:

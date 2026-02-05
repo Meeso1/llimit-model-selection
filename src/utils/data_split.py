@@ -8,6 +8,7 @@ from src.data_models.dn_embedding_network_types import PreprocessedTrainingData 
 from src.data_models.transformer_embedding_types import PreprocessedTrainingData as TransformerEmbeddingPreprocessedTrainingData
 from src.data_models.simple_scoring_types import PreprocessedTrainingData as SimplePreprocessedTrainingData
 from src.data_models.attention_embedding_types import ModelSetSample, PreprocessedAttentionEmbeddingData
+from src.data_models.gradient_boosting_types import PreprocessedTrainingData as GradientBoostingPreprocessedTrainingData
 
 T = TypeVar('T')
 
@@ -93,7 +94,7 @@ def split_dense_network_preprocessed_data(
     preprocessed_data: DenseNetworkPreprocessedTrainingData,
     val_fraction: float = 0.2,
     seed: int = 42,
-) -> tuple[DenseNetworkPreprocessedTrainingData, DenseNetworkPreprocessedTrainingData]:
+) -> tuple[DenseNetworkPreprocessedTrainingData, DenseNetworkPreprocessedTrainingData | None]:
     """
     Split preprocessed training data into train and validation sets.
     
@@ -142,7 +143,7 @@ def split_dn_embedding_preprocessed_data(
     preprocessed_data: DnEmbeddingPreprocessedTrainingData,
     val_fraction: float = 0.2,
     seed: int = 42,
-) -> tuple[DnEmbeddingPreprocessedTrainingData, DnEmbeddingPreprocessedTrainingData]:
+) -> tuple[DnEmbeddingPreprocessedTrainingData, DnEmbeddingPreprocessedTrainingData | None]:
     """
     Split preprocessed training data into train and validation sets.
     
@@ -173,6 +174,44 @@ def split_dn_embedding_preprocessed_data(
     val_preprocessed = DnEmbeddingPreprocessedTrainingData(
         pairs=val_pairs,
         prompt_features_dim=preprocessed_data.prompt_features_dim,
+    )
+    
+    return train_preprocessed, val_preprocessed
+
+
+def split_gradient_boosting_preprocessed_data(
+    preprocessed_data: GradientBoostingPreprocessedTrainingData,
+    val_fraction: float = 0.2,
+    seed: int = 42,
+) -> tuple[GradientBoostingPreprocessedTrainingData, GradientBoostingPreprocessedTrainingData | None]:
+    if val_fraction == 0:
+        return preprocessed_data, None
+    
+    n_total = len(preprocessed_data.pairs)
+    train_indexes, val_indexes = _compute_split_indices(n_total, val_fraction, seed)
+    
+    train_pairs = [preprocessed_data.pairs[i] for i in train_indexes]
+    val_pairs = [preprocessed_data.pairs[i] for i in val_indexes]
+    
+    train_original_indexes = [preprocessed_data.filtered_indexes[i] for i in train_indexes]
+    val_original_indexes = [preprocessed_data.filtered_indexes[i] for i in val_indexes]
+    
+    train_preprocessed = GradientBoostingPreprocessedTrainingData(
+        pairs=train_pairs,
+        prompt_features_dim=preprocessed_data.prompt_features_dim,
+        model_encoder=preprocessed_data.model_encoder,
+        embedding_dim=preprocessed_data.embedding_dim,
+        prompt_categories_dim=preprocessed_data.prompt_categories_dim,
+        filtered_indexes=train_original_indexes,
+    )
+    
+    val_preprocessed = GradientBoostingPreprocessedTrainingData(
+        pairs=val_pairs,
+        prompt_features_dim=preprocessed_data.prompt_features_dim,
+        model_encoder=preprocessed_data.model_encoder,
+        embedding_dim=preprocessed_data.embedding_dim,
+        prompt_categories_dim=preprocessed_data.prompt_categories_dim,
+        filtered_indexes=val_original_indexes,
     )
     
     return train_preprocessed, val_preprocessed
@@ -275,7 +314,7 @@ def split_preprocessed_behavior_data(
     preprocessed_data: PreprocessedTripletEncoderData[T],
     val_fraction: float = 0.2,
     seed: int = 42,
-) -> tuple[PreprocessedTripletEncoderData[T], PreprocessedTripletEncoderData[T]]:
+) -> tuple[PreprocessedTripletEncoderData[T], PreprocessedTripletEncoderData[T] | None]:
     """
     Split preprocessed triplet encoder data into train and validation sets.
     
