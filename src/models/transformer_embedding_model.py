@@ -241,11 +241,12 @@ class TransformerEmbeddingModel(ScoringModelBase):
                 )
 
             with Timer("cache_base_model_predictions", verbosity="start+end", parent=train_timer):
-                self._model_outputs_cache.compute_and_cache(
-                    entries=[data.entries[i] for i in preprocessed_data.filtered_indexes],
-                    indexes=preprocessed_data.filtered_indexes,
-                    timer=train_timer,
-                )
+                if self._model_outputs_cache is not None:
+                    self._model_outputs_cache.compute_and_cache(
+                        entries=[data.entries[i] for i in preprocessed_data.filtered_indexes],
+                        indexes=preprocessed_data.filtered_indexes,
+                        timer=train_timer,
+                    )
             
             with Timer("split_preprocessed_data", verbosity="start+end", parent=train_timer):
                 preprocessed_train, preprocessed_val = split_transformer_embedding_preprocessed_data(
