@@ -1,0 +1,39 @@
+{
+  "model": {
+    "name": "gb_length_predictor_example",
+    "spec": {
+      "model_type": "gb_length_prediction",
+      "max_depth": 6,
+      "learning_rate": 0.1,
+      "colsample_bytree": 1.0,
+      "colsample_bylevel": 1.0,
+      "reg_alpha": 0.0,
+      "reg_lambda": 1.0,
+      "input_features": ["prompt_features", "model_embedding", "prompt_embedding"],
+      "embedding_model_name": "all-MiniLM-L6-v2",
+      "embedding_spec": {
+        "embedding_type": "frozen",
+        "encoder_model_name": "all-MiniLM-L6-v2",
+        "hidden_dims": [256, 128],
+        "optimizer": {
+          "optimizer_type": "adamw",
+          "learning_rate": 0.001
+        }
+      },
+      "min_model_comparisons": 20,
+      "embedding_model_epochs": 10,
+      "seed": 42
+    }
+  },
+  "data": {
+    "dataset": "both",
+    "validation_split": 0.2,
+    "seed": 42
+  },
+  "epochs": 100,
+  "batch_size": 32,
+  "log": {
+    "print_every": 1
+  },
+  "wandb": null
+}

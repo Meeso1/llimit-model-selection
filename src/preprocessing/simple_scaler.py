@@ -48,6 +48,21 @@ class SimpleScaler:
         
         return (X - self.mean) / self.scale
     
+    def inverse_transform(self, X: np.ndarray) -> np.ndarray:  # [n_samples, n_features]
+        """
+        Inverse transform the normalized data back to original scale.
+        
+        Args:
+            X: Normalized feature array
+            
+        Returns:
+            Original scale feature array
+        """
+        assert self._is_fitted, "Scaler must be fitted before inverse_transform"
+        assert self.mean is not None and self.scale is not None
+        
+        return X * self.scale + self.mean
+    
     def fit_transform(self, X: np.ndarray) -> np.ndarray:  # [n_samples, n_features]
         """
         Fit and transform in one step.
@@ -76,3 +91,9 @@ class SimpleScaler:
         self.scale = state_dict['scale']
         self._is_fitted = True
 
+    @staticmethod
+    def from_state_dict(state_dict: dict) -> "SimpleScaler":
+        """Create a scaler from state dict."""
+        scaler = SimpleScaler()
+        scaler.load_state_dict(state_dict)
+        return scaler

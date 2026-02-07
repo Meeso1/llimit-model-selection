@@ -92,6 +92,67 @@ model = DnEmbeddingLengthPredictionModel(
 )
 ```
 
+### Gradient Boosting Model: `GbLengthPredictionModel`
+
+A gradient boosting (XGBoost) model that predicts response lengths using tree-based ensemble methods.
+
+**Input Features:**
+Supports configurable input features (via `input_features` parameter):
+- **Prompt embeddings**: Dense embeddings from sentence transformers
+- **Prompt features**: 45 handcrafted features (same as dense network model)
+- **Model embeddings**: Learned embeddings for each LLM
+
+**Architecture:**
+- Uses XGBoost with regression objective (`reg:squarederror`)
+- Trains multiple decision trees sequentially (boosting rounds = epochs)
+- Each tree learns from the residuals of previous trees
+- Features are concatenated based on `input_features` configuration
+- Predictions are automatically descaled to original token count range
+
+**Training:**
+- Loss function: Mean Squared Error (RMSE reported)
+- Configurable XGBoost hyperparameters (depth, learning rate, regularization)
+- Supports validation splits
+- Uses SimpleScaler for standardization (saved with model)
+- **Automatically trains embedding model if not initialized**
+- **Implements best model tracking**: Reverts to epoch with highest validation accuracy after training
+
+**Best Model Tracking:**
+- After each epoch, the model state is saved if it achieves better validation accuracy
+- At the end of training, the model automatically reverts to the best epoch
+- Uses validation accuracy if available, otherwise train accuracy
+
+**Metrics:**
+The model tracks several custom metrics:
+- **relative_accuracy**: `1 - abs(1 - predicted/actual)` - "accuracy" metric (higher is better, max 1.0)
+- **rmse**: Root Mean Squared Error in scaled space
+- **mae**: Mean absolute error in original token space
+
+**Key Parameters:**
+```python
+model = GbLengthPredictionModel(
+    max_depth=6,  # Maximum tree depth
+    learning_rate=0.1,  # Boosting learning rate
+    colsample_bytree=1.0,  # Fraction of features per tree (column sampling)
+    colsample_bylevel=1.0,  # Fraction of features per level (feature-level sampling)
+    reg_alpha=0.0,  # L1 regularization
+    reg_lambda=1.0,  # L2 regularization
+    input_features=["prompt_features", "model_embedding", "prompt_embedding"],  # Configurable inputs
+    embedding_spec=FrozenEmbeddingSpec(...),  # Or load_embedding_model_from
+    embedding_model_name="all-MiniLM-L6-v2",
+    min_model_comparisons=20,
+    embedding_model_epochs=10,
+    print_every=1,
+    seed=42,
+)
+```
+
+**When to use:**
+- When you want a non-neural, tree-based approach
+- When you have limited data (gradient boosting can work well with smaller datasets)
+- When you want interpretable feature importance
+- When you want flexibility in choosing input features (can use subset of available features)
+
 ## Preprocessing
 
 ### `LengthPredictionPreprocessor`

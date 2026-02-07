@@ -15,6 +15,7 @@ from src.data_models.gradient_boosting_types import PreprocessedPromptPair, Prep
 from src.models.embedding_specs.embedding_spec_union import EmbeddingSpec
 from src.models.embedding_models.embedding_model_base import EmbeddingModelBase
 from src.preprocessing.prompt_embedding_with_categories_preprocessor import PromptEmbeddingWithCategoriesPreprocessor
+from src.preprocessing.simple_scaler import SimpleScaler
 from src.utils.string_encoder import StringEncoder
 from src.utils.training_history import TrainingHistory, TrainingHistoryEntry
 from src.utils.wandb_details import WandbDetails
@@ -198,6 +199,7 @@ class GradientBoostingModel(ScoringModelBase):
         self._model_embedding_dim: int | None = None
         self._history_entries: list[TrainingHistoryEntry] = []
         self._xgb_model: xgb.Booster | None = None
+        self._prompt_features_scaler: SimpleScaler | None = None
         
         self.last_timer: Timer | None = None
 
@@ -236,8 +238,7 @@ class GradientBoostingModel(ScoringModelBase):
             "embedding_spec": self.embedding_spec.model_dump(),
             "min_model_comparisons": self.min_model_comparisons,
             "embedding_model_epochs": self.embedding_model_epochs,
-            "use_prompt_embeddings": self.use_prompt_embeddings,
-            "use_prompt_categories": self.use_prompt_categories,
+            "input_features": self.input_features,
             "base_model": self._base_model_name,
         }
 
@@ -275,6 +276,8 @@ class GradientBoostingModel(ScoringModelBase):
             
             with Timer("encode_prompts", verbosity="start+end", parent=train_timer):
                 preprocessed_without_model_embeddings = self.preprocessor.preprocess(data)
+            
+            self._prompt_features_scaler = SimpleScaler.from_state_dict(preprocessed_without_model_embeddings.scaler_state)
             
             with Timer("train_embedding_model", verbosity="start+end", parent=train_timer):
                 if self.embedding_model is None:
@@ -318,6 +321,7 @@ class GradientBoostingModel(ScoringModelBase):
                     model_encoder=preprocessed_without_model_embeddings.model_encoder,
                     embedding_dim=preprocessed_without_model_embeddings.embedding_dim,
                     prompt_categories_dim=preprocessed_without_model_embeddings.prompt_categories_dim,
+                    scaler_state=preprocessed_without_model_embeddings.scaler_state,
                 )
             
             with Timer("cache_base_model_predictions", verbosity="start+end", parent=train_timer):
@@ -404,7 +408,8 @@ class GradientBoostingModel(ScoringModelBase):
                 encoded_prompts = self.preprocessor.preprocess_for_inference(
                     prompts=X.prompts,
                     model_names=X.model_names,
-                    model_encoder=StringEncoder()  # We don't need model IDs here
+                    model_encoder=StringEncoder(),  # We don't need model IDs here
+                    scaler=self._prompt_features_scaler,
                 )
             
             with Timer("prepare_features", verbosity="start+end", parent=predict_timer):
@@ -464,7 +469,7 @@ class GradientBoostingModel(ScoringModelBase):
         Returns:
             State dictionary containing all model parameters and configuration
         """
-        if self._xgb_model is None:
+        if self._xgb_model is None or self._prompt_features_scaler is None:
             raise RuntimeError("Model not trained or loaded yet")
         
         if not self.embedding_model.is_initialized:
@@ -492,6 +497,7 @@ class GradientBoostingModel(ScoringModelBase):
             "prompt_categories_dim": self._prompt_categories_dim,
             "model_embedding_dim": self._model_embedding_dim,
             "xgb_model_bytes": xgb_model_bytes,
+            "prompt_features_scaler_state": self._prompt_features_scaler.get_state_dict(),
             "history_entries": self._history_entries,
             "embedding_type": self.embedding_spec.embedding_type,
             "embedding_spec": self.embedding_spec.model_dump(),
@@ -545,6 +551,7 @@ class GradientBoostingModel(ScoringModelBase):
         )
         
         model.embedding_model = EmbeddingModelBase.load_from_state_dict(state_dict["embedding_model_state_dict"])
+        model._prompt_features_scaler = SimpleScaler.from_state_dict(state_dict["prompt_features_scaler_state"])
 
         model._initialize_dimensions(
             prompt_embedding_dim=state_dict["prompt_embedding_dim"],

@@ -76,11 +76,14 @@ class GradientBoostingSpecification(ModelSpecBase):
     reg_alpha: float = 0.0
     reg_lambda: float = 1.0
     balance_model_samples: bool = True
+    input_features: list[Literal["prompt_features", "prompt_embedding", "prompt_categories", "model_embedding"]] = ["prompt_features", "model_embedding", "prompt_embedding"]
     embedding_model_name: str = "all-MiniLM-L6-v2"
-    embedding_spec: EmbeddingSpec
+    embedding_spec: EmbeddingSpec | None = None
+    load_embedding_model_from: str | None = None
     min_model_comparisons: int = 20
     embedding_model_epochs: int = 10
     base_model: str | None = None
+    seed: int = 42
 
 
 class TransformerEmbeddingSpecification(ModelSpecBase):
@@ -113,7 +116,24 @@ class DnEmbeddingLengthPredictionSpecification(ModelSpecBase):
     seed: int = 42
 
 
+class GbLengthPredictionSpecification(ModelSpecBase):
+    model_type: Literal["gb_length_prediction"] = "gb_length_prediction"
+    max_depth: int = 6
+    learning_rate: float = 0.1
+    colsample_bytree: float = 1.0
+    colsample_bylevel: float = 1.0
+    reg_alpha: float = 0.0
+    reg_lambda: float = 1.0
+    input_features: list[Literal["prompt_features", "prompt_embedding", "model_embedding"]] = ["prompt_features", "model_embedding", "prompt_embedding"]
+    embedding_model_name: str = "all-MiniLM-L6-v2"
+    embedding_spec: EmbeddingSpec | None = None
+    load_embedding_model_from: str | None = None
+    min_model_comparisons: int = 20
+    embedding_model_epochs: int = 10
+    seed: int = 42
+
+
 ModelSpec = Annotated[
-    Union[DenseNetworkSpecification, DnEmbeddingSpecification, SimpleScoringSpecification, EloScoringSpecification, GreedyRankingSpecification, McmfScoringSpecification, LeastSquaresScoringSpecification, GradientBoostingSpecification, TransformerEmbeddingSpecification, DnEmbeddingLengthPredictionSpecification], 
+    Union[DenseNetworkSpecification, DnEmbeddingSpecification, SimpleScoringSpecification, EloScoringSpecification, GreedyRankingSpecification, McmfScoringSpecification, LeastSquaresScoringSpecification, GradientBoostingSpecification, TransformerEmbeddingSpecification, DnEmbeddingLengthPredictionSpecification, GbLengthPredictionSpecification], 
     Field(discriminator="model_type")
 ]

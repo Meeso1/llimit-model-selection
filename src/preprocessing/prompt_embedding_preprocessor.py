@@ -11,11 +11,12 @@ from src.data_models.dense_network_types import (
     PreprocessedPromptPair,
     PreprocessedTrainingData,
 )
+from src.preprocessing.simple_scaler import SimpleScaler
 from src.utils.jars import Jars
 from src.utils.string_encoder import StringEncoder
 from src.utils.timer import Timer
 from src.preprocessing.utils import filter_out_ties, filter_out_both_bad, filter_out_empty_entries, filter_out_rare_models, create_encoder
-from src.preprocessing.scoring_feature_extraction import extract_all_prompt_features
+from src.preprocessing.scoring_feature_extraction import extract_prompt_features_for_many
 
 
 class PromptEmbeddingPreprocessor:
@@ -78,14 +79,11 @@ class PromptEmbeddingPreprocessor:
                 filtered_data, model_encoder, filtered_indexes = self._filter_data_and_fit_encoder(data)
                 
             with Timer("extract_prompt_features", verbosity="start+end", parent=timer) as prompt_features_timer:
-                prompt_features_list = [
-                    extract_all_prompt_features(
-                        entry.user_prompt,
-                        entry.conversation_history,
-                        timer=prompt_features_timer
-                    )
-                    for entry in filtered_data.entries
-                ]
+                prompt_features_list, scaler = extract_prompt_features_for_many(
+                    [entry.user_prompt for entry in filtered_data.entries],
+                    [entry.conversation_history for entry in filtered_data.entries],
+                    timer=prompt_features_timer
+                )
             
             with Timer("embed_prompts", verbosity="start+end", parent=timer):
                 prompts = [entry.user_prompt for entry in filtered_data.entries]
@@ -112,6 +110,7 @@ class PromptEmbeddingPreprocessor:
                 prompt_features_dim=prompt_features_dim,
                 model_encoder=model_encoder,
                 filtered_indexes=filtered_indexes,
+                scaler_state=scaler.get_state_dict(),
             )
             
             Jars.preprocessed_data.add(cache_key, preprocessed_data)
@@ -164,6 +163,7 @@ class PromptEmbeddingPreprocessor:
         prompts: list[str],
         model_names: list[str],
         model_encoder: StringEncoder,
+        scaler: SimpleScaler,
     ) -> PreprocessedInferenceInput:
         """
         Preprocess prompts and model names for inference.
@@ -177,10 +177,7 @@ class PromptEmbeddingPreprocessor:
             PreprocessedInferenceInput with embeddings, features, and model IDs
         """
         
-        prompt_features_list = [
-            extract_all_prompt_features(prompt, []) # TODO: Decide what to do with conversation history in inference
-            for prompt in prompts
-        ]
+        prompt_features_list, _ = extract_prompt_features_for_many(prompts, [[] for _ in prompts], scaler)
         prompt_embeddings = self._embed_prompts(prompts).cpu()  # [n_prompts, embedding_dim]
         model_ids = model_encoder.encode(model_names)
         

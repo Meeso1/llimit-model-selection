@@ -13,6 +13,7 @@ from src.models.scoring_model_base import ScoringModelBase
 from src.data_models.data_models import TrainingData, InputData, OutputData
 from src.data_models.dense_network_types import PreprocessedTrainingData, PromptRoutingOutput
 from src.preprocessing.prompt_embedding_preprocessor import PromptEmbeddingPreprocessor
+from src.preprocessing.simple_scaler import SimpleScaler
 from src.utils.training_history import TrainingHistory, TrainingHistoryEntry
 from src.utils.wandb_details import WandbDetails
 from src.utils.string_encoder import StringEncoder
@@ -73,6 +74,7 @@ class DenseNetworkModel(ScoringModelBase):
         self._embedding_dim: int | None = None
         self._prompt_features_dim: int | None = None
         self._model_encoder: StringEncoder | None = None
+        self._prompt_features_scaler: SimpleScaler | None = None
         
         self._history_entries: list[TrainingHistoryEntry] = []
         
@@ -210,6 +212,7 @@ class DenseNetworkModel(ScoringModelBase):
                     prompts=X.prompts,
                     model_names=X.model_names,
                     model_encoder=self.model_encoder,
+                    scaler=self._prompt_features_scaler,
                 )
             
             prompt_embeddings = torch.from_numpy(preprocessed_input.prompt_embeddings).to(self.device)  # [n_prompts, embedding_dim]
@@ -261,7 +264,7 @@ class DenseNetworkModel(ScoringModelBase):
         Returns:
             State dictionary containing all model parameters and configuration
         """
-        if self._network is None:
+        if self._network is None or self._prompt_features_scaler is None:
             raise RuntimeError("Model not trained or loaded yet")
         
         if self._model_encoder is None:
@@ -280,6 +283,7 @@ class DenseNetworkModel(ScoringModelBase):
             "prompt_features_dim": self._prompt_features_dim,
             "network_state_dict": state_dict_to_cpu(self.network.state_dict()),
             "model_encoder": self._model_encoder.get_state_dict(),
+            "prompt_features_scaler_state": self._prompt_features_scaler.get_state_dict(),
             "history_entries": self._history_entries,
         }
 
@@ -347,6 +351,7 @@ class DenseNetworkModel(ScoringModelBase):
         
         preprocessed_data = self.preprocessor.preprocess(data)
         self._model_encoder = preprocessed_data.model_encoder
+        self._prompt_features_scaler = SimpleScaler.from_state_dict(preprocessed_data.scaler_state)
         
         if self._network is None:
             self._initialize_network(

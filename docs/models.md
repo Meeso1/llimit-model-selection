@@ -64,7 +64,8 @@ Supported source model types:
 - `dn_embedding` - Dense network models with embeddings
 - `transformer_embedding` - Transformer-based models with embeddings
 - `gradient_boosting` - Gradient boosting models with embeddings
-- `dn_embedding_length_prediction` - Length prediction models with embeddings
+- `dn_embedding_length_prediction` - Dense network length prediction models with embeddings
+- `gb_length_prediction` - Gradient boosting length prediction models with embeddings
 
 ### Implementation Details
 

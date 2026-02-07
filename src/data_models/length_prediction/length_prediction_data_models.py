@@ -45,7 +45,8 @@ class PreprocessedLengthPredictionTrainingData:
     prompt_features_dim: int
     model_encoder: StringEncoder
     filtered_indexes: list[int]
-    scaler_state: dict[str, Any]
+    output_scaler_state: dict[str, Any]
+    prompt_features_scaler_state: dict[str, Any]
     
     def add_model_embeddings(
         self, 
@@ -87,7 +88,8 @@ class PreprocessedLengthPredictionTrainingData:
             model_embedding_dim=model_embedding_dim,
             model_encoder=self.model_encoder,
             filtered_indexes=self.filtered_indexes,
-            scaler_state=self.scaler_state,
+            output_scaler_state=self.output_scaler_state,
+            prompt_features_scaler_state=self.prompt_features_scaler_state,
         )
 
 
@@ -100,7 +102,8 @@ class PreprocessedLengthPredictionTrainingDataWithEmbeddings:
     model_embedding_dim: int
     model_encoder: StringEncoder
     filtered_indexes: list[int]
-    scaler_state: dict[str, Any]
+    output_scaler_state: dict[str, Any]
+    prompt_features_scaler_state: dict[str, Any]
 
 
 @dataclass

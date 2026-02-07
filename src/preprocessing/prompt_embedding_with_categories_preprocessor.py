@@ -3,6 +3,7 @@ import numpy as np
 from src.data_models.data_models import CategoryTag, EvaluationEntry, TrainingData
 from src.data_models.gradient_boosting_types import PreprocessedTrainingData, PreprocessedPromptPair, PreprocessedInferenceInput
 from src.preprocessing.prompt_embedding_preprocessor import PromptEmbeddingPreprocessor
+from src.preprocessing.simple_scaler import SimpleScaler
 from src.utils.jars import Jars
 from src.utils.string_encoder import StringEncoder
 from src.utils.timer import Timer
@@ -74,6 +75,7 @@ class PromptEmbeddingWithCategoriesPreprocessor:
                 prompt_categories_dim=self.category_dim,
                 model_encoder=preprocessed.model_encoder,
                 filtered_indexes=preprocessed.filtered_indexes,
+                scaler_state=preprocessed.scaler_state,
             )
             
             Jars.preprocessed_data.add(cache_key, preprocessed_data)
@@ -110,6 +112,7 @@ class PromptEmbeddingWithCategoriesPreprocessor:
         prompts: list[str],
         model_names: list[str],
         model_encoder: StringEncoder,
+        scaler: SimpleScaler,
     ) -> PreprocessedInferenceInput:
         """
         Preprocess prompts and model names for inference.
@@ -118,12 +121,13 @@ class PromptEmbeddingWithCategoriesPreprocessor:
             prompts: List of prompts to embed
             model_names: List of model names to score
             model_encoder: Fitted model encoder from training
+            scaler: Fitted scaler from training
             
         Returns:
             PreprocessedInferenceInput with embeddings, features, and model IDs
         """
         
-        preprocessed = self.prompt_embedding_preprocessor.preprocess_for_inference(prompts, model_names, model_encoder)
+        preprocessed = self.prompt_embedding_preprocessor.preprocess_for_inference(prompts, model_names, model_encoder, scaler)
         categories = [np.zeros(self.category_dim) for _ in prompts] # TODO: How to get categories for inference?
         return PreprocessedInferenceInput(
             prompt_embeddings=preprocessed.prompt_embeddings, # [n_prompts, embedding_dim]

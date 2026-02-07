@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Any
 import numpy as np
 
 from src.data_models.data_models import OutputData
@@ -27,6 +28,7 @@ class PreprocessedTrainingData:
     prompt_categories_dim: int
     model_encoder: StringEncoder
     filtered_indexes: list[int]
+    scaler_state: dict[str, Any]
 
 
 @dataclass

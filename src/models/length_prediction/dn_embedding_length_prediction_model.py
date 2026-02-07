@@ -26,6 +26,7 @@ from src.utils.wandb_details import WandbDetails
 from src.utils.timer import Timer
 from src.utils.torch_utils import state_dict_to_cpu
 from src.utils.data_split import ValidationSplit, split_length_prediction_preprocessed_data
+from src.utils.length_prediction_metrics import compute_length_prediction_metrics
 from src.models.optimizers.optimizer_spec import OptimizerSpecification
 from src.models import model_loading
 
@@ -79,6 +80,7 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
         self._optimizer_state: dict[str, Any] | None = None
         self._scheduler_state: dict[str, Any] | None = None
         self._epochs_completed: int = 0
+        self._prompt_features_scaler: SimpleScaler | None = None
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
@@ -176,8 +178,8 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
                     self.embedding_model.embedding_dim,
                 )
             
-            self._scaler = SimpleScaler()
-            self._scaler.load_state_dict(preprocessed_data.scaler_state)
+            self._scaler = SimpleScaler.from_state_dict(preprocessed_data.output_scaler_state)
+            self._prompt_features_scaler = SimpleScaler.from_state_dict(preprocessed_data.prompt_features_scaler_state)
                 
             if self._network is None:
                 self._initialize_network(
@@ -241,7 +243,8 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
                 encoded_prompts = self.preprocessor.preprocess_for_inference(
                     prompts=X.prompts,
                     model_names=X.model_names,
-                    model_encoder=StringEncoder()  # We don't need model IDs here
+                    model_encoder=StringEncoder(),  # We don't need model IDs here
+                    scaler=self._prompt_features_scaler,
                 )
             
             prompt_embeddings = torch.from_numpy(encoded_prompts.prompt_embeddings).to(self.device)  # [n_prompts, embedding_dim]
@@ -277,7 +280,7 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
                         
                         # Inverse transform using scaler to get back to original scale
                         batch_predictions_np = batch_predictions.cpu().numpy()  # [batch_size]
-                        batch_predictions_descaled = self.scaler.transform(batch_predictions_np)  # [batch_size]
+                        batch_predictions_descaled = self.scaler.inverse_transform(batch_predictions_np)  # [batch_size]
                         model_predictions.append(batch_predictions_descaled)
                     
                     predictions_dict[model_name] = np.concatenate(model_predictions) # [n_prompts]
@@ -313,6 +316,7 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
             "prompt_embedding_dim": self._prompt_embedding_dim,
             "prompt_features_dim": self._prompt_features_dim,
             "scaler_state": self.scaler.get_state_dict(),
+            "prompt_features_scaler_state": self._prompt_features_scaler.get_state_dict(),
             "network_state_dict": state_dict_to_cpu(self.network.state_dict()),
             "history_entries": self._history_entries,
             "epochs_completed": self._epochs_completed,
@@ -366,8 +370,8 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
         )
         model.network.to(model.device)
         
-        model._scaler = SimpleScaler()
-        model._scaler.load_state_dict(state_dict["scaler_state"])
+        model._scaler = SimpleScaler.from_state_dict(state_dict["scaler_state"])
+        model._prompt_features_scaler = SimpleScaler.from_state_dict(state_dict["prompt_features_scaler_state"])
         
         model._history_entries = state_dict["history_entries"]
         model._optimizer_state = state_dict.get("optimizer_state")
@@ -493,7 +497,7 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
             # Compute train metrics
             all_predictions_np = np.concatenate(all_predictions)
             all_actuals_np = np.concatenate(all_actuals)
-            train_metrics = self._compute_metrics(all_predictions_np, all_actuals_np)
+            train_metrics = compute_length_prediction_metrics(all_predictions_np, all_actuals_np, self.scaler)
             
             with Timer("perform_validation", verbosity="start+end", parent=timer):
                 val_loss, val_metrics = self._perform_validation(val_dataloader, criterion, timer) if val_dataloader is not None else (None, None)
@@ -503,6 +507,7 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
                 "train_avg_relative_error": train_metrics["avg_relative_error"],
                 "train_avg_relative_ratio": train_metrics["avg_relative_ratio"],
                 "train_stddev_ratio": train_metrics["stddev_ratio"],
+                "train_rmse": train_metrics["rmse"],
                 "train_mae": train_metrics["mae"],
             }
             if val_metrics is not None:
@@ -510,6 +515,7 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
                     "val_avg_relative_error": val_metrics["avg_relative_error"],
                     "val_avg_relative_ratio": val_metrics["avg_relative_ratio"],
                     "val_stddev_ratio": val_metrics["stddev_ratio"],
+                    "val_rmse": val_metrics["rmse"],
                     "val_mae": val_metrics["mae"],
                 })
             
@@ -579,58 +585,10 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
         # Compute validation metrics
         all_predictions_np = np.concatenate(all_predictions)
         all_actuals_np = np.concatenate(all_actuals)
-        val_metrics = self._compute_metrics(all_predictions_np, all_actuals_np)
+        val_metrics = compute_length_prediction_metrics(all_predictions_np, all_actuals_np, self.scaler)
         
         return avg_loss, val_metrics
 
-    def _compute_metrics(
-        self,
-        predictions: np.ndarray,  # [n_samples] - scaled
-        actuals: np.ndarray,  # [n_samples] - scaled
-    ) -> dict[str, float]:
-        """
-        Compute evaluation metrics for length prediction.
-        
-        Metrics computed:
-        - avg_relative_error: 1 - abs(1 - predicted/actual) (higher is better, max 1.0)
-        - avg_relative_ratio: mean(predicted/actual) (should be close to 1.0)
-        - stddev_ratio: stddev(predictions)/stddev(actuals) (should be close to 1.0)
-        - mae: mean absolute error in descaled space
-        
-        Args:
-            predictions: Predicted lengths (scaled)
-            actuals: Actual lengths (scaled)
-            
-        Returns:
-            Dictionary of metrics
-        """
-        predictions_descaled = self.scaler.transform(predictions)  # [n_samples]
-        actuals_descaled = self.scaler.transform(actuals)  # [n_samples]
-        
-        # Avoid division by zero
-        actuals_nonzero = np.where(actuals_descaled == 0, 1e-6, actuals_descaled)
-        
-        # Average relative error magnitude: 1 - abs(1 - predicted/actual)
-        relative_ratios = predictions_descaled / actuals_nonzero
-        avg_relative_error = float(1 - np.mean(np.abs(1 - relative_ratios)))
-        
-        # Average relative ratio: mean(predicted/actual)
-        avg_relative_ratio = float(np.mean(relative_ratios))
-        
-        # Stddev ratio: stddev(predictions)/stddev(actuals)
-        pred_std = np.std(predictions_descaled)
-        actual_std = np.std(actuals_descaled)
-        stddev_ratio = float(pred_std / actual_std) if actual_std > 0 else 1.0
-        
-        # Mean absolute error in descaled space
-        mae = float(np.mean(np.abs(predictions_descaled - actuals_descaled)))
-        
-        return {
-            "avg_relative_error": avg_relative_error,
-            "avg_relative_ratio": avg_relative_ratio,
-            "stddev_ratio": stddev_ratio,
-            "mae": mae,
-        }
 
     def _log_epoch_result(self, result: "DnEmbeddingLengthPredictionModel.EpochResult") -> None:
         if self.print_every is None:

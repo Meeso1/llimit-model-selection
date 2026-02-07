@@ -16,6 +16,7 @@
       "reg_alpha": 0.01,
       "reg_lambda": 0.01,
       "balance_model_samples": true,
+      "input_features": ["prompt_features", "model_embedding", "prompt_embedding"],
       "embedding_model_name": "all-MiniLM-L6-v2",
       "embedding_spec": {
         "embedding_type": "attention",
@@ -38,7 +39,9 @@
         }
       },
       "min_model_comparisons": 1000,
-      "embedding_model_epochs": 150
+      "embedding_model_epochs": 150,
+      "base_model": null,
+      "seed": 42
     }
   },
   "log": {

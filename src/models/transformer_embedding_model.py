@@ -24,6 +24,7 @@ from src.models.embedding_models.embedding_model_base import EmbeddingModelBase
 from src.models.finetuning_specs.finetuning_spec_union import FineTuningSpec
 from src.models.finetuning_specs.lora_spec import LoraSpec
 from src.models.optimizers.adamw_spec import AdamWSpec
+from src.preprocessing.simple_scaler import SimpleScaler
 from src.preprocessing.transformer_embedding_preprocessor import TransformerEmbeddingPreprocessor
 from src.utils.training_history import TrainingHistory, TrainingHistoryEntry
 from src.utils.wandb_details import WandbDetails
@@ -99,6 +100,7 @@ class TransformerEmbeddingModel(ScoringModelBase):
         self._optimizer_state: dict[str, Any] | None = None
         self._scheduler_state: dict[str, Any] | None = None
         self._epochs_completed: int = 0
+        self._prompt_features_scaler: SimpleScaler | None = None
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
@@ -208,7 +210,8 @@ class TransformerEmbeddingModel(ScoringModelBase):
             
             with Timer("preprocess", verbosity="start+end", parent=train_timer):
                 preprocessed_data = self.preprocessor.preprocess(data)
-                
+
+            self._prompt_features_scaler = SimpleScaler.from_state_dict(preprocessed_data.scaler_state)
             if self._network is None:
                 self._initialize_network(
                     prompt_features_dim=preprocessed_data.prompt_features_dim,
@@ -232,6 +235,7 @@ class TransformerEmbeddingModel(ScoringModelBase):
                     prompt_features_dim=preprocessed_data.prompt_features_dim,
                     model_encoder=preprocessed_data.model_encoder,
                     filtered_indexes=preprocessed_data.filtered_indexes,
+                    scaler_state=preprocessed_data.scaler_state,
                 )
 
             with Timer("cache_base_model_predictions", verbosity="start+end", parent=train_timer):
@@ -310,6 +314,7 @@ class TransformerEmbeddingModel(ScoringModelBase):
                     prompts=X.prompts,
                     model_names=X.model_names,
                     model_embeddings=self.model_embeddings,
+                    scaler=self._prompt_features_scaler,
                 )
             
             prompt_features = torch.from_numpy(preprocessed_input.prompt_features).to(self.device)  # [n_prompts, prompt_features_dim]
@@ -377,7 +382,7 @@ class TransformerEmbeddingModel(ScoringModelBase):
         Returns:
             State dictionary containing all model parameters and configuration
         """
-        if self._network is None:
+        if self._network is None or self._prompt_features_scaler is None:
             raise RuntimeError("Model not trained or loaded yet")
         
         if not self.embedding_model.is_initialized:
@@ -403,6 +408,7 @@ class TransformerEmbeddingModel(ScoringModelBase):
             "network_state_dict": state_dict_to_cpu(self.network.state_dict()),
             "history_entries": self._history_entries,
             "epochs_completed": self._epochs_completed,
+            "prompt_features_scaler_state": self._prompt_features_scaler.get_state_dict(),
             
             "embedding_type": self.embedding_spec.embedding_type,
             "embedding_spec": self.embedding_spec.model_dump(),
@@ -461,6 +467,7 @@ class TransformerEmbeddingModel(ScoringModelBase):
         )
         
         model.embedding_model = EmbeddingModelBase.load_from_state_dict(state_dict["embedding_model_state_dict"])
+        model._prompt_features_scaler = SimpleScaler.from_state_dict(state_dict["prompt_features_scaler_state"])
 
         model._initialize_network(
             prompt_features_dim=state_dict["prompt_features_dim"],

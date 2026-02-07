@@ -3,10 +3,11 @@
 import re
 import numpy as np
 from src.data_models.data_models import EvaluationMessage
+from src.preprocessing.simple_scaler import SimpleScaler
 from src.utils.timer import Timer
 
 
-def extract_task_type_features(prompt: str) -> np.ndarray:  # [10]
+def extract_task_type_features(prompt: str) -> np.ndarray:  # [10], all boolean features
     """
     Detect what type of task the prompt is requesting.
     
@@ -62,7 +63,7 @@ def extract_task_type_features(prompt: str) -> np.ndarray:  # [10]
     return np.array(features, dtype=np.float32)
 
 
-def extract_prompt_complexity_features(prompt: str) -> np.ndarray:  # [8]
+def extract_prompt_complexity_features(prompt: str) -> np.ndarray:  # [8], all float features
     """
     Extract features indicating prompt complexity.
     
@@ -92,21 +93,21 @@ def extract_prompt_complexity_features(prompt: str) -> np.ndarray:  # [8]
     avg_word_len = np.mean([len(w) for w in words]) if words else 0.0
     features.append(avg_word_len)
     
-    # Question complexity (number of question marks)
-    features.append(float(prompt.count('?')))
+    # Question complexity (number of question marks / total characters)
+    features.append(float(prompt.count('?')) / max(len(prompt), 1))
     
     # Nested structure indicators (parentheses, quotes)
     nesting_depth = prompt.count('(') + prompt.count('[') + prompt.count('{')
-    features.append(float(nesting_depth))
+    features.append(float(nesting_depth) / max(len(prompt), 1))
     
     # Multi-part request (numbered items, "and", "also")
     multi_part_indicators = len(re.findall(r'\d+\.|\band\b|\balso\b', prompt.lower()))
-    features.append(float(multi_part_indicators))
+    features.append(float(multi_part_indicators) / max(len(prompt), 1))
     
     return np.array(features, dtype=np.float32)
 
 
-def extract_domain_features(prompt: str) -> np.ndarray:  # [12]
+def extract_domain_features(prompt: str) -> np.ndarray:  # [12], all float features
     """
     Extract domain-specific indicators.
     
@@ -135,14 +136,14 @@ def extract_domain_features(prompt: str) -> np.ndarray:  # [12]
     }
     
     features = []
-    for domain, keywords in domains.items():
-        score = sum(1 for kw in keywords if kw in prompt_lower) / len(keywords)
+    for _, keywords in domains.items():
+        score = sum(1 for kw in keywords if kw in prompt_lower) / len(keywords) / max(len(prompt), 1)
         features.append(score)
     
     return np.array(features, dtype=np.float32)
 
 
-def extract_prompt_style_features(prompt: str, timer: Timer | None = None) -> np.ndarray:  # [6]
+def extract_prompt_style_features(prompt: str) -> tuple[np.ndarray, np.ndarray]:  # ([4] (numeric), [2] (boolean)) 
     """
     Extract linguistic style features from prompt.
     
@@ -153,43 +154,44 @@ def extract_prompt_style_features(prompt: str, timer: Timer | None = None) -> np
     Returns:
         Array of 6 style features
     """
-    features = []
+    numeric_features = []
+    boolean_features = []
     prompt_lower = prompt.lower()
     
     # Formality indicators
     informal_markers = ['lol', 'btw', 'idk', 'gonna', 'wanna', 'u ', 'ur ']
     informal_score = sum(1 for m in informal_markers if m in prompt_lower)
-    features.append(float(informal_score))
+    numeric_features.append(float(informal_score) / max(len(prompt), 1))
     
     # Imperative vs interrogative
     starts_with_verb = bool(re.match(r'^(write|create|make|give|tell|explain|show)', prompt_lower))
-    features.append(float(starts_with_verb))
+    boolean_features.append(float(starts_with_verb))
     
     is_question = prompt.strip().endswith('?')
-    features.append(float(is_question))
+    boolean_features.append(float(is_question))
     
     # Specificity (presence of specific constraints)
     constraint_words = ['exactly', 'must', 'should', 'only', 'limit', 'maximum', 'minimum']
     specificity = sum(1 for w in constraint_words if w in prompt_lower)
-    features.append(float(specificity))
+    numeric_features.append(float(specificity) / max(len(prompt), 1))
     
     # Politeness markers
     polite_words = ['please', 'thank', 'could you', 'would you', 'kindly']
     politeness = sum(1 for w in polite_words if w in prompt_lower)
-    features.append(float(politeness))
+    numeric_features.append(float(politeness) / max(len(prompt), 1))
     
     # Urgency markers
     urgent_words = ['urgent', 'asap', 'immediately', 'quick', 'fast', 'now']
     urgency = sum(1 for w in urgent_words if w in prompt_lower)
-    features.append(float(urgency))
+    numeric_features.append(float(urgency) / max(len(prompt), 1))
     
-    return np.array(features, dtype=np.float32)
+    return np.array(numeric_features, dtype=np.float32), np.array(boolean_features, dtype=np.float32)
 
 
 def extract_context_features(
     prompt: str, 
     conversation_history: list[EvaluationMessage]
-) -> np.ndarray:  # [4]
+) -> tuple[np.ndarray, np.ndarray]:  # ([3] (numeric), [1] (boolean))
     """
     Extract features from conversation context.
     
@@ -201,28 +203,29 @@ def extract_context_features(
     Returns:
         Array of 4 context features
     """
-    features = []
+    numeric_features = []
+    boolean_features = []
     
     # Conversation turn count
-    features.append(float(len(conversation_history)))
+    numeric_features.append(float(len(conversation_history)))
     
     # Is this a follow-up? (references to previous context)
     followup_markers = ['that', 'this', 'it', 'the above', 'previous', 'earlier', 'you said']
     is_followup = any(m in prompt.lower() for m in followup_markers)
-    features.append(float(is_followup))
+    boolean_features.append(float(is_followup))
     
     # Total context length (affects model performance)
     total_context_chars = sum(len(m.content) for m in conversation_history)
-    features.append(float(total_context_chars))
+    numeric_features.append(float(total_context_chars))
     
     # Assistant response count (how many turns of dialogue)
     assistant_turns = sum(1 for m in conversation_history if m.role == 'assistant')
-    features.append(float(assistant_turns))
+    numeric_features.append(float(assistant_turns))
     
-    return np.array(features, dtype=np.float32)
+    return np.array(numeric_features, dtype=np.float32), np.array(boolean_features, dtype=np.float32)
 
 
-def extract_output_format_features(prompt: str, timer: Timer | None = None) -> np.ndarray:  # [5]
+def extract_output_format_features(prompt: str) -> np.ndarray:  # [5], all boolean features
     """
     Detect expected output format.
     
@@ -254,7 +257,7 @@ def extract_all_prompt_features(
     prompt: str,
     conversation_history: list[EvaluationMessage],
     timer: Timer | None = None
-) -> np.ndarray:  # [45]
+) -> tuple[np.ndarray, np.ndarray]:  # ([27] (numeric), [18] (boolean))
     """
     Extract all scalar features for a prompt.
     
@@ -277,17 +280,47 @@ def extract_all_prompt_features(
         Concatenated array of all prompt features [45]
     """    
     with Timer("task_type_features", parent=timer):
-        task_type = extract_task_type_features(prompt)
+        task_type_boolean = extract_task_type_features(prompt)
     with Timer("complexity_features", parent=timer):
-        complexity = extract_prompt_complexity_features(prompt)
+        complexity_numeric = extract_prompt_complexity_features(prompt)
     with Timer("domain_features", parent=timer):
-        domain = extract_domain_features(prompt)
+        domain_numeric = extract_domain_features(prompt)
     with Timer("style_features", parent=timer):
-        style = extract_prompt_style_features(prompt)
+        style_numeric, style_boolean = extract_prompt_style_features(prompt)
     with Timer("context_features", parent=timer):
-        context = extract_context_features(prompt, conversation_history)
+        context_numeric, context_boolean = extract_context_features(prompt, conversation_history)
     with Timer("output_format_features", parent=timer):
-        output_format = extract_output_format_features(prompt)
+        output_format_boolean = extract_output_format_features(prompt)
     
-    return np.concatenate([task_type, complexity, domain, style, context, output_format])
+    return np.concatenate([complexity_numeric, domain_numeric, style_numeric, context_numeric]), \
+        np.concatenate([task_type_boolean, style_boolean, context_boolean, output_format_boolean])
 
+
+def extract_prompt_features_for_many(
+    prompts: list[str],
+    conversation_histories: list[list[EvaluationMessage]],
+    scaler: SimpleScaler | None = None,
+    timer: Timer | None = None
+) -> tuple[list[np.ndarray], SimpleScaler]:
+    """
+    Extract all scalar features for a list of prompts.
+    """
+    numeric_features = []
+    boolean_features = []
+    for prompt, conversation_history in zip(prompts, conversation_histories):
+        numeric_feature, boolean_feature = extract_all_prompt_features(prompt, conversation_history, timer)
+        numeric_features.append(numeric_feature)
+        boolean_features.append(boolean_feature)
+
+    numeric_features = np.stack(numeric_features)
+    boolean_features = np.stack(boolean_features)
+
+    if scaler is None:
+        scaler = SimpleScaler().fit(numeric_features)
+
+    numeric_features = scaler.transform(numeric_features)
+
+    return [
+        np.concatenate([numeric_feature, boolean_feature]) \
+        for numeric_feature, boolean_feature in zip(numeric_features, boolean_features) \
+    ], scaler  # [n_prompts, n_features]

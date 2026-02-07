@@ -17,6 +17,7 @@ from src.models.embedding_specs.embedding_spec_union import EmbeddingSpec
 from src.models.embedding_models.embedding_model_base import EmbeddingModelBase
 from src.models.optimizers.adamw_spec import AdamWSpec
 from src.preprocessing.prompt_embedding_preprocessor import PromptEmbeddingPreprocessor
+from src.preprocessing.simple_scaler import SimpleScaler
 from src.utils.string_encoder import StringEncoder
 from src.utils.training_history import TrainingHistory, TrainingHistoryEntry
 from src.utils.wandb_details import WandbDetails
@@ -77,6 +78,7 @@ class DnEmbeddingModel(ScoringModelBase):
         self._optimizer_state: dict[str, Any] | None = None
         self._scheduler_state: dict[str, Any] | None = None
         self._epochs_completed: int = 0
+        self._prompt_features_scaler: SimpleScaler | None = None
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
@@ -162,7 +164,8 @@ class DnEmbeddingModel(ScoringModelBase):
             
             with Timer("encode_prompts", verbosity="start+end", parent=train_timer):
                 encoded_prompts = self.preprocessor.preprocess(data)
-                
+
+            self._prompt_features_scaler = encoded_prompts.scaler
             if self._network is None:
                 self._initialize_network(
                     prompt_embedding_dim=encoded_prompts.embedding_dim,
@@ -245,7 +248,8 @@ class DnEmbeddingModel(ScoringModelBase):
                 encoded_prompts = self.preprocessor.preprocess_for_inference(
                     prompts=X.prompts,
                     model_names=X.model_names,
-                    model_encoder=StringEncoder() # We don't need model IDs here
+                    model_encoder=StringEncoder(), # We don't need model IDs here
+                    scaler=self._prompt_features_scaler,
                 )
             
             prompt_embeddings = torch.from_numpy(encoded_prompts.prompt_embeddings).to(self.device)  # [n_prompts, embedding_dim]
@@ -300,7 +304,7 @@ class DnEmbeddingModel(ScoringModelBase):
         Returns:
             State dictionary containing all model parameters and configuration
         """
-        if self._network is None:
+        if self._network is None or self._prompt_features_scaler is None:
             raise RuntimeError("Model not trained or loaded yet")
         
         if not self.embedding_model.is_initialized:
@@ -321,7 +325,8 @@ class DnEmbeddingModel(ScoringModelBase):
             "network_state_dict": state_dict_to_cpu(self.network.state_dict()),
             "history_entries": self._history_entries,
             "epochs_completed": self._epochs_completed,
-            
+            "prompt_features_scaler_state": self._prompt_features_scaler.get_state_dict(),
+
             "embedding_type": self.embedding_spec.embedding_type,
             "embedding_spec": self.embedding_spec.model_dump(),
             "min_model_comparisons": self.min_model_comparisons,
@@ -363,6 +368,7 @@ class DnEmbeddingModel(ScoringModelBase):
         )
         
         model.embedding_model = EmbeddingModelBase.load_from_state_dict(state_dict["embedding_model_state_dict"])
+        model._prompt_features_scaler = SimpleScaler.from_state_dict(state_dict["prompt_features_scaler_state"])
 
         model._initialize_network(
             prompt_embedding_dim=state_dict["prompt_embedding_dim"],

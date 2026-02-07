@@ -127,6 +127,7 @@ def split_dense_network_preprocessed_data(
         prompt_features_dim=preprocessed_data.prompt_features_dim,
         model_encoder=preprocessed_data.model_encoder,
         filtered_indexes=train_indexes,
+        scaler_state=preprocessed_data.scaler_state,
     )
     
     val_preprocessed = DenseNetworkPreprocessedTrainingData(
@@ -135,6 +136,7 @@ def split_dense_network_preprocessed_data(
         prompt_features_dim=preprocessed_data.prompt_features_dim,
         model_encoder=preprocessed_data.model_encoder,
         filtered_indexes=val_indexes,
+        scaler_state=preprocessed_data.scaler_state,
     )
     
     return train_preprocessed, val_preprocessed
@@ -204,6 +206,7 @@ def split_gradient_boosting_preprocessed_data(
         embedding_dim=preprocessed_data.embedding_dim,
         prompt_categories_dim=preprocessed_data.prompt_categories_dim,
         filtered_indexes=train_original_indexes,
+        scaler_state=preprocessed_data.scaler_state,
     )
     
     val_preprocessed = GradientBoostingPreprocessedTrainingData(
@@ -213,6 +216,7 @@ def split_gradient_boosting_preprocessed_data(
         embedding_dim=preprocessed_data.embedding_dim,
         prompt_categories_dim=preprocessed_data.prompt_categories_dim,
         filtered_indexes=val_original_indexes,
+        scaler_state=preprocessed_data.scaler_state,
     )
     
     return train_preprocessed, val_preprocessed
@@ -253,6 +257,7 @@ def split_transformer_embedding_preprocessed_data(
         prompt_features_dim=preprocessed_data.prompt_features_dim,
         model_encoder=preprocessed_data.model_encoder,
         filtered_indexes=train_indexes,
+        scaler_state=preprocessed_data.scaler_state,
     )
     
     val_preprocessed = TransformerEmbeddingPreprocessedTrainingData(
@@ -260,6 +265,7 @@ def split_transformer_embedding_preprocessed_data(
         prompt_features_dim=preprocessed_data.prompt_features_dim,
         model_encoder=preprocessed_data.model_encoder,
         filtered_indexes=val_indexes,
+        scaler_state=preprocessed_data.scaler_state,
     )
     
     return train_preprocessed, val_preprocessed
@@ -430,7 +436,8 @@ def split_length_prediction_preprocessed_data(
         model_embedding_dim=preprocessed_data.model_embedding_dim,
         model_encoder=preprocessed_data.model_encoder,
         filtered_indexes=train_indexes,
-        scaler_state=preprocessed_data.scaler_state,
+        output_scaler_state=preprocessed_data.output_scaler_state,  
+        prompt_features_scaler_state=preprocessed_data.prompt_features_scaler_state,
     )
     
     val_preprocessed = PreprocessedLengthPredictionTrainingDataWithEmbeddings(
@@ -440,7 +447,8 @@ def split_length_prediction_preprocessed_data(
         model_embedding_dim=preprocessed_data.model_embedding_dim,
         model_encoder=preprocessed_data.model_encoder,
         filtered_indexes=val_indexes,
-        scaler_state=preprocessed_data.scaler_state,
+        output_scaler_state=preprocessed_data.output_scaler_state,
+        prompt_features_scaler_state=preprocessed_data.prompt_features_scaler_state,
     )
     
     return train_preprocessed, val_preprocessed

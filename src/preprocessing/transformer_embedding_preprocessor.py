@@ -9,11 +9,12 @@ from src.data_models.transformer_embedding_types import (
     PreprocessedPromptPair,
     PreprocessedTrainingData,
 )
+from src.preprocessing.simple_scaler import SimpleScaler
 from src.utils.jars import Jars
 from src.utils.string_encoder import StringEncoder
 from src.utils.timer import Timer
 from src.preprocessing.utils import filter_out_ties, filter_out_both_bad, filter_out_empty_entries, filter_out_rare_models, create_encoder
-from src.preprocessing.scoring_feature_extraction import extract_all_prompt_features
+from src.preprocessing.scoring_feature_extraction import extract_prompt_features_for_many
 
 
 class TransformerEmbeddingPreprocessor:
@@ -66,14 +67,11 @@ class TransformerEmbeddingPreprocessor:
                 filtered_data, model_encoder, filtered_indexes = self._filter_data_and_fit_encoder(data)
             
             with Timer("extract_prompt_features", verbosity="start+end", parent=timer) as prompt_features_timer:
-                prompt_features_list = [
-                    extract_all_prompt_features(
-                        entry.user_prompt,
-                        entry.conversation_history,
-                        timer=prompt_features_timer
-                    )
-                    for entry in filtered_data.entries
-                ]
+                prompt_features_list, scaler = extract_prompt_features_for_many(
+                    [entry.user_prompt for entry in filtered_data.entries],
+                    [entry.conversation_history for entry in filtered_data.entries],
+                    timer=prompt_features_timer
+                )
             
             pairs: list[PreprocessedPromptPair] = []
             for entry, prompt_features in zip(filtered_data.entries, prompt_features_list):
@@ -97,6 +95,7 @@ class TransformerEmbeddingPreprocessor:
                 prompt_features_dim=prompt_features_dim,
                 model_encoder=model_encoder,
                 filtered_indexes=filtered_indexes,
+                scaler_state=scaler.get_state_dict(),
             )
             
             Jars.preprocessed_data.add(cache_key, preprocessed_data)
@@ -150,6 +149,7 @@ class TransformerEmbeddingPreprocessor:
         prompts: list[str],
         model_names: list[str],
         model_embeddings: dict[str, np.ndarray],
+        scaler: SimpleScaler,
     ) -> PreprocessedInferenceInput:
         """
         Preprocess prompts and model names for inference.
@@ -163,10 +163,8 @@ class TransformerEmbeddingPreprocessor:
             PreprocessedInferenceInput with prompts, features, and model embeddings
         """
         
-        prompt_features_list = [
-            extract_all_prompt_features(prompt, [])  # TODO: Decide what to do with conversation history in inference
-            for prompt in prompts
-        ]
+        # TODO: Decide what to do with conversation history in inference
+        prompt_features_list, _ = extract_prompt_features_for_many(prompts, [[] for _ in prompts], scaler)
         
         model_embeddings_array = np.array([
             model_embeddings[model_name] if model_name in model_embeddings else model_embeddings["default"]

@@ -102,7 +102,8 @@ class LengthPredictionPreprocessor:
                 prompt_features_dim=preprocessed.prompt_features_dim,
                 model_encoder=preprocessed.model_encoder,
                 filtered_indexes=preprocessed.filtered_indexes,
-                scaler_state=scaler.get_state_dict(),
+                prompt_features_scaler_state=preprocessed.scaler_state,
+                output_scaler_state=scaler.get_state_dict(),
             )
             
             Jars.preprocessed_data.add(cache_key, preprocessed_data)
@@ -138,6 +139,7 @@ class LengthPredictionPreprocessor:
         prompts: list[str],
         model_names: list[str],
         model_encoder: StringEncoder,
+        scaler: SimpleScaler,
     ) -> PreprocessedLengthPredictionInferenceInput:
         """
         Preprocess prompts and model names for inference.
@@ -146,6 +148,7 @@ class LengthPredictionPreprocessor:
             prompts: List of prompts to embed
             model_names: List of model names to predict for
             model_encoder: Fitted model encoder from training
+            scaler: Fitted scaler from training
             
         Returns:
             PreprocessedLengthPredictionInferenceInput with embeddings and features
@@ -154,7 +157,8 @@ class LengthPredictionPreprocessor:
         preprocessed = self.prompt_embedding_preprocessor.preprocess_for_inference(
             prompts, 
             model_names, 
-            model_encoder
+            model_encoder,
+            scaler
         )
         
         return PreprocessedLengthPredictionInferenceInput(
