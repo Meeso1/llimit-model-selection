@@ -9,6 +9,7 @@ from src.data_models.transformer_embedding_types import PreprocessedTrainingData
 from src.data_models.simple_scoring_types import PreprocessedTrainingData as SimplePreprocessedTrainingData
 from src.data_models.attention_embedding_types import ModelSetSample, PreprocessedAttentionEmbeddingData
 from src.data_models.gradient_boosting_types import PreprocessedTrainingData as GradientBoostingPreprocessedTrainingData
+from src.data_models.length_prediction.length_prediction_data_models import PreprocessedLengthPredictionTrainingDataWithEmbeddings
 
 T = TypeVar('T')
 
@@ -386,6 +387,59 @@ def split_attention_embedding_preprocessed_data(
     val_preprocessed = PreprocessedAttentionEmbeddingData(
         samples=val_samples,
         model_id_to_index=preprocessed_data.model_id_to_index,
+        scaler_state=preprocessed_data.scaler_state,
+    )
+    
+    return train_preprocessed, val_preprocessed
+
+
+def split_length_prediction_preprocessed_data(
+    preprocessed_data: PreprocessedLengthPredictionTrainingDataWithEmbeddings,
+    val_fraction: float = 0.2,
+    seed: int = 42,
+) -> tuple[PreprocessedLengthPredictionTrainingDataWithEmbeddings, PreprocessedLengthPredictionTrainingDataWithEmbeddings | None]:
+    """
+    Split preprocessed length prediction training data into train and validation sets.
+    
+    This operates on already-preprocessed samples, maintaining the same model encoder and scaler.
+    
+    Args:
+        preprocessed_data: Preprocessed training data to split
+        val_fraction: Fraction of data to use for validation (default: 0.2)
+        seed: Random seed for reproducibility (default: 42)
+    
+    Returns:
+        Tuple of (train_preprocessed, val_preprocessed) with shared encoder and scaler
+    """
+    if val_fraction == 0:
+        return preprocessed_data, None
+    
+    n_total = len(preprocessed_data.samples)
+    train_indices, val_indices = _compute_split_indices(n_total, val_fraction, seed)
+    
+    train_samples = [preprocessed_data.samples[i] for i in train_indices]
+    val_samples = [preprocessed_data.samples[i] for i in val_indices]
+    
+    train_indexes = [preprocessed_data.filtered_indexes[i] for i in train_indices]
+    val_indexes = [preprocessed_data.filtered_indexes[i] for i in val_indices]
+    
+    train_preprocessed = PreprocessedLengthPredictionTrainingDataWithEmbeddings(
+        samples=train_samples,
+        embedding_dim=preprocessed_data.embedding_dim,
+        prompt_features_dim=preprocessed_data.prompt_features_dim,
+        model_embedding_dim=preprocessed_data.model_embedding_dim,
+        model_encoder=preprocessed_data.model_encoder,
+        filtered_indexes=train_indexes,
+        scaler_state=preprocessed_data.scaler_state,
+    )
+    
+    val_preprocessed = PreprocessedLengthPredictionTrainingDataWithEmbeddings(
+        samples=val_samples,
+        embedding_dim=preprocessed_data.embedding_dim,
+        prompt_features_dim=preprocessed_data.prompt_features_dim,
+        model_embedding_dim=preprocessed_data.model_embedding_dim,
+        model_encoder=preprocessed_data.model_encoder,
+        filtered_indexes=val_indexes,
         scaler_state=preprocessed_data.scaler_state,
     )
     

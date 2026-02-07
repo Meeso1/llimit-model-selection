@@ -27,3 +27,16 @@ This directory contains documentation for different model implementations.
 - **Output**: Same scores for all prompts (based on ELO ratings)
 - **Training**: Iterative ELO rating updates (no neural network)
 - **Inference**: Very fast (lookup table)
+
+
+## Response Length Prediction
+
+In addition to scoring models, we also provide models for predicting response lengths.
+
+### Dense Network Length Prediction Model
+- **File**: [length_prediction.md](length_prediction.md)
+- **Type**: Feedforward neural network for regression
+- **Input**: Prompt embeddings + 45 prompt features + Model embeddings (from scoring models)
+- **Output**: Predicted response length in tokens for each (prompt, model) combination
+- **Training**: Mean Squared Error (MSE) loss on actual response lengths
+- **Inference**: Fast batched predictions

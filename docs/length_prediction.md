@@ -1,0 +1,265 @@
+# Response Length Prediction
+
+This document describes the response length prediction system for LLM model selection.
+
+## Overview
+
+The length prediction system predicts the response length (in tokens) that different LLMs will generate for a given prompt. This is useful for:
+- Estimating API costs before making requests
+- Selecting models based on desired response verbosity
+- Understanding model behavior patterns
+- Optimizing for latency-constrained applications
+
+## Data Models
+
+### Input and Output
+
+Length prediction models use the **same input/output format as scoring models**:
+
+- **`InputData`**: Contains prompts and model names for inference
+  - `prompts: list[str]` - List of prompts to predict response lengths for
+  - `model_names: list[str]` - List of model names to predict for
+
+- **`LengthPredictionOutputData`**: Contains predicted response lengths
+  - `predictions: dict[str, np.ndarray]` - Maps model names to predicted lengths `[n_prompts]`
+
+### Training Data
+
+Length prediction models use **`TrainingData`** - the same data format as scoring models. Response lengths are automatically extracted from model responses in the evaluation entries.
+
+## Models
+
+### Base Class: `LengthPredictionModelBase`
+
+All length prediction models inherit from this abstract base class, which provides:
+- Training interface: `train(data: TrainingData, validation_split, epochs, batch_size)`
+- Prediction interface: `predict(X: InputData, batch_size) -> LengthPredictionOutputData`
+- Model persistence: `save(name)` and `load(name)`
+- Weights & Biases integration
+- Training history tracking
+
+**Key difference from scoring models**: Uses regression (MSE loss) instead of ranking loss.
+
+### Dense Network Model: `DnEmbeddingLengthPredictionModel`
+
+A neural network model that predicts response lengths using:
+
+**Input Features:**
+- **Prompt embeddings**: Dense embeddings from sentence transformers (e.g., all-MiniLM-L6-v2)
+- **Prompt features**: 45 handcrafted features including:
+  - Task type indicators (code, math, creative, etc.)
+  - Complexity measures (length, vocabulary, structure)
+  - Domain indicators (science, law, tech, etc.)
+  - Style features (formality, specificity, politeness)
+  - Context features (conversation history)
+  - Output format expectations
+- **Model embeddings**: Learned embeddings for each LLM (reused from scoring models)
+
+**Architecture:**
+- Concatenates prompt embedding, prompt features, and model embedding
+- Passes through configurable dense layers (default: [256, 128, 64])
+- Uses LeakyReLU activations (negative_slope=0.01) and dropout (0.2)
+- Outputs single scalar (no activation - can predict any value)
+- Predictions are automatically descaled to original token count range
+
+**Training:**
+- Loss function: Mean Squared Error (MSE) on standardized lengths (mean=0, stddev=1)
+- Optimizer: AdamW (configurable)
+- Supports validation splits
+- Uses SimpleScaler for standardization (saved with model)
+- Tracks training/validation loss and custom metrics
+- Integrates with Weights & Biases
+- **Automatically trains embedding model if not initialized**
+
+**Metrics:**
+The model tracks several custom metrics to evaluate performance:
+- **avg_relative_error**: `1 - abs(1 - predicted/actual)` - "accuracy" metric (higher is better, max 1.0)
+- **avg_relative_ratio**: `mean(predicted/actual)` - shows if model tends to over/underpredict (should be ~1.0)
+- **stddev_ratio**: `stddev(predictions)/stddev(actuals)` - variance matching (should be ~1.0)
+- **mae**: Mean absolute error in original token space
+
+**Key Parameters:**
+```python
+model = DnEmbeddingLengthPredictionModel(
+    hidden_dims=[256, 128, 64],  # Network architecture
+    optimizer_spec=AdamWSpec(learning_rate=0.001),
+    embedding_model_name="all-MiniLM-L6-v2",
+    load_embedding_model_from="my_scoring_model",  # Load pre-trained embeddings
+    min_model_comparisons=20,  # Filter rare models
+    embedding_model_epochs=10,
+    print_every=1,  # Print progress every N epochs
+    seed=42,
+)
+```
+
+## Preprocessing
+
+### `LengthPredictionPreprocessor`
+
+Handles data preprocessing for length prediction:
+
+**Process:**
+1. Wraps `PromptEmbeddingPreprocessor` internally for prompt embeddings and features
+2. Extracts response lengths from `model_a_response` and `model_b_response` fields
+3. Approximates token counts using heuristic: `word_count * 1.3`
+4. Fits `SimpleScaler` on all lengths (standardizes to mean=0, stddev=1)
+5. Stores scaler state for inverse transform during inference
+6. Caches preprocessed data for efficiency
+
+**Two-stage preprocessing:**
+- **First stage**: Returns `PreprocessedLengthPredictionTrainingData` (without model embeddings)
+  - Contains scaled lengths and scaler state
+  - Ready for model embedding addition
+- **Second stage**: Call `add_model_embeddings(model_embeddings, model_embedding_dim)` 
+  - Creates `PreprocessedLengthPredictionTrainingDataWithEmbeddings`
+
+This design avoids placeholder values and ensures model embeddings are only added after the embedding model is loaded.
+
+**Usage:**
+```python
+preprocessor = LengthPredictionPreprocessor(
+    embedding_model_name="all-MiniLM-L6-v2",
+    min_model_comparisons=20,
+)
+
+# Training preprocessing
+preprocessed_without_embeddings = preprocessor.preprocess(training_data)
+preprocessed_data = preprocessed_without_embeddings.add_model_embeddings(model_embeddings)
+
+# Inference preprocessing
+inference_input = preprocessor.preprocess_for_inference(
+    prompts=["Write a story about..."],
+    model_names=["gpt-4", "claude-3"],
+    model_encoder=model_encoder,
+)
+```
+
+## Model Embeddings
+
+Length prediction models **reuse model embeddings from scoring models**. The embeddings capture model behavior characteristics learned from pairwise comparisons.
+
+**Two options:**
+
+1. **Load pre-trained embeddings**:
+```python
+length_model = DnEmbeddingLengthPredictionModel(
+    load_embedding_model_from="my_dn_embedding_model",
+    # ... other parameters
+)
+```
+
+2. **Train embeddings from scratch** (if not initialized):
+```python
+length_model = DnEmbeddingLengthPredictionModel(
+    embedding_spec=FrozenEmbeddingSpec(...),  # Will train if needed
+    # ... other parameters
+)
+```
+
+The model automatically:
+- Loads embedding model from source if specified
+- **Trains embedding model on the data if not initialized** (like scoring models do)
+- Extracts model embeddings when calling `add_model_embeddings(model_embeddings, embedding_dim)` during preprocessing
+
+## Usage Example
+
+```python
+from src.data_models.data_models import TrainingData, InputData
+from src.models.length_prediction.dn_embedding_length_prediction_model import DnEmbeddingLengthPredictionModel
+from src.models.embedding_specs.frozen_embedding_spec import FrozenEmbeddingSpec
+from src.models.optimizers.adamw_spec import AdamWSpec
+from src.utils.data_split import ValidationSplit
+
+# Prepare training data (same format as scoring models)
+training_data = TrainingData(entries=[...])  # Your evaluation entries
+
+# Create and train model
+model = DnEmbeddingLengthPredictionModel(
+    load_embedding_model_from="my_scoring_model",
+    hidden_dims=[256, 128, 64],
+    print_every=1,
+)
+
+model.train(
+    data=training_data,
+    validation_split=ValidationSplit(val_fraction=0.2, seed=42),
+    epochs=50,
+    batch_size=32,
+)
+
+# Save model
+model.save("my_length_predictor")
+
+# Make predictions (same format as scoring models)
+input_data = InputData(
+    prompts=["Write a short poem about AI"],
+    model_names=["gpt-4", "claude-3", "llama-2"],
+)
+
+predictions = model.predict(input_data)
+for model_name, lengths in predictions.predicted_lengths.items():
+    print(f"{model_name}: {lengths[0]:.0f} tokens")
+```
+
+## Implementation Notes
+
+### Differences from Scoring Models
+
+Length prediction differs from scoring models in several ways:
+
+1. **Task Type**: Regression (predict continuous value) vs. ranking (pairwise comparison)
+2. **Loss Function**: MSE vs. margin ranking loss
+3. **Data Processing**: Extracts response lengths and standardizes them
+4. **Output**: Predicted token count vs. relative scores
+5. **Output Activation**: None (unbounded regression) vs. tanh (for scores)
+6. **Network Activation**: LeakyReLU vs. ReLU
+7. **Metrics**: Custom regression metrics vs. pairwise accuracy
+
+### Data Format
+
+**Key advantage**: Uses the same `TrainingData` and `InputData` as scoring models, enabling:
+- Easy reuse of existing data pipelines
+- Shared preprocessing logic
+- Consistent model interfaces
+- Training on the same datasets
+
+### Token Length Estimation
+
+Currently uses a simple heuristic for token estimation:
+- **Formula**: `word_count * 1.3`
+- **Rationale**: Most English words are 1 token, but some are split into multiple tokens
+- **Advantages**: Fast, no external dependencies
+- **Accuracy**: Sufficient for relative length prediction
+- **Alternative**: Could be replaced with tiktoken for exact counts if needed
+
+### Length Scaling
+
+Lengths are standardized using `SimpleScaler` (mean=0, stddev=1):
+- **Scaler**: Fits on all lengths during preprocessing
+- **Stored in model**: Scaler state saved with model for inference
+- **Inverse transform**: Automatically applied during prediction to get original scale
+- **Benefits**: 
+  - More stable training with standard normal distribution
+  - Model can extrapolate beyond training range
+  - No artificial bounds on predictions
+
+### Performance Considerations
+
+- Prediction is fast (batched forward passes)
+- Model size depends on `hidden_dims` and embedding dimensions
+- Preprocessing is cached for repeated use of same dataset
+
+## Future Enhancements
+
+Potential improvements to the length prediction system:
+
+1. **Better tokenization**: Use tiktoken for exact token counts (currently uses `word_count * 1.3`)
+2. **Advanced architectures**: Try transformers, attention mechanisms
+3. **Multi-task learning**: Joint training with scoring models
+4. **Uncertainty estimation**: Predict confidence intervals, not just point estimates
+5. **Category-aware models**: Condition predictions on prompt categories
+6. **Length distributions**: Predict full distributions instead of means
+7. **Per-model features**: Add model-specific metadata as features
+8. **Custom loss functions**: Weighted MSE based on length ranges
+9. **Better activations**: Experiment with different activation functions
+10. **Ensemble methods**: Combine multiple models for better predictions

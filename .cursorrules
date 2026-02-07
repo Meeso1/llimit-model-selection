@@ -16,6 +16,7 @@ Documentation should always be kept in sync with the actual implementation.
 - It's a good idea to add those comments to parts of the code where there is a lot of tensor/array manipulation, to track shapes and validate that there are no mismatches, etc.
 - Put all public methods before all private methods in a file/class.
 - Use built-in `list`, `dict`, etc. instead of `List`, `Dict` etc. from `Typing`. Also, use `<type> | None` syntax instead of `Optional`.
+- Don't put any code in `__init__.py` files, unless there's a very good reason (that would be i.e. some required static initialization, or override of some already defined things, but that's pretty much never needed). Don't use `__all__` for simpler imports - we can always just import 'by file path'.
 
 #### Testing
 The project uses UV - if you want to run any code, do so accordingly (just `python ...` won't work).
