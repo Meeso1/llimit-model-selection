@@ -163,8 +163,8 @@ class TransformerEmbeddingModel(ScoringModelBase):
             "optimizer_params": self.optimizer_spec.to_dict(),
             "balance_model_samples": self.balance_model_samples,
             "preprocessor_version": self.preprocessor.version,
-            "embedding_type": self.embedding_spec.embedding_type,
-            "embedding_spec": self.embedding_spec.model_dump(),
+            "embedding_type": self.embedding_model.embedding_type,
+            "embedding_spec": self.embedding_spec.model_dump() if self.embedding_spec is not None else None,
             "min_model_comparisons": self.min_model_comparisons,
             "embedding_model_epochs": self.embedding_model_epochs,
             "scoring_head_lr_multiplier": self.scoring_head_lr_multiplier,
@@ -410,8 +410,8 @@ class TransformerEmbeddingModel(ScoringModelBase):
             "epochs_completed": self._epochs_completed,
             "prompt_features_scaler_state": self._prompt_features_scaler.get_state_dict(),
             
-            "embedding_type": self.embedding_spec.embedding_type,
-            "embedding_spec": self.embedding_spec.model_dump(),
+            "embedding_type": self.embedding_model.embedding_type,
+            "embedding_spec": self.embedding_spec.model_dump() if self.embedding_spec is not None else None,
             "min_model_comparisons": self.min_model_comparisons,
             "embedding_model_epochs": self.embedding_model_epochs,
             "embedding_model_state_dict": self.embedding_model.get_state_dict(),
@@ -440,7 +440,8 @@ class TransformerEmbeddingModel(ScoringModelBase):
         
         # Parse embedding spec using Pydantic TypeAdapter
         embedding_spec_adapter = TypeAdapter(EmbeddingSpec)
-        embedding_spec = embedding_spec_adapter.validate_python(state_dict["embedding_spec"])
+        embedding_spec = embedding_spec_adapter.validate_python(state_dict["embedding_spec"]) \
+            if state_dict["embedding_spec"] is not None else None
         
         finetuning_spec = FineTuningSpecification.from_serialized(
             state_dict["finetuning_method"],

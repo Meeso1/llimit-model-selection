@@ -122,8 +122,8 @@ class DnEmbeddingModel(ScoringModelBase):
             "balance_model_samples": self.balance_model_samples,
             "embedding_model_name": self.embedding_model_name,
             "preprocessor_version": self.preprocessor.version,
-            "embedding_type": self.embedding_spec.embedding_type,
-            "embedding_spec": self.embedding_spec.model_dump(),
+            "embedding_type": self.embedding_model.embedding_type,
+            "embedding_spec": self.embedding_spec.model_dump() if self.embedding_spec is not None else None,
             "min_model_comparisons": self.min_model_comparisons,
             "embedding_model_epochs": self.embedding_model_epochs,
         }
@@ -327,8 +327,8 @@ class DnEmbeddingModel(ScoringModelBase):
             "epochs_completed": self._epochs_completed,
             "prompt_features_scaler_state": self._prompt_features_scaler.get_state_dict(),
 
-            "embedding_type": self.embedding_spec.embedding_type,
-            "embedding_spec": self.embedding_spec.model_dump(),
+            "embedding_type": self.embedding_model.embedding_type,
+            "embedding_spec": self.embedding_spec.model_dump() if self.embedding_spec is not None else None,
             "min_model_comparisons": self.min_model_comparisons,
             "embedding_model_epochs": self.embedding_model_epochs,
             "embedding_model_state_dict": self.embedding_model.get_state_dict(),
@@ -353,7 +353,8 @@ class DnEmbeddingModel(ScoringModelBase):
         
         # Parse embedding spec using Pydantic TypeAdapter
         embedding_spec_adapter = TypeAdapter(EmbeddingSpec)
-        embedding_spec = embedding_spec_adapter.validate_python(state_dict["embedding_spec"])
+        embedding_spec = embedding_spec_adapter.validate_python(state_dict["embedding_spec"]) \
+            if state_dict["embedding_spec"] is not None else None
         
         model = cls(
             hidden_dims=state_dict["hidden_dims"],

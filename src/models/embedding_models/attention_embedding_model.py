@@ -351,6 +351,11 @@ class AttentionEmbeddingModel(EmbeddingModelBase):
         """Check if the model has been initialized (trained or loaded)."""
         return self._pair_encoder is not None and self._set_aggregator is not None
     
+    @property
+    def embedding_type(self) -> str:
+        """Get the type of the embedding model."""
+        return "attention"
+    
     def train(
         self,
         data: TrainingData,

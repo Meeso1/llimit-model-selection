@@ -18,7 +18,7 @@ from src.utils.accuracy import compute_embedding_accuracy
 from src.utils.data_split import split_preprocessed_behavior_data
 from src.utils.timer import Timer
 from src.utils.torch_utils import state_dict_to_cpu
-from src.models.triplet_model_base import TripletModelBase
+from src.models.embedding_models.triplet_model_base import TripletModelBase
 from src.models.optimizers.optimizer_spec import OptimizerSpecification
 from src.models.optimizers.adamw_spec import AdamWSpec
 
@@ -90,6 +90,11 @@ class TripletFrozenEncoderModel(TripletModelBase[TripletEmbedding]):
     def embedding_dim(self) -> int:
         """Get the dimensionality of the output embeddings."""
         return self.hidden_dims[-1]
+    
+    @property
+    def embedding_type(self) -> str:
+        """Get the type of the embedding model."""
+        return "frozen"
     
     def _get_module(self) -> nn.Module:
         """Get the neural network module."""

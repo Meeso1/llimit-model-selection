@@ -37,6 +37,12 @@ class EmbeddingModelBase(ABC):
         """Check if the model has been initialized (trained or loaded)."""
         pass
     
+    @property
+    @abstractmethod
+    def embedding_type(self) -> str:
+        """Get the type of the embedding model."""
+        pass
+    
     @abstractmethod
     def train(
         self,

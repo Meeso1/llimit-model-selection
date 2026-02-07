@@ -234,8 +234,8 @@ class GradientBoostingModel(ScoringModelBase):
             "balance_model_samples": self.balance_model_samples,
             "embedding_model_name": self.embedding_model_name,
             "preprocessor_version": self.preprocessor.version,
-            "embedding_type": self.embedding_spec.embedding_type,
-            "embedding_spec": self.embedding_spec.model_dump(),
+            "embedding_type": self.embedding_model.embedding_type,
+            "embedding_spec": self.embedding_spec.model_dump() if self.embedding_spec is not None else None,
             "min_model_comparisons": self.min_model_comparisons,
             "embedding_model_epochs": self.embedding_model_epochs,
             "input_features": self.input_features,
@@ -499,8 +499,8 @@ class GradientBoostingModel(ScoringModelBase):
             "xgb_model_bytes": xgb_model_bytes,
             "prompt_features_scaler_state": self._prompt_features_scaler.get_state_dict(),
             "history_entries": self._history_entries,
-            "embedding_type": self.embedding_spec.embedding_type,
-            "embedding_spec": self.embedding_spec.model_dump(),
+            "embedding_type": self.embedding_model.embedding_type,
+            "embedding_spec": self.embedding_spec.model_dump() if self.embedding_spec is not None else None,
             "min_model_comparisons": self.min_model_comparisons,
             "embedding_model_epochs": self.embedding_model_epochs,
             "embedding_model_state_dict": self.embedding_model.get_state_dict(),
@@ -531,7 +531,8 @@ class GradientBoostingModel(ScoringModelBase):
         """        
         # Parse embedding spec using Pydantic TypeAdapter
         embedding_spec_adapter = TypeAdapter(EmbeddingSpec)
-        embedding_spec = embedding_spec_adapter.validate_python(state_dict["embedding_spec"])
+        embedding_spec = embedding_spec_adapter.validate_python(state_dict["embedding_spec"]) \
+            if state_dict["embedding_spec"] is not None else None
         
         model = cls(
             balance_model_samples=state_dict["balance_model_samples"],
