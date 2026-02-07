@@ -1,5 +1,4 @@
 #### Docs
-
 Use contents of `/docs` directory when implementing changes or researching stuff.
 When implementing a new feature or significantly modifying a module, create or update a short markdown note in `docs/` describing the logic, data structures, and usage. This serves as a reference for future context.
 
@@ -21,3 +20,6 @@ Documentation should always be kept in sync with the actual implementation.
 #### Testing
 The project uses UV - if you want to run any code, do so accordingly (just `python ...` won't work).
 If you want to run some code to test the changes, make a temporary file with test code, run that file, and delete it afterwards.
+
+#### Other stuff
+Don't create a 'summary' document describing changes that were made, unless explicitly asked to.

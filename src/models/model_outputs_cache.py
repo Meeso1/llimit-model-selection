@@ -2,7 +2,7 @@
 
 import warnings
 
-from src.models.model_base import ModelBase
+from src.models.scoring_model_base import ScoringModelBase
 from src.data_models.data_models import EvaluationEntry, InputData, OutputData
 from src.utils.timer import Timer
 
@@ -14,7 +14,7 @@ class ModelOutputsCache:
     
     def __init__(
         self,
-        model: ModelBase,
+        model: ScoringModelBase,
         quiet: bool = False,
     ) -> None:
         """

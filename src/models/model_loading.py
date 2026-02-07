@@ -3,9 +3,11 @@
 from typing import Any, Literal
 
 from src.models.model_base import ModelBase
+from src.models.length_prediction.length_prediction_model_base import LengthPredictionModelBase
+from src.models.scoring_model_base import ScoringModelBase
 
 
-ModelType = Literal[
+ScoringModelType = Literal[
     "dense_network",
     "dn_embedding",
     "simple_scoring",
@@ -16,6 +18,12 @@ ModelType = Literal[
     "gradient_boosting",
     "transformer_embedding",
 ]
+
+LengthPredictionModelType = Literal[
+    "dn_embedding_length_prediction",
+]
+
+ModelType = ScoringModelType | LengthPredictionModelType
 
 
 def load_model(model_type: ModelType, model_name: str) -> ModelBase:
@@ -57,9 +65,19 @@ def load_model(model_type: ModelType, model_name: str) -> ModelBase:
         case "transformer_embedding":
             from src.models.transformer_embedding_model import TransformerEmbeddingModel
             return TransformerEmbeddingModel.load(model_name)
+        case "dn_embedding_length_prediction":
+            from src.models.length_prediction.dn_embedding_length_prediction_model import DnEmbeddingLengthPredictionModel
+            return DnEmbeddingLengthPredictionModel.load(model_name)
         case unknown:
             raise ValueError(f"Unknown model type: {unknown}")  # pyright: ignore[reportUnreachable]
 
+
+def load_scoring_model(model_type: ScoringModelType, model_name: str) -> ScoringModelBase:
+    return ScoringModelBase.assert_kind(load_model(model_type, model_name))
+
+
+def load_length_prediction_model(model_type: LengthPredictionModelType, model_name: str) -> LengthPredictionModelBase:
+    return LengthPredictionModelBase.assert_kind(load_model(model_type, model_name))
 
 
 def load_model_from_state_dict(model_type: ModelType, state_dict: dict[str, Any]) -> ModelBase:
@@ -101,5 +119,12 @@ def load_model_from_state_dict(model_type: ModelType, state_dict: dict[str, Any]
         case "transformer_embedding":
             from src.models.transformer_embedding_model import TransformerEmbeddingModel
             return TransformerEmbeddingModel.load_state_dict(state_dict)
+        case "dn_embedding_length_prediction":
+            from src.models.length_prediction.dn_embedding_length_prediction_model import DnEmbeddingLengthPredictionModel
+            return DnEmbeddingLengthPredictionModel.load_state_dict(state_dict)
         case unknown:
             raise ValueError(f"Unknown model type: {unknown}")  # pyright: ignore[reportUnreachable]
+
+
+def load_scoring_model_from_state_dict(model_type: ScoringModelType, state_dict: dict[str, Any]) -> ScoringModelBase:
+    return ScoringModelBase.assert_kind(load_model_from_state_dict(model_type, state_dict))

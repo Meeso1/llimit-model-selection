@@ -74,7 +74,9 @@ The training specification is a JSON file with the following structure:
 - `name`: Name to save the model under (required)
 - `start_state`: If provided, loads an existing model with this name as the starting point and ignores `spec` (optional)
 - `spec`: Model-specific specification (required if `start_state` is not provided)
-  - `model_type`: Type of model - one of: `"dense_network"`, `"dn_embedding"`, `"simple_scoring"`, `"elo_scoring"`, `"greedy_ranking"`, `"mcmf_scoring"`, `"least_squares_scoring"`, `"gradient_boosting"`, `"transformer_embedding"`
+  - `model_type`: Type of model - one of:
+    - **Scoring models**: `"dense_network"`, `"dn_embedding"`, `"simple_scoring"`, `"elo_scoring"`, `"greedy_ranking"`, `"mcmf_scoring"`, `"least_squares_scoring"`, `"gradient_boosting"`, `"transformer_embedding"`
+    - **Length prediction models**: `"dn_embedding_length_prediction"`
   - For `dense_network`:
     - `embedding_model_name`: Sentence transformer model name
     - `hidden_dims`: List of hidden layer sizes

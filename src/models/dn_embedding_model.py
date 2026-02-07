@@ -10,11 +10,10 @@ from torch.utils.data import DataLoader, TensorDataset, WeightedRandomSampler
 from collections import Counter
 from pydantic import TypeAdapter
 
-from src.models.model_base import ModelBase
+from src.models.scoring_model_base import ScoringModelBase
 from src.data_models.data_models import TrainingData, InputData, OutputData
 from src.data_models.dn_embedding_network_types import PreprocessedPromptPair, PreprocessedTrainingData, PromptRoutingOutput
 from src.models.embedding_specs.embedding_spec_union import EmbeddingSpec
-from src.models.embedding_specs.frozen_embedding_spec import FrozenEmbeddingSpec
 from src.models.embedding_models.embedding_model_base import EmbeddingModelBase
 from src.models.optimizers.adamw_spec import AdamWSpec
 from src.preprocessing.prompt_embedding_preprocessor import PromptEmbeddingPreprocessor
@@ -32,7 +31,7 @@ from src.models.optimizers.adamw_spec import AdamWSpec
 _DataLoaderType = DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]
 
 
-class DnEmbeddingModel(ModelBase):
+class DnEmbeddingModel(ScoringModelBase):
     def __init__(
         self,
         hidden_dims: list[int] | None = None,

@@ -101,7 +101,19 @@ class TransformerEmbeddingSpecification(ModelSpecBase):
     seed: int = 42
 
 
+class DnEmbeddingLengthPredictionSpecification(ModelSpecBase):
+    model_type: Literal["dn_embedding_length_prediction"] = "dn_embedding_length_prediction"
+    hidden_dims: list[int]
+    optimizer: OptimizerSpec
+    embedding_model_name: str = "all-MiniLM-L6-v2"
+    embedding_spec: EmbeddingSpec | None = None
+    load_embedding_model_from: str | None = None
+    min_model_comparisons: int = 20
+    embedding_model_epochs: int = 10
+    seed: int = 42
+
+
 ModelSpec = Annotated[
-    Union[DenseNetworkSpecification, DnEmbeddingSpecification, SimpleScoringSpecification, EloScoringSpecification, GreedyRankingSpecification, McmfScoringSpecification, LeastSquaresScoringSpecification, GradientBoostingSpecification, TransformerEmbeddingSpecification], 
+    Union[DenseNetworkSpecification, DnEmbeddingSpecification, SimpleScoringSpecification, EloScoringSpecification, GreedyRankingSpecification, McmfScoringSpecification, LeastSquaresScoringSpecification, GradientBoostingSpecification, TransformerEmbeddingSpecification, DnEmbeddingLengthPredictionSpecification], 
     Field(discriminator="model_type")
 ]

@@ -12,7 +12,7 @@ from transformers import AutoModel, AutoTokenizer
 from pydantic import TypeAdapter
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
-from src.models.model_base import ModelBase
+from src.models.scoring_model_base import ScoringModelBase
 from src.data_models.data_models import TrainingData, InputData, OutputData
 from src.data_models.transformer_embedding_types import (
     PreprocessedPromptPair,
@@ -38,7 +38,7 @@ from src.models.model_outputs_cache import ModelOutputsCache
 from src.models import model_loading
 
 
-class TransformerEmbeddingModel(ModelBase):
+class TransformerEmbeddingModel(ScoringModelBase):
     def __init__(
         self,
         transformer_model_name: str = "sentence-transformers/all-MiniLM-L12-v2",
@@ -478,7 +478,7 @@ class TransformerEmbeddingModel(ModelBase):
         
         if model._base_model_name is not None:
             model_type, _ = model._base_model_name.split("/", 1)
-            base_model = model_loading.load_model_from_state_dict(model_type, state_dict["base_model_state_dict"])
+            base_model = model_loading.load_scoring_model_from_state_dict(model_type, state_dict["base_model_state_dict"])
             model._model_outputs_cache = ModelOutputsCache(base_model, quiet=model.print_every is not None)
         
         return model
@@ -779,7 +779,7 @@ class TransformerEmbeddingModel(ModelBase):
         if self.print_every is not None:
             print(f"Loading base model: {self._base_model_name}")
         
-        loaded_model = model_loading.load_model(model_type, model_name)
+        loaded_model = model_loading.load_scoring_model(model_type, model_name)
         self._model_outputs_cache = ModelOutputsCache(
             model=loaded_model,
             quiet=self.print_every is not None,

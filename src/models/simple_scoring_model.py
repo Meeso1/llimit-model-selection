@@ -9,7 +9,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset, WeightedRandomSampler
 from collections import Counter
 
-from src.models.model_base import ModelBase
+from src.models.scoring_model_base import ScoringModelBase
 from src.data_models.data_models import TrainingData, InputData
 from src.data_models.dense_network_types import PromptRoutingOutput
 from src.data_models.simple_scoring_types import PreprocessedTrainingData
@@ -25,7 +25,7 @@ from src.models.optimizers.adamw_spec import AdamWSpec
 from src.utils.data_split import ValidationSplit, split_simple_scoring_preprocessed_data
 
 
-class SimpleScoringModel(ModelBase):
+class SimpleScoringModel(ScoringModelBase):
     """
     Simple baseline model that learns a single score for each LLM.
     

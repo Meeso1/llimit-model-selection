@@ -9,7 +9,7 @@ from pydantic import TypeAdapter
 import xgboost as xgb
 import tempfile
 
-from src.models.model_base import ModelBase
+from src.models.scoring_model_base import ScoringModelBase
 from src.data_models.data_models import TrainingData, InputData, OutputData
 from src.data_models.gradient_boosting_types import PreprocessedPromptPair, PreprocessedTrainingData, PromptRoutingOutput
 from src.models.embedding_specs.embedding_spec_union import EmbeddingSpec
@@ -137,7 +137,7 @@ def pairwise_accuracy_metric(preds: np.ndarray, dtrain: xgb.DMatrix) -> tuple[st
     return 'pairwise_acc', float(correct)
 
 
-class GradientBoostingModel(ModelBase):
+class GradientBoostingModel(ScoringModelBase):
     def __init__(
         self,
         max_depth: int = 6,
@@ -571,7 +571,7 @@ class GradientBoostingModel(ModelBase):
         # Load base model if present
         if model._base_model_name is not None and state_dict.get("base_model_state_dict") is not None:
             model_type, _ = model._base_model_name.split("/", 1)
-            base_model = model_loading.load_model_from_state_dict(model_type, state_dict["base_model_state_dict"])
+            base_model = model_loading.load_scoring_model_from_state_dict(model_type, state_dict["base_model_state_dict"])
             model._model_outputs_cache = ModelOutputsCache(base_model, quiet=model.print_every is None)
         
         return model
@@ -816,7 +816,7 @@ class GradientBoostingModel(ModelBase):
         if self.print_every is not None:
             print(f"Loading base model: {self._base_model_name}")
         
-        loaded_model = model_loading.load_model(model_type, model_name)
+        loaded_model = model_loading.load_scoring_model(model_type, model_name)
         self._model_outputs_cache = ModelOutputsCache(
             model=loaded_model,
             quiet=self.print_every is None,

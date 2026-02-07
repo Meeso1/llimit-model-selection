@@ -9,7 +9,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset, WeightedRandomSampler
 from collections import Counter
 
-from src.models.model_base import ModelBase
+from src.models.scoring_model_base import ScoringModelBase
 from src.data_models.data_models import TrainingData, InputData, OutputData
 from src.data_models.dense_network_types import PreprocessedTrainingData, PromptRoutingOutput
 from src.preprocessing.prompt_embedding_preprocessor import PromptEmbeddingPreprocessor
@@ -27,7 +27,7 @@ from src.models.optimizers.adamw_spec import AdamWSpec
 _DataLoaderType = DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]
 
 
-class DenseNetworkModel(ModelBase):
+class DenseNetworkModel(ScoringModelBase):
     """
     Dense neural network for routing prompts to LLMs.
     

@@ -5,7 +5,7 @@ from typing import Any
 import numpy as np
 import warnings
 
-from src.models.model_base import ModelBase
+from src.models.scoring_model_base import ScoringModelBase
 from src.data_models.data_models import TrainingData, InputData
 from src.data_models.dense_network_types import PromptRoutingOutput
 from src.preprocessing.utils import filter_out_rare_models, filter_out_empty_entries, filter_out_both_bad, filter_out_ties, create_encoder
@@ -18,7 +18,7 @@ from src.utils.data_split import ValidationSplit, train_val_split
 from src.analysis import exploration
 
 
-class LeastSquaresScoringModel(ModelBase):
+class LeastSquaresScoringModel(ScoringModelBase):
     """
     Least squares based model that learns scores for each LLM.
     

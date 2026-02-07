@@ -161,7 +161,129 @@ The model automatically:
 - **Trains embedding model on the data if not initialized** (like scoring models do)
 - Extracts model embeddings when calling `add_model_embeddings(model_embeddings, embedding_dim)` during preprocessing
 
-## Usage Example
+## Usage
+
+### CLI Training
+
+Length prediction models use the same training command as scoring models. Create a JSON specification file:
+
+```json
+{
+  "model": {
+    "name": "my_length_predictor",
+    "spec": {
+      "model_type": "dn_embedding_length_prediction",
+      "hidden_dims": [256, 128, 64],
+      "optimizer": {
+        "optimizer_type": "adamw",
+        "learning_rate": 0.001
+      },
+      "load_embedding_model_from": "my_scoring_model",
+      "embedding_model_name": "all-MiniLM-L6-v2",
+      "min_model_comparisons": 20,
+      "embedding_model_epochs": 10,
+      "seed": 42
+    }
+  },
+  "data": {
+    "dataset": "both",
+    "validation_split": 0.2,
+    "seed": 42
+  },
+  "epochs": 50,
+  "batch_size": 32,
+  "log": {
+    "print_every": 1
+  }
+}
+```
+
+Train the model:
+```bash
+uv run python -m src.scripts.cli train --spec-file length_prediction_spec.json
+```
+
+### CLI Inference
+
+Use the same inference command as scoring models:
+
+```bash
+uv run python -m src.scripts.cli infer \
+  --model "dn_embedding_length_prediction/my_length_predictor" \
+  --models-to-score "gpt-4" "claude-3" "llama-2" \
+  --prompts "Write a short poem" "Explain quantum computing"
+```
+
+The output JSON will include `model_kind` field to distinguish between scoring and length prediction results:
+
+```json
+{
+  "model_kind": "length_prediction",
+  "result_type": "predicted_lengths",
+  "results": {
+    "gpt-4": [150.5, 320.8],
+    "claude-3": [180.2, 280.4],
+    "llama-2": [120.3, 250.6]
+  }
+}
+```
+
+### API
+
+**Endpoint**: `POST /infer`
+
+The API uses a unified endpoint that can run both scoring and length prediction. To use length prediction, specify the `length_prediction_model` parameter.
+
+**Request (length prediction only):**
+```json
+{
+  "length_prediction_model": "dn_embedding_length_prediction/my_model",
+  "model_names": ["gpt-4", "claude-3", "llama-2"],
+  "prompts": ["Write a short poem", "Explain quantum computing"],
+  "batch_size": 128
+}
+```
+
+**Response:**
+```json
+{
+  "scores": null,
+  "predicted_lengths": {
+    "gpt-4": [150.5, 320.8],
+    "claude-3": [180.2, 280.4],
+    "llama-2": [120.3, 250.6]
+  }
+}
+```
+
+**Request (both scoring and length prediction):**
+```json
+{
+  "scoring_model": "dn_embedding/my_scoring_model",
+  "length_prediction_model": "dn_embedding_length_prediction/my_model",
+  "model_names": ["gpt-4", "claude-3", "llama-2"],
+  "prompts": ["Write a short poem", "Explain quantum computing"],
+  "batch_size": 128
+}
+```
+
+**Response:**
+```json
+{
+  "scores": {
+    "gpt-4": [0.8, 0.7],
+    "claude-3": [0.7, 0.75],
+    "llama-2": [0.6, 0.65]
+  },
+  "predicted_lengths": {
+    "gpt-4": [150.5, 320.8],
+    "claude-3": [180.2, 280.4],
+    "llama-2": [120.3, 250.6]
+  }
+}
+```
+
+### Python API Example
 
 ```python
 from src.data_models.data_models import TrainingData, InputData

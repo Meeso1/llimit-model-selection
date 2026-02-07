@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 import numpy as np
 
-from src.models.model_base import ModelBase
+from src.models.scoring_model_base import ScoringModelBase
 from src.data_models.data_models import TrainingData, InputData
 from src.data_models.dense_network_types import PromptRoutingOutput
 from src.data_models.simple_scoring_types import PreprocessedTrainingData, PreprocessedComparison
@@ -16,7 +16,7 @@ from src.utils.timer import Timer
 from src.utils.data_split import ValidationSplit
 
 
-class GreedyRankingModel(ModelBase):
+class GreedyRankingModel(ScoringModelBase):
     """
     Greedy ranking model that finds the best linear ordering of models.
     
