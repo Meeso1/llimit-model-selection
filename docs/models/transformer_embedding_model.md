@@ -56,7 +56,7 @@ Training happens in two phases:
 - Trains embeddings for LLM models
 - The embedding model is **lazy-initialized** at the start of training:
   - If loading from a saved model, the embedding model is already initialized
-  - If `load_embedding_model_from` is specified, loads the embedding model from that file
+  - If `load_embedding_model_from` is specified, loads the embedding model from that model (format: "model_type/model_name")
   - Otherwise, creates a new embedding model from `embedding_spec`
 - Training is skipped if the embedding model is already initialized
 - Uses triplet loss or attention-based learning
@@ -186,7 +186,7 @@ The model supports weighted sampling to handle imbalanced model representation:
 - `embedding_spec`: Configuration for the model embedding component
 - `embedding_model_epochs`: Number of epochs to train the embedding model
 - `min_model_comparisons`: Minimum comparisons required to include a model
-- `load_embedding_model_from`: Path to pre-trained embedding model (optional)
+- `load_embedding_model_from`: Load pre-trained embedding model from another model (format: "model_type/model_name", e.g., "transformer_embedding/my_model") (optional)
 
 ### Training
 - `balance_model_samples`: Whether to use weighted sampling (default: true)

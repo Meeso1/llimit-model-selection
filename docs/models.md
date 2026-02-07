@@ -40,3 +40,37 @@ In addition to scoring models, we also provide models for predicting response le
 - **Output**: Predicted response length in tokens for each (prompt, model) combination
 - **Training**: Mean Squared Error (MSE) loss on actual response lengths
 - **Inference**: Fast batched predictions
+
+## Embedding Model Reuse
+
+Many models (e.g., `DnEmbeddingModel`, `TransformerEmbeddingModel`, `GradientBoostingModel`, `DnEmbeddingLengthPredictionModel`) learn embeddings for LLM models as part of their training. These embeddings can be reused across models to:
+- Share learned model representations
+- Bootstrap new models with pre-trained embeddings
+- Avoid retraining embeddings from scratch
+
+### Loading Embedding Models
+
+To load embedding models from a previously trained model, use the `load_embedding_model_from` parameter:
+
+```python
+# Format: "model_type/model_name"
+new_model = DnEmbeddingModel(
+    load_embedding_model_from="dn_embedding/my_base_model",
+    # ... other parameters
+)
+```
+
+Supported source model types:
+- `dn_embedding` - Dense network models with embeddings
+- `transformer_embedding` - Transformer-based models with embeddings
+- `gradient_boosting` - Gradient boosting models with embeddings
+- `dn_embedding_length_prediction` - Length prediction models with embeddings
+
+### Implementation Details
+
+The embedding loading mechanism uses:
+- **`HasEmbeddingModel` protocol**: Defines the interface for models that contain embedding models
+- **`load_embedding_model_from_model()` function**: Centralized loading function in `src/models/model_loading.py`
+- **Standard model loading**: Uses the same `load_model()` infrastructure as other model loading operations
+
+The protocol ensures type safety and allows for extracting embedding models from any compatible model type without hardcoding dependencies.

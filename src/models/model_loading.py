@@ -5,6 +5,8 @@ from typing import Any, Literal
 from src.models.model_base import ModelBase
 from src.models.length_prediction.length_prediction_model_base import LengthPredictionModelBase
 from src.models.scoring_model_base import ScoringModelBase
+from src.models.has_embedding_model import HasEmbeddingModel
+from src.models.embedding_models.embedding_model_base import EmbeddingModelBase
 
 
 ScoringModelType = Literal[
@@ -128,3 +130,45 @@ def load_model_from_state_dict(model_type: ModelType, state_dict: dict[str, Any]
 
 def load_scoring_model_from_state_dict(model_type: ScoringModelType, state_dict: dict[str, Any]) -> ScoringModelBase:
     return ScoringModelBase.assert_kind(load_model_from_state_dict(model_type, state_dict))
+
+
+def load_embedding_model_from_model(model_spec: str) -> EmbeddingModelBase:
+    """
+    Load an embedding model from a saved model that contains one.
+    
+    Args:
+        model_spec: Model specification in the format "model_type/model_name"
+        
+    Returns:
+        The extracted embedding model
+        
+    Raises:
+        ValueError: If the model_spec format is invalid
+        RuntimeError: If the loaded model doesn't have an embedding model or it's not initialized
+    """
+    if "/" not in model_spec:
+        raise ValueError(
+            f"model_spec must be in the format 'model_type/model_name', got: {model_spec}"
+        )
+    
+    model_type, model_name = model_spec.split("/", 1)
+    
+    # Load the model using the standard loading mechanism
+    loaded_model = load_model(model_type, model_name)  # type: ignore[arg-type]
+    
+    # Check if the model has an embedding model
+    if not isinstance(loaded_model, HasEmbeddingModel):
+        raise RuntimeError(
+            f"Model {model_spec} does not contain an embedding model. "
+            f"Only models implementing HasEmbeddingModel protocol can be used."
+        )
+    
+    # Extract the embedding model
+    embedding_model = loaded_model.embedding_model
+    
+    if embedding_model is None:
+        raise RuntimeError(
+            f"Model {model_spec} has no initialized embedding model"
+        )
+    
+    return embedding_model

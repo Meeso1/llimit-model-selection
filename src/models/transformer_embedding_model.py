@@ -185,7 +185,7 @@ class TransformerEmbeddingModel(ScoringModelBase):
             with Timer("init_or_load_embedding_model", verbosity="start+end", parent=train_timer):
                 if self.embedding_model is None:
                     if self._embedding_model_source is not None:
-                        self._load_embedding_model_from_source()
+                        self.embedding_model = model_loading.load_embedding_model_from_model(self._embedding_model_source)
                     elif self.embedding_spec is not None:
                         self.embedding_model = self.embedding_spec.create_model(
                             min_model_comparisons=self.min_model_comparisons,
@@ -734,20 +734,6 @@ class TransformerEmbeddingModel(ScoringModelBase):
         avg_loss = total_loss / n_batches
         avg_accuracy = total_accuracy / n_batches
         return avg_loss, avg_accuracy
-
-    def _load_embedding_model_from_source(self) -> None:
-        if self._embedding_model_source is None:
-            raise RuntimeError("No embedding model source specified")
-
-        loaded: TransformerEmbeddingModel = TransformerEmbeddingModel.load(self._embedding_model_source)
-        self.embedding_model = loaded.embedding_model
-        self.embedding_spec = loaded.embedding_spec
-        self.embedding_model_epochs = loaded.embedding_model_epochs
-        
-        if self.print_every is not None:
-            print(f"Loaded embedding model from {self._embedding_model_source}")
-            
-        loaded._network.to("cpu")
 
     def _augment_with_base_scores(
         self, 

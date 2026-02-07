@@ -26,6 +26,7 @@ from src.utils.accuracy import compute_pairwise_accuracy
 from src.utils.data_split import ValidationSplit, split_dn_embedding_preprocessed_data
 from src.models.optimizers.optimizer_spec import OptimizerSpecification
 from src.models.optimizers.adamw_spec import AdamWSpec
+from src.models import model_loading
 
 
 _DataLoaderType = DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]
@@ -138,7 +139,7 @@ class DnEmbeddingModel(ScoringModelBase):
             with Timer("init_or_load_embedding_model", verbosity="start+end", parent=train_timer):
                 if self.embedding_model is None:
                     if self._embedding_model_source is not None:
-                        self._load_embedding_model_from_source()
+                        self.embedding_model = model_loading.load_embedding_model_from_model(self._embedding_model_source)
                     elif self.embedding_spec is not None:
                         self.embedding_model = self.embedding_spec.create_model(
                             min_model_comparisons=self.min_model_comparisons,
@@ -638,18 +639,6 @@ class DnEmbeddingModel(ScoringModelBase):
         avg_loss = total_loss / n_batches
         avg_accuracy = total_accuracy / n_batches
         return avg_loss, avg_accuracy
-
-    def _load_embedding_model_from_source(self) -> None:
-        if self._embedding_model_source is None:
-            raise RuntimeError("No embedding model source specified")
-
-        loaded: DnEmbeddingModel = DnEmbeddingModel.load(self._embedding_model_source)
-        self.embedding_model = loaded.embedding_model
-        self.embedding_spec = loaded.embedding_spec
-        self.embedding_model_epochs = loaded.embedding_model_epochs
-        
-        if self.print_every is not None:
-            print(f"Loaded embedding model from {self._embedding_model_source}")
 
     def _log_epoch_result(self, result: "DnEmbeddingModel.EpochResult") -> None:
         if self.print_every is None:

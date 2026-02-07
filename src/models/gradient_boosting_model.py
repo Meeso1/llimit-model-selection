@@ -279,7 +279,7 @@ class GradientBoostingModel(ScoringModelBase):
             with Timer("train_embedding_model", verbosity="start+end", parent=train_timer):
                 if self.embedding_model is None:
                     if self._embedding_model_source is not None:
-                        self._load_embedding_model()
+                        self.embedding_model = model_loading.load_embedding_model_from_model(self._embedding_model_source)
                     elif self.embedding_spec is not None:
                         self.embedding_model = self.embedding_spec.create_model(
                             min_model_comparisons=self.min_model_comparisons,
@@ -796,12 +796,6 @@ class GradientBoostingModel(ScoringModelBase):
             val_accuracy=val_accuracy,
             duration=timer.elapsed_time,
         )
-
-    def _load_embedding_model(self) -> None:
-        loaded: GradientBoostingModel = GradientBoostingModel.load(self._embedding_model_source)
-        self.embedding_model = loaded.embedding_model
-        self.embedding_spec = loaded.embedding_spec
-        self.embedding_model_epochs = loaded.embedding_model_epochs
     
     def _load_base_model(self) -> None:
         """Load the base model from the specification string."""

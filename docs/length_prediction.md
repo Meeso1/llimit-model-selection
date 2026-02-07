@@ -84,7 +84,7 @@ model = DnEmbeddingLengthPredictionModel(
     hidden_dims=[256, 128, 64],  # Network architecture
     optimizer_spec=AdamWSpec(learning_rate=0.001),
     embedding_model_name="all-MiniLM-L6-v2",
-    load_embedding_model_from="my_scoring_model",  # Load pre-trained embeddings
+    load_embedding_model_from="dn_embedding/my_scoring_model",  # Load pre-trained embeddings (format: model_type/model_name)
     min_model_comparisons=20,  # Filter rare models
     embedding_model_epochs=10,
     print_every=1,  # Print progress every N epochs
@@ -143,7 +143,7 @@ Length prediction models **reuse model embeddings from scoring models**. The emb
 1. **Load pre-trained embeddings**:
 ```python
 length_model = DnEmbeddingLengthPredictionModel(
-    load_embedding_model_from="my_dn_embedding_model",
+    load_embedding_model_from="dn_embedding/my_dn_embedding_model",  # Format: model_type/model_name
     # ... other parameters
 )
 ```
@@ -178,7 +178,7 @@ Length prediction models use the same training command as scoring models. Create
         "optimizer_type": "adamw",
         "learning_rate": 0.001
       },
-      "load_embedding_model_from": "my_scoring_model",
+      "load_embedding_model_from": "dn_embedding/my_scoring_model",
       "embedding_model_name": "all-MiniLM-L6-v2",
       "min_model_comparisons": 20,
       "embedding_model_epochs": 10,
@@ -297,7 +297,7 @@ training_data = TrainingData(entries=[...])  # Your evaluation entries
 
 # Create and train model
 model = DnEmbeddingLengthPredictionModel(
-    load_embedding_model_from="my_scoring_model",
+    load_embedding_model_from="dn_embedding/my_scoring_model",  # Format: model_type/model_name
     hidden_dims=[256, 128, 64],
     print_every=1,
 )

@@ -95,7 +95,7 @@ The training specification is a JSON file with the following structure:
     - `optimizer`: Optimizer specification
     - `balance_model_samples`: Whether to balance samples by model (default: true)
     - `embedding_spec`: Embedding model specification (see `docs/models.md`)
-    - `load_embedding_model_from`: Path to load pre-trained embedding model from (optional)
+    - `load_embedding_model_from`: Load pre-trained embedding model from another model (format: "model_type/model_name", e.g., "dn_embedding/my_model") (optional)
     - `min_model_comparisons`: Minimum comparisons per model to include (default: 20)
     - `embedding_model_epochs`: Number of epochs to train embedding model (default: 10)
     - `seed`: Random seed (default: 42)
