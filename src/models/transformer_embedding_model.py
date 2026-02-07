@@ -32,6 +32,7 @@ from src.utils.timer import Timer
 from src.utils.torch_utils import state_dict_to_cpu
 from src.utils.accuracy import compute_pairwise_accuracy
 from src.utils.data_split import ValidationSplit, split_transformer_embedding_preprocessed_data
+from src.utils.best_model_tracker import BestModelTracker
 from src.models.optimizers.optimizer_spec import OptimizerSpecification
 from src.models.finetuning_specs.finetuning_spec import FineTuningSpecification
 from src.utils.transformer_pooling_utils import detect_pooling_method, pool_embeddings, PoolingMethod
@@ -103,6 +104,7 @@ class TransformerEmbeddingModel(ScoringModelBase):
         self._prompt_features_scaler: SimpleScaler | None = None
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self._best_model_tracker = BestModelTracker()
         
         self.last_timer: Timer | None = None
 
@@ -269,6 +271,14 @@ class TransformerEmbeddingModel(ScoringModelBase):
                     
                     self._log_epoch_result(result)
                     
+                    self._best_model_tracker.record_state(
+                        accuracy=result.val_accuracy if result.val_accuracy is not None else result.train_accuracy,
+                        module_dict={
+                            'network': state_dict_to_cpu(self._network.state_dict()),
+                        },
+                        epoch=epoch
+                    )
+                    
                     if scheduler is not None:
                         scheduler.step()
                     
@@ -278,6 +288,12 @@ class TransformerEmbeddingModel(ScoringModelBase):
                         checkpoint_name = f"{self.checkpoint_name}@ep{epoch}"
                         print(f"Saving checkpoint: {checkpoint_name}")
                         self.save(checkpoint_name)
+            
+            # Revert to best model parameters if available
+            best_state, best_epoch = self._best_model_tracker.get_best_state()
+            if best_state is not None:
+                print(f"\nReverting to best model parameters from epoch {best_epoch} (accuracy={self._best_model_tracker.best_accuracy:.4f})")
+                self._network.load_state_dict(best_state["network"])
             
             self._optimizer_state = optimizer.state_dict()
             self._scheduler_state = scheduler.state_dict() if scheduler is not None else None
@@ -510,6 +526,7 @@ class TransformerEmbeddingModel(ScoringModelBase):
         """
         dataset = self._PairwiseDataset(
             pairs=preprocessed_data.pairs,
+            indexes=preprocessed_data.filtered_indexes,
             max_length=self.max_length,
         )
         

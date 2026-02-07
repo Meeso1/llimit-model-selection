@@ -456,8 +456,8 @@ class AttentionEmbeddingModel(EmbeddingModelBase):
                     self._best_model_tracker.record_state(
                         accuracy=accuracy_to_track,
                         module_dict={
-                            'pair_encoder': self._pair_encoder.state_dict(),
-                            'set_aggregator': self._set_aggregator.state_dict(),
+                            'pair_encoder': state_dict_to_cpu(self._pair_encoder.state_dict()),
+                            'set_aggregator': state_dict_to_cpu(self._set_aggregator.state_dict()),
                         },
                         epoch=epoch
                     )
