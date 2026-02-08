@@ -772,7 +772,7 @@ class TransformerEmbeddingModel(ScoringModelBase):
 
         assert len(scores_a) == len(scores_b) == len(original_indices), "Number of scores and original indices must match"
 
-        base_scores_a, base_scores_b = self._model_outputs_cache.get_base_scores(original_indices, self.device)
+        base_scores_a, base_scores_b = self._model_outputs_cache.get_base_scores(original_indices)
         scores_a = scores_a + torch.tensor(base_scores_a, device=self.device)  # [batch_size]
         scores_b = scores_b + torch.tensor(base_scores_b, device=self.device)  # [batch_size]
 
