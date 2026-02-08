@@ -19,6 +19,7 @@ ScoringModelType = Literal[
     "least_squares_scoring",
     "gradient_boosting",
     "transformer_embedding",
+    "response_predictive",
 ]
 
 LengthPredictionModelType = Literal[
@@ -68,6 +69,9 @@ def load_model(model_type: ModelType, model_name: str) -> ModelBase:
         case "transformer_embedding":
             from src.models.transformer_embedding_model import TransformerEmbeddingModel
             return TransformerEmbeddingModel.load(model_name)
+        case "response_predictive":
+            from src.models.response_predictive_model import ResponsePredictiveModel
+            return ResponsePredictiveModel.load(model_name)
         case "dn_embedding_length_prediction":
             from src.models.length_prediction.dn_embedding_length_prediction_model import DnEmbeddingLengthPredictionModel
             return DnEmbeddingLengthPredictionModel.load(model_name)
@@ -125,6 +129,9 @@ def load_model_from_state_dict(model_type: ModelType, state_dict: dict[str, Any]
         case "transformer_embedding":
             from src.models.transformer_embedding_model import TransformerEmbeddingModel
             return TransformerEmbeddingModel.load_state_dict(state_dict)
+        case "response_predictive":
+            from src.models.response_predictive_model import ResponsePredictiveModel
+            return ResponsePredictiveModel.load_state_dict(state_dict)
         case "dn_embedding_length_prediction":
             from src.models.length_prediction.dn_embedding_length_prediction_model import DnEmbeddingLengthPredictionModel
             return DnEmbeddingLengthPredictionModel.load_state_dict(state_dict)

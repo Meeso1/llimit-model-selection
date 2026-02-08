@@ -10,6 +10,7 @@ from src.data_models.simple_scoring_types import PreprocessedTrainingData as Sim
 from src.data_models.attention_embedding_types import ModelSetSample, PreprocessedAttentionEmbeddingData
 from src.data_models.gradient_boosting_types import PreprocessedTrainingData as GradientBoostingPreprocessedTrainingData
 from src.data_models.length_prediction.length_prediction_data_models import PreprocessedLengthPredictionTrainingDataWithEmbeddings
+from src.data_models.response_predictive_types import PreprocessedTrainingDataWithEmbeddings as ResponsePredictivePreprocessedTrainingDataWithEmbeddings
 
 T = TypeVar('T')
 
@@ -449,6 +450,59 @@ def split_length_prediction_preprocessed_data(
         filtered_indexes=val_indexes,
         output_scaler_state=preprocessed_data.output_scaler_state,
         prompt_features_scaler_state=preprocessed_data.prompt_features_scaler_state,
+    )
+    
+    return train_preprocessed, val_preprocessed
+
+
+def split_response_predictive_preprocessed_data(
+    preprocessed_data: ResponsePredictivePreprocessedTrainingDataWithEmbeddings,
+    val_fraction: float = 0.2,
+    seed: int = 42,
+) -> tuple[ResponsePredictivePreprocessedTrainingDataWithEmbeddings, ResponsePredictivePreprocessedTrainingDataWithEmbeddings | None]:
+    """
+    Split preprocessed response predictive training data into train and validation sets.
+    
+    This operates on already-preprocessed pairs, maintaining the same model encoder and scalers.
+    
+    Args:
+        preprocessed_data: Preprocessed training data to split
+        val_fraction: Fraction of data to use for validation (default: 0.2)
+        seed: Random seed for reproducibility (default: 42)
+    
+    Returns:
+        Tuple of (train_preprocessed, val_preprocessed) with shared encoder and scalers
+    """
+    if val_fraction == 0:
+        return preprocessed_data, None
+    
+    n_total = len(preprocessed_data.pairs)
+    train_indices, val_indices = _compute_split_indices(n_total, val_fraction, seed)
+    
+    train_pairs = [preprocessed_data.pairs[i] for i in train_indices]
+    val_pairs = [preprocessed_data.pairs[i] for i in val_indices]
+    
+    train_indexes = [preprocessed_data.filtered_indexes[i] for i in train_indices]
+    val_indexes = [preprocessed_data.filtered_indexes[i] for i in val_indices]
+    
+    train_preprocessed = ResponsePredictivePreprocessedTrainingDataWithEmbeddings(
+        pairs=train_pairs,
+        prompt_features_dim=preprocessed_data.prompt_features_dim,
+        response_features_dim=preprocessed_data.response_features_dim,
+        model_encoder=preprocessed_data.model_encoder,
+        filtered_indexes=train_indexes,
+        prompt_scaler_state=preprocessed_data.prompt_scaler_state,
+        response_scaler_state=preprocessed_data.response_scaler_state,
+    )
+    
+    val_preprocessed = ResponsePredictivePreprocessedTrainingDataWithEmbeddings(
+        pairs=val_pairs,
+        prompt_features_dim=preprocessed_data.prompt_features_dim,
+        response_features_dim=preprocessed_data.response_features_dim,
+        model_encoder=preprocessed_data.model_encoder,
+        filtered_indexes=val_indexes,
+        prompt_scaler_state=preprocessed_data.prompt_scaler_state,
+        response_scaler_state=preprocessed_data.response_scaler_state,
     )
     
     return train_preprocessed, val_preprocessed

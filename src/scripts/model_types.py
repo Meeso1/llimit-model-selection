@@ -104,6 +104,26 @@ class TransformerEmbeddingSpecification(ModelSpecBase):
     seed: int = 42
 
 
+class ResponsePredictiveSpecification(ModelSpecBase):
+    model_type: Literal["response_predictive"] = "response_predictive"
+    response_repr_dim: int = 128
+    encoder_hidden_dims: list[int] = [256]
+    prediction_loss_weight: float = 1.0
+    predictor_hidden_dims: list[int] = [512, 256]
+    scorer_hidden_dims: list[int] = [256, 128]
+    dropout: float = 0.2
+    real_repr_ratio: float = 0.8
+    real_repr_decay_per_epoch: float = 0.04
+    optimizer: OptimizerSpec
+    balance_model_samples: bool = True
+    embedding_model_name: str = "all-MiniLM-L6-v2"
+    embedding_spec: EmbeddingSpec | None = None
+    load_embedding_model_from: str | None = None
+    min_model_comparisons: int = 20
+    embedding_model_epochs: int = 10
+    seed: int = 42
+
+
 class DnEmbeddingLengthPredictionSpecification(ModelSpecBase):
     model_type: Literal["dn_embedding_length_prediction"] = "dn_embedding_length_prediction"
     hidden_dims: list[int]
@@ -134,6 +154,19 @@ class GbLengthPredictionSpecification(ModelSpecBase):
 
 
 ModelSpec = Annotated[
-    Union[DenseNetworkSpecification, DnEmbeddingSpecification, SimpleScoringSpecification, EloScoringSpecification, GreedyRankingSpecification, McmfScoringSpecification, LeastSquaresScoringSpecification, GradientBoostingSpecification, TransformerEmbeddingSpecification, DnEmbeddingLengthPredictionSpecification, GbLengthPredictionSpecification], 
+    Union[
+        DenseNetworkSpecification, 
+        DnEmbeddingSpecification, 
+        SimpleScoringSpecification, 
+        EloScoringSpecification, 
+        GreedyRankingSpecification, 
+        McmfScoringSpecification, 
+        LeastSquaresScoringSpecification, 
+        GradientBoostingSpecification, 
+        TransformerEmbeddingSpecification, 
+        ResponsePredictiveSpecification, 
+        DnEmbeddingLengthPredictionSpecification, 
+        GbLengthPredictionSpecification
+    ], 
     Field(discriminator="model_type")
 ]

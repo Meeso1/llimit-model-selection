@@ -12,7 +12,7 @@ from src.data_models.attention_embedding_types import (
     PreprocessedAttentionEmbeddingData,
     ScalerState,
 )
-from src.preprocessing.model_embedding_feature_extraction import extract_all_scalar_features
+from src.preprocessing.model_embedding_feature_extraction import extract_response_features_for_many, extract_all_scalar_features
 from src.preprocessing.simple_scaler import SimpleScaler
 from src.utils.jars import Jars
 from src.utils.timer import Timer
@@ -151,24 +151,20 @@ class AttentionEmbeddingPreprocessor:
             prompt_embeddings = self._embed_texts(prompts)  # [n_pairs, d_emb]
             response_embeddings = self._embed_texts(responses)  # [n_pairs, d_emb]
         
-        # Extract scalar features
-        with Timer("extract_scalar_features", verbosity="start+end", parent=timer) as features_timer:
-            scalar_features_list = []
-            for i, (prompt, response) in enumerate(unique_pairs.keys()):
-                scalar_features = extract_all_scalar_features(
-                    prompt_embeddings[i],
-                    response_embeddings[i],
-                    prompt,
-                    response,
-                    timer=features_timer
-                )
-                scalar_features_list.append(scalar_features)
-        
-        # Normalize scalar features
-        with Timer("normalize_features", verbosity="start+end", parent=timer):
-            scalar_features_array = np.stack(scalar_features_list)  # [n_pairs, n_features]
-            scaler = SimpleScaler()
-            normalized_scalar_features = scaler.fit_transform(scalar_features_array)
+        # Extract and normalize scalar features
+        with Timer("extract_and_scale_response_features", verbosity="start+end", parent=timer) as features_timer:
+            prompts_list = [pair[0] for pair in unique_pairs.keys()]
+            responses_list = [pair[1] for pair in unique_pairs.keys()]
+            
+            normalized_scalar_features_list, scaler = extract_response_features_for_many(
+                prompt_embeddings,
+                response_embeddings,
+                prompts_list,
+                responses_list,
+                timer=features_timer,
+            )
+            
+            normalized_scalar_features = np.stack(normalized_scalar_features_list)  # [n_pairs, n_features]
             scaler_state = ScalerState(
                 mean=scaler.mean,
                 scale=scaler.scale,

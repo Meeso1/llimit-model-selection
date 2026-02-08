@@ -14,6 +14,7 @@ from src.models.mcmf_scoring_model import McmfScoringModel
 from src.models.least_squares_scoring_model import LeastSquaresScoringModel
 from src.models.gradient_boosting_model import GradientBoostingModel
 from src.models.transformer_embedding_model import TransformerEmbeddingModel
+from src.models.response_predictive_model import ResponsePredictiveModel
 from src.models.length_prediction.dn_embedding_length_prediction_model import DnEmbeddingLengthPredictionModel
 from src.models.length_prediction.gb_length_prediction_model import GbLengthPredictionModel
 from src.models.model_base import ModelBase
@@ -27,6 +28,7 @@ from src.scripts.model_types import (
     LeastSquaresScoringSpecification,
     GradientBoostingSpecification,
     TransformerEmbeddingSpecification,
+    ResponsePredictiveSpecification,
     DnEmbeddingLengthPredictionSpecification,
     GbLengthPredictionSpecification,
 )
@@ -105,6 +107,8 @@ def _create_starting_model(spec: TrainingSpecification) -> ModelBase:
             return _create_starting_gradient_boosting(spec)
         case "transformer_embedding":
             return _create_starting_transformer_embedding(spec)
+        case "response_predictive":
+            return _create_starting_response_predictive(spec)
         case "dn_embedding_length_prediction":
             return _create_starting_dn_embedding_length_prediction(spec)
         case "gb_length_prediction":
@@ -288,6 +292,36 @@ def _create_starting_transformer_embedding(training_spec: TrainingSpecification)
         embedding_model_epochs=model_spec.embedding_model_epochs,
         scoring_head_lr_multiplier=model_spec.scoring_head_lr_multiplier,
         base_model_name=model_spec.base_model,
+        wandb_details=training_spec.wandb.to_wandb_details() if training_spec.wandb is not None else None,
+        print_every=training_spec.log.print_every,
+        seed=model_spec.seed,
+    )
+
+
+def _create_starting_response_predictive(training_spec: TrainingSpecification) -> ResponsePredictiveModel:
+    if training_spec.model.start_state is not None:
+        return ResponsePredictiveModel.load(training_spec.model.start_state)
+    
+    if not isinstance(training_spec.model.spec, ResponsePredictiveSpecification):
+        raise ValueError(f"Expected model specification to be of type {ResponsePredictiveSpecification.__name__}, but found {type(training_spec.model.spec).__name__}")
+    
+    model_spec = training_spec.model.spec
+    return ResponsePredictiveModel(
+        response_repr_dim=model_spec.response_repr_dim,
+        encoder_hidden_dims=model_spec.encoder_hidden_dims,
+        prediction_loss_weight=model_spec.prediction_loss_weight,
+        predictor_hidden_dims=model_spec.predictor_hidden_dims,
+        scorer_hidden_dims=model_spec.scorer_hidden_dims,
+        dropout=model_spec.dropout,
+        real_repr_ratio=model_spec.real_repr_ratio,
+        real_repr_decay_per_epoch=model_spec.real_repr_decay_per_epoch,
+        optimizer_spec=model_spec.optimizer,
+        balance_model_samples=model_spec.balance_model_samples,
+        embedding_model_name=model_spec.embedding_model_name,
+        embedding_spec=model_spec.embedding_spec,
+        load_embedding_model_from=model_spec.load_embedding_model_from,
+        min_model_comparisons=model_spec.min_model_comparisons,
+        embedding_model_epochs=model_spec.embedding_model_epochs,
         wandb_details=training_spec.wandb.to_wandb_details() if training_spec.wandb is not None else None,
         print_every=training_spec.log.print_every,
         seed=model_spec.seed,

@@ -4,6 +4,7 @@ import re
 import numpy as np
 from collections import Counter
 from src.utils.timer import Timer
+from src.preprocessing.simple_scaler import SimpleScaler
 
 
 def extract_interaction_features(
@@ -220,4 +221,50 @@ def extract_all_scalar_features(
         structural = extract_structural_features(response)
     
     return np.concatenate([interaction, lexical, structural])
+
+
+def extract_response_features_for_many(
+    prompt_embeddings: np.ndarray,  # [n, d_emb]
+    response_embeddings: np.ndarray,  # [n, d_emb]
+    prompts: list[str],
+    responses: list[str],
+    scaler: SimpleScaler | None = None,
+    timer: Timer | None = None
+) -> tuple[list[np.ndarray], SimpleScaler]:
+    """
+    Extract all scalar features for a list of (prompt, response) pairs with scaling.
+    
+    This function follows the same pattern as extract_prompt_features_for_many from
+    scoring_feature_extraction.py, handling feature extraction and scaling in one place.
+    
+    Args:
+        prompt_embeddings: Prompt embeddings array
+        response_embeddings: Response embeddings array
+        prompts: List of prompt texts
+        responses: List of response texts
+        scaler: Optional pre-fitted scaler (for inference); if None, fits a new one
+        timer: Optional timer for profiling
+        
+    Returns:
+        Tuple of (list of feature arrays, fitted scaler)
+    """
+    features_list = []
+    for i, (prompt, response) in enumerate(zip(prompts, responses)):
+        features = extract_all_scalar_features(
+            prompt_embeddings[i],
+            response_embeddings[i],
+            prompt,
+            response,
+            timer=timer
+        )
+        features_list.append(features)
+
+    features_array = np.stack(features_list)  # [n, n_features]
+
+    if scaler is None:
+        scaler = SimpleScaler().fit(features_array)
+
+    scaled_features = scaler.transform(features_array)
+
+    return [scaled_features[i] for i in range(len(scaled_features))], scaler  # [n] x [n_features]
 
