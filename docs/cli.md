@@ -75,7 +75,7 @@ The training specification is a JSON file with the following structure:
 - `start_state`: If provided, loads an existing model with this name as the starting point and ignores `spec` (optional)
 - `spec`: Model-specific specification (required if `start_state` is not provided)
   - `model_type`: Type of model - one of:
-    - **Scoring models**: `"dense_network"`, `"dn_embedding"`, `"simple_scoring"`, `"elo_scoring"`, `"greedy_ranking"`, `"mcmf_scoring"`, `"least_squares_scoring"`, `"gradient_boosting"`, `"transformer_embedding"`
+    - **Scoring models**: `"dense_network"`, `"dn_embedding"`, `"simple_scoring"`, `"elo_scoring"`, `"greedy_ranking"`, `"mcmf_scoring"`, `"least_squares_scoring"`, `"gradient_boosting"`, `"transformer_embedding"`, `"response_predictive"`
     - **Length prediction models**: `"dn_embedding_length_prediction"`, `"gb_length_prediction"`
   - For `dense_network`:
     - `embedding_model_name`: Sentence transformer model name
@@ -96,6 +96,23 @@ The training specification is a JSON file with the following structure:
     - `balance_model_samples`: Whether to balance samples by model (default: true)
     - `embedding_spec`: Embedding model specification (see `docs/models.md`)
     - `load_embedding_model_from`: Load pre-trained embedding model from another model (format: "model_type/model_name", e.g., "dn_embedding/my_model") (optional)
+    - `min_model_comparisons`: Minimum comparisons per model to include (default: 20)
+    - `embedding_model_epochs`: Number of epochs to train embedding model (default: 10)
+    - `seed`: Random seed (default: 42)
+  - For `response_predictive`:
+    - `response_repr_dim`: Dimension of learned response representation (default: 128)
+    - `encoder_hidden_dims`: Hidden layers for ResponseEncoder (default: [256])
+    - `prediction_loss_weight`: Weight for prediction loss vs scoring loss (default: 1.0)
+    - `predictor_hidden_dims`: Hidden layers for ResponsePredictor (default: [512, 256])
+    - `scorer_hidden_dims`: Hidden layers for ResponseScorer (default: [256, 128])
+    - `dropout`: Dropout rate (default: 0.2)
+    - `real_repr_ratio`: Initial probability of using real representations (default: 0.8)
+    - `real_repr_decay_per_epoch`: Linear decay per epoch (default: 0.04)
+    - `optimizer`: Optimizer specification
+    - `balance_model_samples`: Whether to balance samples by model (default: true)
+    - `embedding_model_name`: Sentence transformer model name (default: "all-MiniLM-L6-v2")
+    - `embedding_spec`: Embedding model specification (see `docs/models.md`)
+    - `load_embedding_model_from`: Load pre-trained embedding model (format: "model_type/model_name") (optional)
     - `min_model_comparisons`: Minimum comparisons per model to include (default: 20)
     - `embedding_model_epochs`: Number of epochs to train embedding model (default: 10)
     - `seed`: Random seed (default: 42)

@@ -28,6 +28,24 @@ This directory contains documentation for different model implementations.
 - **Training**: Iterative ELO rating updates (no neural network)
 - **Inference**: Very fast (lookup table)
 
+### TODO: Add missing models
+
+### Transformer Embedding Model
+- **File**: [transformer_embedding_model.md](models/transformer_embedding_model.md)
+- **Type**: Fine-tuned transformer with learned model embeddings
+- **Input**: Prompt text (tokenized) + 45 prompt features + Model embeddings
+- **Output**: Scores in [-1, 1] for each (prompt, model) combination
+- **Training**: Fine-tunes transformer with LoRA/QLoRA, margin ranking loss
+- **Inference**: Slower than frozen embeddings but potentially more accurate
+
+### Response Predictive Model
+- **File**: [response_predictive_model.md](models/response_predictive_model.md)
+- **Type**: Three-component model with explicit response prediction (experimental)
+- **Input**: Prompt embeddings + 45 prompt features + Model embeddings + (during training) Response embeddings + 32 response features
+- **Output**: Scores in [-1, 1] for each (prompt, model) combination
+- **Training**: Joint training with prediction loss + scoring loss, mixed-representation schedule
+- **Inference**: Uses predicted response representations (no actual responses needed)
+- **Key Innovation**: Dense response-level supervision instead of just binary comparison labels
 
 ## Response Length Prediction
 

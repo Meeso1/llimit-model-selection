@@ -5,32 +5,35 @@
     - [x] Configure optimizer
     - [x] LR decay
     - [x] Handle sample imbalance somehow
-- [ ] QoL
-    - [ ] `save_every` for checkpointing
-    - [ ] Improve logging - also in CLI
-    - [ ] Incorporate timing data into logging
-    - [ ] Allow to pass JSON as stdin for infer
-- [ ] Improvements
-    - [x] Use ties/both_bad in training
-    - [x] 2-stage training: compute model embeddings based on responses first, then train
-- [ ] Trained model analysis
-    - [ ] Average scores - use as accuracy during training/validation
-    - [x] Percentage of correct predictions for pairs
-    - [ ] Visualise stuff per comparison pair
-- [ ] More simple models
+- [x] Embedding computation
+    - [x] Focus only on model identity - disregard win-lose info
+    - [x] Use something like KL+separation loss
+    - [ ] Maybe train for prompt insensitivity?
+- [ ] More models
     - [ ] RouteLLM
-        - [ ] SW
-        - [ ] Matrix Factorization
-        - [ ] Bert
+        - [x] Bert
         - [ ] LLaMa
     - [ ] Random Forest
-    - [ ] LSTM?
-    - [ ] Simple transformer
-
-- [ ] Embedding computation
-    - [ ] Focus only on model identity - disregard win-lose info
-    - [ ] Use something like KL+separation loss
-    - [ ] Something based on k-means?
+    - [x] Simple transformer
+    - [x] 'prompt->response->score' model - predict response representation first, then score based on those representations
+- [ ] Trained model analysis
+    - [x] Percentage of correct predictions for pairs
+    - [ ] Analyze sensitivity - which inputs matter?
+    - [ ] ...
+- [x] Improvements
+    - [x] Use ties/both_bad in training
+    - [x] 2-stage training: compute model embeddings based on responses first, then train
+- [ ] QoL
+    - [x] `save_every` for checkpointing
+    - [ ] Allow to pass JSON as stdin for infer
+    - [ ] Simple CLI utils for saved models and cached data
+        - [ ] List them (with correct format)
+        - [ ] Validate that it's possible to load them
+    - [ ] Logging
+        - [ ] Improve logging - also in CLI
+        - [ ] Incorporate timing data into logging
 - [ ] Random stuff
+    - [x] Try using a flow algorithm instead of graph model
     - [ ] Inspect ELO model - maybe try seeding with real ELO scores?
-    - [ ] Try using a flow algorithm instead of graph model
+    - [ ] Test API
+    - [ ] Sometimes during scoring model training loss decreases while accuracy stays ~the same - why?
