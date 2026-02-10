@@ -34,3 +34,17 @@ def state_dict_to_cpu(state_dict: dict[str, Any]) -> dict[str, Any]:
             result[key] = value
     return result
 
+
+def state_dict_to_device(state_dict: dict[str, Any], device: torch.device) -> dict[str, Any]:
+    """
+    Move all tensors in a state dictionary to a given device.
+    """
+    result = {}
+    for key, value in state_dict.items():
+        if isinstance(value, torch.Tensor):
+            result[key] = value.to(device)
+        elif isinstance(value, dict):
+            result[key] = state_dict_to_device(value, device)
+        else:
+            result[key] = value
+    return result
