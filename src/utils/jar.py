@@ -112,6 +112,10 @@ class Jar:
 
         return results
 
+    def get_all_version_timestamps(self, name: str) -> list[datetime]:
+        files = self._find_files(name)
+        return list(files.values())
+
     def remove_latest(self, name: str) -> None:
         """
         Delete the most recent object with the given name.
@@ -174,6 +178,8 @@ class Jar:
                 relative_path = os.path.relpath(root, self.base_path)
                 name = "-".join(file.split("-")[:-1])  # Remove part after last '-' (timestamp)
                 object_name = os.path.join(relative_path, name).replace("\\", "/")
+                if object_name.startswith("./"):
+                    object_name = object_name[2:]
                 object_names.add(object_name)
 
         return object_names

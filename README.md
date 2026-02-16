@@ -26,8 +26,8 @@
 - [ ] QoL
     - [x] `save_every` for checkpointing
     - [ ] Allow to pass JSON as stdin for infer
-    - [ ] Simple CLI utils for saved models and cached data
-        - [ ] List them (with correct format)
+    - [x] Simple CLI utils for saved models and cached data
+        - [x] List them (with correct format)
         - [ ] Validate that it's possible to load them
     - [ ] Logging
         - [x] Improve logging - also in CLI
