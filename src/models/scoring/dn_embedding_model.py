@@ -240,7 +240,11 @@ class DnEmbeddingModel(ScoringModelBase):
                 "best_accuracy": self._best_model_tracker.best_accuracy,
                 "total_epochs": self._epochs_completed,
             }
-            self.finish_logger_if_needed(final_metrics=final_metrics)
+
+        self.finish_logger_if_needed(
+            final_metrics=final_metrics,
+            log_timings_from=self.last_timer,
+        )
 
     def predict(
         self,
@@ -609,7 +613,7 @@ class DnEmbeddingModel(ScoringModelBase):
             )
             self._history_entries.append(entry)
             
-            self.append_entry_to_log(entry)
+            self.append_entry_to_log(entry, log_timings_from=self.last_timer)
             
         return self.EpochResult(
             epoch=epoch,

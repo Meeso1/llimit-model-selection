@@ -44,6 +44,7 @@ Container for a complete training run:
 - `final_metrics`: Dictionary of final metrics (e.g., test accuracy, model score statistics)
 - `start_time`: When training started
 - `end_time`: When training finished
+- `timings`: Optional dict of timing data (dotted paths to elapsed seconds), overwritten each time `log_timings_from` is passed to `log()` or `finish()`
 
 ### RunInfo
 
@@ -72,10 +73,10 @@ class MyModel(ModelBase):
                 # ...
             )
             
-            # Log epoch data
-            self.log_epoch(entry)
+            # Log epoch data (optionally with timings from the epoch timer)
+            self.append_entry_to_log(entry, log_timings_from=timer)
         
-        # Log final metrics and finish
+        # Log final metrics and finish (optionally with timings from the train timer)
         from src.utils.model_scores_stats import compute_model_scores_stats
         
         model_scores = self.get_all_model_scores()
@@ -141,6 +142,25 @@ print(log.final_metrics)
 - Multiple runs with the same base name are kept (all versions saved)
 - Uses the `Jar.replace()` method which saves the new file, then removes all but the newest with the same full name
 - Timestamp separator is `-` (hyphen), consistent with jar.py format
+
+## Timing Data
+
+Training logs can optionally include timing data from `Timer` instances. Always use the top-level timer (`train_timer` or `self.last_timer`, which are the same object) for `log_timings_from` - it contains the full hierarchy of timings. Pass it to both `append_entry_to_log` and `finish_logger_if_needed`:
+
+```python
+with Timer("train", verbosity="start+end") as train_timer:
+    self.last_timer = train_timer
+    with Timer("epochs", parent=train_timer) as epochs_timer:
+        for epoch in range(epochs):
+            with Timer(f"epoch_{epoch}", parent=epochs_timer) as timer:
+                # ... train epoch ...
+                self.append_entry_to_log(entry, log_timings_from=self.last_timer)
+
+# After exiting the with block, train_timer is stopped
+self.finish_logger_if_needed(final_metrics=..., log_timings_from=self.last_timer)
+```
+
+The `timings` field in `TrainingLog` stores a flat dict mapping dotted paths (e.g. `"train.epochs.epoch_0.perform_validation"`) to elapsed times in seconds. Use `Timer.get_all_timings_recursive()` to get this structure from a timer.
 
 ## Migration from Wandb
 

@@ -7,6 +7,7 @@ from typing import Any
 import time
 
 from src.utils.jars import Jars
+from src.utils.timer import Timer
 
 
 @dataclass
@@ -25,6 +26,7 @@ class TrainingLog:
     final_metrics: dict[str, Any] = field(default_factory=dict)
     start_time: datetime = field(default_factory=datetime.now)
     end_time: datetime | None = None
+    timings: dict[str, float] | None = None
 
 
 @dataclass
@@ -82,16 +84,20 @@ class TrainingLogger:
             return None
         return self._current_run.run_name
     
-    def log(self, data: dict[str, Any]) -> None:
+    def log(self, data: dict[str, Any], log_timings_from: Timer | None = None) -> None:
         """
         Log data for the current epoch/step.
         
         Args:
             data: Dictionary of metrics to log
+            log_timings_from: Optional timer to extract timings from (overwrites timings field)
         """
         if self._current_run is None:
             raise RuntimeError("No active training run. Call init() first.")
-        
+
+        if log_timings_from is not None:
+            self._current_run.timings = log_timings_from.get_all_timings_recursive()
+
         entry = LogEntry(data=data)
         self._current_run.epoch_logs.append(entry)
         
@@ -113,11 +119,19 @@ class TrainingLogger:
         self._current_run.final_metrics.update(metrics)
         self._save()
     
-    def finish(self) -> None:
-        """Finish the current training run."""
+    def finish(self, log_timings_from: Timer | None = None) -> None:
+        """
+        Finish the current training run.
+
+        Args:
+            log_timings_from: Optional timer to extract timings from (overwrites timings field)
+        """
         if self._current_run is None:
             return
-        
+
+        if log_timings_from is not None:
+            self._current_run.timings = log_timings_from.get_all_timings_recursive()
+
         self._current_run.end_time = datetime.now()
         self._save()
         self._current_run = None

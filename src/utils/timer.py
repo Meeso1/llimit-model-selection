@@ -43,9 +43,29 @@ class Timer:
     def __exit__(self, exc_type: type | None, exc_value: Exception | None, traceback: TracebackType | None) -> None:
         self.stop()
         
+    def get_all_timings_recursive(self) -> dict[str, float]:
+        """
+        Get all timings from this timer and its children recursively.
+
+        Returns:
+            Flat dict mapping dotted paths (e.g. "train", "train.epoch_0", "train.epoch_0.perform_validation")
+            to elapsed times in seconds. Only includes timers that have been stopped (have elapsed_time set).
+        """
+        result: dict[str, float] = {}
+        self._collect_timings_recursive("", result)
+        return result
+
     def inspect(self, max_depth: int = 0) -> None:
         self._inspect_internal(0, max_depth)
-            
+
+    def _collect_timings_recursive(self, prefix: str, result: dict[str, float]) -> None:
+        if self.elapsed_time is not None:
+            key = self.name if prefix == "" else f"{prefix}.{self.name}"
+            result[key] = self.elapsed_time
+        for _, part in self.parts.items():
+            part_prefix = self.name if prefix == "" else f"{prefix}.{self.name}"
+            part._collect_timings_recursive(part_prefix, result)
+
     def _inspect_internal(self, depth: int, max_depth: int) -> None:
         if depth > max_depth:
             return

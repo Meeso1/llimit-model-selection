@@ -8,6 +8,7 @@ from src.utils.training_history import TrainingHistory, TrainingHistoryEntry
 from src.utils.training_logger import TrainingLogger
 from src.data_models.data_models import TrainingData, InputData
 from src.utils.jars import Jars
+from src.utils.timer import Timer
 
 
 ModelKind = Literal["scoring", "length_prediction"]
@@ -42,27 +43,36 @@ class ModelBase[TOutput](ABC):
         if self._logger is not None:
             self._logger.init(config=self.get_config_for_logging())
 
-    def finish_logger_if_needed(self, final_metrics: dict[str, Any] | None = None) -> None:
+    def finish_logger_if_needed(
+        self,
+        final_metrics: dict[str, Any] | None = None,
+        log_timings_from: Timer | None = None,
+    ) -> None:
         """
         Finish training logger and optionally log final metrics.
         
         Args:
             final_metrics: Optional dictionary of final metrics to log
+            log_timings_from: Optional timer to extract timings from
         """
         if self._logger is not None:
             if final_metrics is not None:
                 self._logger.log_final_metrics(final_metrics)
-            self._logger.finish()
+            self._logger.finish(log_timings_from=log_timings_from)
 
     @abstractmethod
     def get_config_for_logging(self) -> dict[str, Any]:
         """Get configuration dictionary for training logging."""
         pass
 
-    def append_entry_to_log(self, entry: TrainingHistoryEntry) -> None:
+    def append_entry_to_log(
+        self,
+        entry: TrainingHistoryEntry,
+        log_timings_from: Timer | None = None,
+    ) -> None:
         """Log a training history entry."""
         if self._logger is not None:
-            self._logger.log(entry.to_dict())
+            self._logger.log(entry.to_dict(), log_timings_from=log_timings_from)
 
     @abstractmethod
     def train(

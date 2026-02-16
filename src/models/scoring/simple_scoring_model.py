@@ -124,8 +124,11 @@ class SimpleScoringModel(ScoringModelBase):
                     
                     if scheduler is not None:
                         scheduler.step()
-            
-            self.finish_logger_if_needed(final_metrics=compute_model_scores_stats(self.get_all_model_scores()))
+
+        self.finish_logger_if_needed(
+            final_metrics=compute_model_scores_stats(self.get_all_model_scores()),
+            log_timings_from=self.last_timer,
+        )
 
     def predict(
         self,
@@ -491,7 +494,7 @@ class SimpleScoringModel(ScoringModelBase):
             )
             self._history_entries.append(entry)
             
-            self.append_entry_to_log(entry)
+            self.append_entry_to_log(entry, log_timings_from=self.last_timer)
             
         return self.EpochResult(
             epoch=epoch,

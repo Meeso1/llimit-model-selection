@@ -82,8 +82,8 @@ class LeastSquaresScoringModel(ScoringModelBase):
             
             if self.print_summary:
                 self._print_summary(metrics)
-            
-            self._log_metrics(metrics)
+
+        self._log_metrics(metrics)
 
     def predict(
         self,
@@ -409,7 +409,10 @@ class LeastSquaresScoringModel(ScoringModelBase):
         self.init_logger_if_needed()
         final_metrics = compute_model_scores_stats(self.get_all_model_scores())
         final_metrics.update(metrics)
-        self.finish_logger_if_needed(final_metrics=final_metrics)
+        self.finish_logger_if_needed(
+            final_metrics=final_metrics,
+            log_timings_from=self.last_timer,
+        )
 
     @dataclass
     class TrainMetrics:

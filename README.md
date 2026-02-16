@@ -29,9 +29,9 @@
     - [x] Simple CLI utils for saved models and cached data
         - [x] List them (with correct format)
         - [ ] Validate that it's possible to load them
-    - [ ] Logging
+    - [x] Logging
         - [x] Improve logging - also in CLI
-        - [ ] Incorporate timing data into logging
+        - [x] Incorporate timing data into logging
 - [ ] Random stuff
     - [x] Try using a flow algorithm instead of graph model
     - [ ] Inspect ELO model - maybe try seeding with real ELO scores?

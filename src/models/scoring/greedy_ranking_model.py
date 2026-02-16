@@ -117,8 +117,8 @@ class GreedyRankingModel(ScoringModelBase):
             
             if self.print_summary:
                 self._print_summary(metrics)
-            
-            self._log_metrics(metrics)
+
+        self._log_metrics(metrics)
 
     def predict(
         self,
@@ -526,4 +526,7 @@ class GreedyRankingModel(ScoringModelBase):
 
     def _log_metrics(self, metrics: dict[str, float]) -> None:
         self.init_logger_if_needed()
-        self.finish_logger_if_needed(final_metrics=metrics)
+        self.finish_logger_if_needed(
+            final_metrics=metrics,
+            log_timings_from=self.last_timer,
+        )

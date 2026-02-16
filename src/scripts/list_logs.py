@@ -16,4 +16,4 @@ def list_logs(list_timestamps: bool = False) -> None:
         print(f"{run.latest_timestamp}: {run.base_name.ljust(max_base_name_length)} - {len(run.timestamps)} versions, latest at {run.latest_timestamp}")
         if list_timestamps:
             for timestamp in run.timestamps:
-                print(f"\t{timestamp}")
+                print(f"\t{int(timestamp.timestamp())}")
