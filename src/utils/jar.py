@@ -68,6 +68,17 @@ class Jar:
         with open(full_path, "wb") as f:
             pickle.dump(obj, f)
 
+    def replace(self, name: str, obj: Any) -> None:
+        """
+        Save the object to a file with a timestamp, then remove all older versions.
+
+        Args:
+            name (str): The name of the object.
+            obj (Any): The object to save.
+        """
+        self.add(name, obj)
+        self.remove_all_but_latest(name)
+
     def get(self, name: str) -> Any:
         """
         Load the most recent object with the given name.

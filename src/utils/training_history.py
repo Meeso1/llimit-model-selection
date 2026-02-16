@@ -10,7 +10,7 @@ class TrainingHistoryEntry:
     val_accuracy: float | None
     additional_metrics: dict[str, float] = field(default_factory=dict)
 
-    def to_wandb_dict(self) -> dict[str, float | None]:
+    def to_dict(self) -> dict[str, float | None]:
         result = {
             "train_loss": self.total_loss,
             "val_loss": self.val_loss,

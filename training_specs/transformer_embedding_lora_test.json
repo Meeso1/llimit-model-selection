@@ -18,7 +18,10 @@
         "dropout": 0.05,
         "target_modules": "auto"
       },
-      "hidden_dims": [128, 64],
+      "hidden_dims": [
+        128,
+        64
+      ],
       "dropout": 0.2,
       "max_length": 128,
       "optimizer": {
@@ -30,7 +33,10 @@
       "embedding_spec": {
         "embedding_type": "frozen",
         "encoder_model_name": "all-MiniLM-L6-v2",
-        "hidden_dims": [128, 64],
+        "hidden_dims": [
+          128,
+          64
+        ],
         "optimizer": {
           "optimizer_type": "adamw",
           "learning_rate": 0.001,
@@ -47,7 +53,7 @@
     }
   },
   "log": {
-    "print_every": 1
+    "print_every": 1,
+    "run_name": "transformer-embedding-lora-test"
   }
 }
-

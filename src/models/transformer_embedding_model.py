@@ -27,7 +27,6 @@ from src.models.optimizers.adamw_spec import AdamWSpec
 from src.preprocessing.simple_scaler import SimpleScaler
 from src.preprocessing.transformer_embedding_preprocessor import TransformerEmbeddingPreprocessor
 from src.utils.training_history import TrainingHistory, TrainingHistoryEntry
-from src.utils.wandb_details import WandbDetails
 from src.utils.timer import Timer
 from src.utils.torch_utils import state_dict_to_cpu, state_dict_to_device
 from src.utils.accuracy import compute_pairwise_accuracy
@@ -56,13 +55,13 @@ class TransformerEmbeddingModel(ScoringModelBase):
         embedding_model_epochs: int = 10,
         scoring_head_lr_multiplier: float = 1.0,
         base_model_name: str | None = None,
-        wandb_details: WandbDetails | None = None,
+        run_name: str | None = None,
         print_every: int | None = None,
         save_every: int | None = None,
         checkpoint_name: str | None = None,
         seed: int = 42,
     ) -> None:
-        super().__init__(wandb_details)
+        super().__init__(run_name)
 
         if load_embedding_model_from is None and embedding_spec is None:
             raise ValueError("Either embedding_spec or load_embedding_model_from must be specified")
@@ -151,8 +150,8 @@ class TransformerEmbeddingModel(ScoringModelBase):
             quiet=self.print_every is None,
         ).to(self.device)
 
-    def get_config_for_wandb(self) -> dict[str, Any]:
-        """Get configuration dictionary for Weights & Biases logging."""
+    def get_config_for_logging(self) -> dict[str, Any]:
+        """Get configuration dictionary for training logging."""
         return {
             "model_type": "transformer_embedding",
             "transformer_model_name": self.transformer_model_name,
@@ -218,6 +217,8 @@ class TransformerEmbeddingModel(ScoringModelBase):
                 self._initialize_network(
                     prompt_features_dim=preprocessed_data.prompt_features_dim,
                 )
+            
+            self.init_logger_if_needed()
             
             with Timer("add_model_embeddings_to_training_data", verbosity="start+end", parent=train_timer):
                 preprocessed_pairs = [
@@ -297,7 +298,11 @@ class TransformerEmbeddingModel(ScoringModelBase):
             self._optimizer_state = optimizer.state_dict()
             self._scheduler_state = scheduler.state_dict() if scheduler is not None else None
             
-            self.finish_wandb_if_needed()
+            final_metrics = {
+                "best_epoch": best_epoch,
+                "best_accuracy": self._best_model_tracker.best_accuracy,
+            }
+            self.finish_logger_if_needed(final_metrics=final_metrics)
 
     def predict(
         self,
@@ -701,8 +706,7 @@ class TransformerEmbeddingModel(ScoringModelBase):
             )
             self._history_entries.append(entry)
             
-            if self.wandb_details is not None:
-                self.log_to_wandb(entry)
+            self.append_entry_to_log(entry)
             
         return self.EpochResult(
             epoch=epoch,

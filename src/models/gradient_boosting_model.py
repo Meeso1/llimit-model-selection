@@ -18,7 +18,6 @@ from src.preprocessing.prompt_embedding_with_categories_preprocessor import Prom
 from src.preprocessing.simple_scaler import SimpleScaler
 from src.utils.string_encoder import StringEncoder
 from src.utils.training_history import TrainingHistory, TrainingHistoryEntry
-from src.utils.wandb_details import WandbDetails
 from src.utils.timer import Timer
 from src.utils.data_split import ValidationSplit, split_gradient_boosting_preprocessed_data
 from src.models.model_outputs_cache import ModelOutputsCache
@@ -154,11 +153,11 @@ class GradientBoostingModel(ScoringModelBase):
         min_model_comparisons: int = 20,
         embedding_model_epochs: int = 10,
         base_model_name: str | None = None,
-        wandb_details: WandbDetails | None = None,
+        run_name: str | None = None,
         print_every: int | None = None,
         seed: int = 42,
     ) -> None:
-        super().__init__(wandb_details)
+        super().__init__(run_name)
 
         if load_embedding_model_from is None and embedding_spec is None:
             raise ValueError("Either embedding_spec or load_embedding_model_from must be specified")
@@ -222,7 +221,7 @@ class GradientBoostingModel(ScoringModelBase):
         self._prompt_categories_dim = prompt_categories_dim
         self._model_embedding_dim = model_embedding_dim
 
-    def get_config_for_wandb(self) -> dict[str, Any]:
+    def get_config_for_logging(self) -> dict[str, Any]:
         """Get configuration dictionary for Weights & Biases logging."""
         return {
             "model_type": "gradient_boosting",
@@ -242,6 +241,7 @@ class GradientBoostingModel(ScoringModelBase):
             "base_model": self._base_model_name,
         }
 
+    # TODO: Track best state
     def train(
         self,
         data: TrainingData,
@@ -339,6 +339,8 @@ class GradientBoostingModel(ScoringModelBase):
                 prompt_categories_dim=preprocessed_without_model_embeddings.prompt_categories_dim,
             )
             
+            self.init_logger_if_needed()
+            
             with Timer("split_preprocessed_data", verbosity="start+end", parent=train_timer):
                 preprocessed_train, preprocessed_val = split_gradient_boosting_preprocessed_data(
                     preprocessed_data,
@@ -377,7 +379,7 @@ class GradientBoostingModel(ScoringModelBase):
                     
                     self._log_epoch_result(result)
             
-            self.finish_wandb_if_needed()
+            self.finish_logger_if_needed()
 
     def predict(
         self,
@@ -793,8 +795,7 @@ class GradientBoostingModel(ScoringModelBase):
             )
             self._history_entries.append(entry)
             
-            if self.wandb_details is not None:
-                self.log_to_wandb(entry)
+            self.append_entry_to_log(entry)
         
         return self.EpochResult(
             epoch=epoch,

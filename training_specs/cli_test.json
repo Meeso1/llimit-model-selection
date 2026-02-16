@@ -1,30 +1,38 @@
 {
-    "wandb": null,
-    "model": {
-      "name": "training-cli-test",
-      "start_state": null,
-      "spec": {
-        "model_type": "dense_network",
-        "embedding_model_name": "all-mpnet-base-v2",
-        "hidden_dims": [512, 256, 128, 64],
-        "model_id_embedding_dim": 64,
-        "optimizer": {
-          "optimizer_type": "adamw",
-          "learning_rate": 1e-4,
-          "lr_decay_gamma": 0.98,
-          "betas": [0.9, 0.999],
-          "eps": 1e-8,
-          "weight_decay": 1e-2
-        }
+  "model": {
+    "name": "training-cli-test",
+    "start_state": null,
+    "spec": {
+      "model_type": "dense_network",
+      "embedding_model_name": "all-mpnet-base-v2",
+      "hidden_dims": [
+        512,
+        256,
+        128,
+        64
+      ],
+      "model_id_embedding_dim": 64,
+      "optimizer": {
+        "optimizer_type": "adamw",
+        "learning_rate": 0.0001,
+        "lr_decay_gamma": 0.98,
+        "betas": [
+          0.9,
+          0.999
+        ],
+        "eps": 1e-08,
+        "weight_decay": 0.01
       }
-    },
-    "data": {
-      "validation_split": 0.2,
-      "seed": 42
-    },
-    "log": {
-      "print_every": 1
-    },
-    "epochs": 50,
-    "batch_size": 128
+    }
+  },
+  "data": {
+    "validation_split": 0.2,
+    "seed": 42
+  },
+  "log": {
+    "print_every": 1,
+    "run_name": "training-cli-test"
+  },
+  "epochs": 50,
+  "batch_size": 128
 }

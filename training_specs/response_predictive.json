@@ -11,10 +11,18 @@
     "spec": {
       "model_type": "response_predictive",
       "response_repr_dim": 128,
-      "encoder_hidden_dims": [256],
+      "encoder_hidden_dims": [
+        256
+      ],
       "prediction_loss_weight": 1.0,
-      "predictor_hidden_dims": [512, 256],
-      "scorer_hidden_dims": [256, 128],
+      "predictor_hidden_dims": [
+        512,
+        256
+      ],
+      "scorer_hidden_dims": [
+        256,
+        128
+      ],
       "dropout": 0.2,
       "real_repr_ratio": 0.8,
       "real_repr_decay_per_epoch": 0.04,
@@ -28,7 +36,10 @@
       "embedding_spec": {
         "embedding_type": "frozen",
         "encoder_model_name": "all-MiniLM-L6-v2",
-        "hidden_dims": [128, 64]
+        "hidden_dims": [
+          128,
+          64
+        ]
       },
       "min_model_comparisons": 20,
       "embedding_model_epochs": 10,
@@ -36,6 +47,7 @@
     }
   },
   "log": {
-    "print_every": 1
+    "print_every": 1,
+    "run_name": "response-predictive"
   }
 }

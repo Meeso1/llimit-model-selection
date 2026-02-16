@@ -1,22 +1,21 @@
 {
-    "wandb": null,
-    "model": {
-      "name": "mcmf-scoring-test",
-      "start_state": null,
-      "spec": {
-        "model_type": "mcmf_scoring",
-        "min_model_occurrences": 1000,
-        "print_summary": true
-      }
-    },
-    "data": {
-      "validation_split": 0.0,
-      "seed": 42
-    },
-    "log": {
-      "print_every": 1
-    },
-    "epochs": 0,
-    "batch_size": 0
+  "model": {
+    "name": "mcmf-scoring-test",
+    "start_state": null,
+    "spec": {
+      "model_type": "mcmf_scoring",
+      "min_model_occurrences": 1000,
+      "print_summary": true
+    }
+  },
+  "data": {
+    "validation_split": 0.0,
+    "seed": 42
+  },
+  "log": {
+    "print_every": 1,
+    "run_name": "mcmf-scoring-test"
+  },
+  "epochs": 0,
+  "batch_size": 0
 }
-

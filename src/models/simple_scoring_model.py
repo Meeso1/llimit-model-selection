@@ -15,7 +15,7 @@ from src.data_models.dense_network_types import PromptRoutingOutput
 from src.data_models.simple_scoring_types import PreprocessedTrainingData
 from src.preprocessing.simple_scoring_preprocessor import SimpleScoringPreprocessor
 from src.utils.training_history import TrainingHistory, TrainingHistoryEntry
-from src.utils.wandb_details import WandbDetails
+from src.utils.model_scores_stats import compute_model_scores_stats
 from src.utils.string_encoder import StringEncoder
 from src.utils.timer import Timer
 from src.utils.torch_utils import state_dict_to_cpu
@@ -41,9 +41,9 @@ class SimpleScoringModel(ScoringModelBase):
         tie_both_bad_epsilon: float = 1e-2,
         non_ranking_loss_coeff: float = 0.01,
         min_model_occurrences: int = 1000,
-        wandb_details: WandbDetails | None = None,
+        run_name: str | None = None,
     ) -> None:
-        super().__init__(wandb_details)
+        super().__init__(run_name)
         self.optimizer_spec = optimizer_spec or AdamWSpec()
         self.balance_model_samples = balance_model_samples
         self.print_every = print_every
@@ -59,7 +59,7 @@ class SimpleScoringModel(ScoringModelBase):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.last_timer: Timer | None = None
 
-    def get_config_for_wandb(self) -> dict[str, Any]:
+    def get_config_for_logging(self) -> dict[str, Any]:
         return {
             "model_type": "simple_scoring",
             "optimizer_type": self.optimizer_spec.optimizer_type,
@@ -125,7 +125,7 @@ class SimpleScoringModel(ScoringModelBase):
                     if scheduler is not None:
                         scheduler.step()
             
-            self.finish_wandb_if_needed()
+            self.finish_logger_if_needed(final_metrics=compute_model_scores_stats(self.get_all_model_scores()))
 
     def predict(
         self,
@@ -267,7 +267,7 @@ class SimpleScoringModel(ScoringModelBase):
         preprocessed_data = self.preprocessor.preprocess(data)
         self._model_encoder = preprocessed_data.model_encoder
 
-        self.init_wandb_if_needed()  # Needs to be called after model encoder is initialized
+        self.init_logger_if_needed()  # Needs to be called after model encoder is initialized
         
         if self._network is None:
             self._initialize_network(num_models=self._model_encoder.size)
@@ -488,8 +488,7 @@ class SimpleScoringModel(ScoringModelBase):
             )
             self._history_entries.append(entry)
             
-            if self.wandb_details is not None:
-                self.log_to_wandb(entry)
+            self.append_entry_to_log(entry)
             
         return self.EpochResult(
             epoch=epoch,

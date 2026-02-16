@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from typing import Any
 import numpy as np
 import networkx as nx
-import warnings
 
 from src.models.scoring_model_base import ScoringModelBase
 from src.data_models.data_models import TrainingData, InputData
@@ -12,7 +11,7 @@ from src.data_models.dense_network_types import PromptRoutingOutput
 from src.preprocessing.utils import filter_out_rare_models, filter_out_empty_entries, filter_out_both_bad, filter_out_ties, create_encoder
 from src.utils import accuracy
 from src.utils.training_history import TrainingHistory
-from src.utils.wandb_details import WandbDetails
+from src.utils.model_scores_stats import compute_model_scores_stats
 from src.utils.string_encoder import StringEncoder
 from src.utils.timer import Timer
 from src.utils.data_split import ValidationSplit
@@ -39,7 +38,7 @@ class McmfScoringModel(ScoringModelBase):
         self,
         min_model_occurrences: int = 1000,
         print_summary: bool = True,
-        wandb_details: WandbDetails | None = None,
+        run_name: str | None = None,
     ) -> None:
         """
         Initialize MCMF scoring model.
@@ -47,13 +46,9 @@ class McmfScoringModel(ScoringModelBase):
         Args:
             min_model_occurrences: Minimum number of times a model must appear to be included
             print_summary: Whether to print a summary after computing scores
-            wandb_details: Weights & Biases configuration
+            run_name: Name for logging this training run
         """
-        if wandb_details is not None:
-            warnings.warn("McmfScoringModel does not use wandb, so wandb_details will be ignored")
-            wandb_details = None
-
-        super().__init__(wandb_details)
+        super().__init__(run_name)
         self.min_model_occurrences = min_model_occurrences
         self.print_summary = print_summary
 
@@ -61,7 +56,7 @@ class McmfScoringModel(ScoringModelBase):
         self._scores: np.ndarray | None = None  # [num_models] - scores for each model
         self.last_timer: Timer | None = None
 
-    def get_config_for_wandb(self) -> dict[str, Any]:
+    def get_config_for_logging(self) -> dict[str, Any]:
         return {}
 
     @property
@@ -89,6 +84,8 @@ class McmfScoringModel(ScoringModelBase):
             
             if self.print_summary:
                 self._print_summary(metrics)
+            
+            self._log_metrics(metrics)
 
     def predict(
         self,
@@ -367,6 +364,13 @@ class McmfScoringModel(ScoringModelBase):
         print(f"Flow cost: {metrics.flow_cost:.0f}")
         print(f"Comparisons used: {metrics.pct_comparisons_used_by_flow*100:.2f}%")
         print(f"Scores: {metrics.min_score:.2f}/{metrics.bottom_10_pct_score:.2f}/{metrics.avg_score:.2f}/{metrics.top_10_pct_score:.2f}/{metrics.max_score:.2f}")
+
+
+    def _log_metrics(self, metrics: "McmfScoringModel.TrainMetrics") -> None:
+        self.init_logger_if_needed()
+        final_metrics = compute_model_scores_stats(self.get_all_model_scores())
+        final_metrics.update(metrics)
+        self.finish_logger_if_needed(final_metrics=final_metrics)
 
     @dataclass
     class TrainMetrics:

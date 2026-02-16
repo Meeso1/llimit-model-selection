@@ -20,7 +20,6 @@ from src.preprocessing.prompt_embedding_preprocessor import PromptEmbeddingPrepr
 from src.preprocessing.simple_scaler import SimpleScaler
 from src.utils.string_encoder import StringEncoder
 from src.utils.training_history import TrainingHistory, TrainingHistoryEntry
-from src.utils.wandb_details import WandbDetails
 from src.utils.timer import Timer
 from src.utils.torch_utils import state_dict_to_cpu
 from src.utils.accuracy import compute_pairwise_accuracy
@@ -44,11 +43,11 @@ class DnEmbeddingModel(ScoringModelBase):
         load_embedding_model_from: str | None = None,
         min_model_comparisons: int = 20,
         embedding_model_epochs: int = 10,
-        wandb_details: WandbDetails | None = None,
+        run_name: str | None = None,
         print_every: int | None = None,
         seed: int = 42,
     ) -> None:
-        super().__init__(wandb_details)
+        super().__init__(run_name)
 
         if load_embedding_model_from is None and embedding_spec is None:
             raise ValueError("Either embedding_spec or load_embedding_model_from must be specified")
@@ -112,7 +111,7 @@ class DnEmbeddingModel(ScoringModelBase):
             hidden_dims=self.hidden_dims,
         ).to(self.device)
 
-    def get_config_for_wandb(self) -> dict[str, Any]:
+    def get_config_for_logging(self) -> dict[str, Any]:
         """Get configuration dictionary for Weights & Biases logging."""
         return {
             "model_type": "dn_embedding",
@@ -128,6 +127,7 @@ class DnEmbeddingModel(ScoringModelBase):
             "embedding_model_epochs": self.embedding_model_epochs,
         }
 
+    # TODO: Track best state
     def train(
         self,
         data: TrainingData,
@@ -222,7 +222,7 @@ class DnEmbeddingModel(ScoringModelBase):
             self._optimizer_state = optimizer.state_dict()
             self._scheduler_state = scheduler.state_dict() if scheduler is not None else None
             
-            self.finish_wandb_if_needed()
+            self.finish_logger_if_needed()
 
     def predict(
         self,
@@ -588,8 +588,7 @@ class DnEmbeddingModel(ScoringModelBase):
             )
             self._history_entries.append(entry)
             
-            if self.wandb_details is not None:
-                self.log_to_wandb(entry)
+            self.append_entry_to_log(entry)
             
         return self.EpochResult(
             epoch=epoch,

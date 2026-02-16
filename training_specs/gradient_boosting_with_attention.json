@@ -16,7 +16,11 @@
       "reg_alpha": 0.01,
       "reg_lambda": 0.01,
       "balance_model_samples": true,
-      "input_features": ["prompt_features", "model_embedding", "prompt_embedding"],
+      "input_features": [
+        "prompt_features",
+        "model_embedding",
+        "prompt_embedding"
+      ],
       "embedding_model_name": "all-MiniLM-L6-v2",
       "embedding_spec": {
         "embedding_type": "attention",
@@ -34,7 +38,7 @@
         "embeddings_per_model": 4,
         "optimizer": {
           "optimizer_type": "adamw",
-          "learning_rate": 5e-5,
+          "learning_rate": 5e-05,
           "weight_decay": 0.995
         }
       },
@@ -45,7 +49,7 @@
     }
   },
   "log": {
-    "print_every": 1
+    "print_every": 1,
+    "run_name": "gradient-boosting-with-attention"
   }
 }
-

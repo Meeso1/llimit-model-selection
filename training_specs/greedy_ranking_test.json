@@ -1,5 +1,4 @@
 {
-    "wandb": null,
     "model": {
       "name": "greedy-ranking-test",
       "start_state": null,
@@ -15,6 +14,7 @@
       "seed": 42
     },
     "log": {
+      "run_name": "greedy-ranking-test",
       "print_every": 1
     },
     "epochs": 0,

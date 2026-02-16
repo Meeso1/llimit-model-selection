@@ -1,6 +1,5 @@
 """Greedy ranking model based on net wins (minimum feedback arc set approximation)."""
 
-from dataclasses import dataclass
 from typing import Any
 import numpy as np
 
@@ -9,8 +8,7 @@ from src.data_models.data_models import TrainingData, InputData
 from src.data_models.dense_network_types import PromptRoutingOutput
 from src.data_models.simple_scoring_types import PreprocessedTrainingData, PreprocessedComparison
 from src.preprocessing.simple_scoring_preprocessor import SimpleScoringPreprocessor
-from src.utils.training_history import TrainingHistory, TrainingHistoryEntry
-from src.utils.wandb_details import WandbDetails
+from src.utils.training_history import TrainingHistory
 from src.utils.string_encoder import StringEncoder
 from src.utils.timer import Timer
 from src.utils.data_split import ValidationSplit
@@ -31,7 +29,7 @@ class GreedyRankingModel(ScoringModelBase):
         min_model_occurrences: int = 1000,
         score_normalization: str = "negative_rank",
         print_summary: bool = True,
-        wandb_details: WandbDetails | None = None,
+        run_name: str | None = None,
     ) -> None:
         """
         Initialize Greedy Ranking model.
@@ -40,9 +38,9 @@ class GreedyRankingModel(ScoringModelBase):
             min_model_occurrences: Minimum number of times a model must appear to be included
             score_normalization: How to convert rank to score ("negative_rank", "normalized", "centered")
             print_summary: Whether to print a summary after computing ranking
-            wandb_details: Weights & Biases configuration
+            logger_config: Training logger configuration
         """
-        super().__init__(wandb_details)
+        super().__init__(run_name)
         self.min_model_occurrences = min_model_occurrences
         self.score_normalization = score_normalization
         self.print_summary = print_summary
@@ -56,7 +54,7 @@ class GreedyRankingModel(ScoringModelBase):
         self._total_comparisons: int = 0
         self.last_timer: Timer | None = None
 
-    def get_config_for_wandb(self) -> dict[str, Any]:
+    def get_config_for_logging(self) -> dict[str, Any]:
         return {
             "model_type": "greedy_ranking",
             "min_model_occurrences": self.min_model_occurrences,
@@ -120,20 +118,7 @@ class GreedyRankingModel(ScoringModelBase):
             if self.print_summary:
                 self._print_summary(metrics)
             
-            # Log to wandb if configured
-            if self.wandb_details is not None:
-                self.init_wandb_if_needed()
-                # Create a single "epoch" entry for logging
-                entry = TrainingHistoryEntry(
-                    epoch=1,
-                    total_loss=None,
-                    val_loss=None,
-                    train_accuracy=metrics["accuracy"],
-                    val_accuracy=None,
-                    additional_metrics=metrics,
-                )
-                self.log_to_wandb(entry)
-                self.finish_wandb_if_needed()
+            self._log_metrics(metrics)
 
     def predict(
         self,
@@ -533,3 +518,6 @@ class GreedyRankingModel(ScoringModelBase):
         
         print("="*70 + "\n")
 
+    def _log_metrics(self, metrics: dict[str, float]) -> None:
+        self.init_logger_if_needed()
+        self.finish_logger_if_needed(final_metrics=metrics)

@@ -10,7 +10,7 @@ from src.data_models.dense_network_types import PromptRoutingOutput
 from src.data_models.simple_scoring_types import PreprocessedTrainingData
 from src.preprocessing.simple_scoring_preprocessor import SimpleScoringPreprocessor
 from src.utils.training_history import TrainingHistory, TrainingHistoryEntry
-from src.utils.wandb_details import WandbDetails
+from src.utils.model_scores_stats import compute_model_scores_stats
 from src.utils.string_encoder import StringEncoder
 from src.utils.timer import Timer
 from src.utils.data_split import ValidationSplit, split_simple_scoring_preprocessed_data
@@ -34,7 +34,7 @@ class EloScoringModel(ScoringModelBase):
         tie_both_bad_epsilon: float = 100.0,
         non_ranking_loss_coeff: float = 0.1,
         min_model_occurrences: int = 1000,
-        wandb_details: WandbDetails | None = None,
+        run_name: str | None = None,
     ) -> None:
         """
         Initialize ELO scoring model.
@@ -47,9 +47,9 @@ class EloScoringModel(ScoringModelBase):
             tie_both_bad_epsilon: Threshold for tie/both_bad penalties
             non_ranking_loss_coeff: Weight for non-ranking penalties
             min_model_occurrences: Minimum number of times a model must appear to be included
-            wandb_details: Weights & Biases configuration
+            logger_config: Training logger configuration
         """
-        super().__init__(wandb_details)
+        super().__init__(run_name)
         self.initial_rating = initial_rating
         self.k_factor = k_factor
         self.balance_model_samples = balance_model_samples
@@ -64,7 +64,7 @@ class EloScoringModel(ScoringModelBase):
         self._ratings: np.ndarray | None = None  # [num_models]
         self.last_timer: Timer | None = None
 
-    def get_config_for_wandb(self) -> dict[str, Any]:
+    def get_config_for_logging(self) -> dict[str, Any]:
         return {
             "model_type": "elo_scoring",
             "initial_rating": self.initial_rating,
@@ -83,6 +83,7 @@ class EloScoringModel(ScoringModelBase):
             raise RuntimeError("Ratings not initialized")
         return self._ratings
 
+    # TODO: Track best state
     def train(
         self,
         data: TrainingData,
@@ -121,7 +122,7 @@ class EloScoringModel(ScoringModelBase):
                     
                     self._log_epoch_result(result)
             
-            self.finish_wandb_if_needed()
+            self.finish_logger_if_needed(final_metrics=compute_model_scores_stats(self.get_all_model_scores()))
 
     def predict(
         self,
@@ -248,7 +249,7 @@ class EloScoringModel(ScoringModelBase):
         preprocessed_data = self.preprocessor.preprocess(data)
         self._model_encoder = preprocessed_data.model_encoder
 
-        self.init_wandb_if_needed()
+        self.init_logger_if_needed()
         
         if self._ratings is None:
             self._ratings = np.full(self._model_encoder.size, self.initial_rating, dtype=np.float64)
@@ -407,8 +408,7 @@ class EloScoringModel(ScoringModelBase):
             )
             self._history_entries.append(entry)
             
-            if self.wandb_details is not None:
-                self.log_to_wandb(entry)
+            self.append_entry_to_log(entry)
             
         return self.EpochResult(
             epoch=epoch,

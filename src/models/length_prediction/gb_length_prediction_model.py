@@ -20,7 +20,6 @@ from src.preprocessing.length_prediction_preprocessor import LengthPredictionPre
 from src.preprocessing.simple_scaler import SimpleScaler
 from src.utils.string_encoder import StringEncoder
 from src.utils.training_history import TrainingHistory, TrainingHistoryEntry
-from src.utils.wandb_details import WandbDetails
 from src.utils.timer import Timer
 from src.utils.data_split import ValidationSplit, split_length_prediction_preprocessed_data
 from src.utils.best_model_tracker import BestModelTracker
@@ -46,11 +45,11 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
         load_embedding_model_from: str | None = None,
         min_model_comparisons: int = 20,
         embedding_model_epochs: int = 10,
-        wandb_details: WandbDetails | None = None,
+        run_name: str | None = None,
         print_every: int | None = None,
         seed: int = 42,
     ) -> None:
-        super().__init__(wandb_details)
+        super().__init__(run_name)
 
         if load_embedding_model_from is None and embedding_spec is None:
             raise ValueError("Either embedding_spec or load_embedding_model_from must be specified")
@@ -116,7 +115,7 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
         self._prompt_features_dim = prompt_features_dim
         self._model_embedding_dim = model_embedding_dim
 
-    def get_config_for_wandb(self) -> dict[str, Any]:
+    def get_config_for_logging(self) -> dict[str, Any]:
         """Get configuration dictionary for Weights & Biases logging."""
         return {
             "model_type": "gb_length_prediction",
@@ -253,7 +252,11 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
                 # Restore XGBoost model from bytes
                 self._xgb_model = self._deserialize_xgb_model(best_state['xgb_model_bytes'])
             
-            self.finish_wandb_if_needed()
+            final_metrics = {
+                "best_epoch": best_epoch,
+                "best_accuracy": self._best_model_tracker.best_accuracy,
+            }
+            self.finish_logger_if_needed(final_metrics=final_metrics)
 
     def predict(
         self,
@@ -600,8 +603,7 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
             )
             self._history_entries.append(entry)
             
-            if self.wandb_details is not None:
-                self.log_to_wandb(entry)
+            self.append_entry_to_log(entry)
         
         return self.EpochResult(
             epoch=epoch,

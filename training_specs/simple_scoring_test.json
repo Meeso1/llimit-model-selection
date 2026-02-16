@@ -1,5 +1,4 @@
 {
-    "wandb": null,
     "model": {
       "name": "simple-scoring-test",
       "start_state": null,
@@ -24,6 +23,7 @@
       "seed": 42
     },
     "log": {
+      "run_name": "simple-scoring-test",
       "print_every": 10
     },
     "epochs": 100,

@@ -2,26 +2,9 @@ from typing import Literal
 from pydantic import BaseModel, Field, model_validator
 
 from src.scripts.model_types import ModelSpec
-from src.utils.wandb_details import WandbDetails
 
 
 DatasetType = Literal["lmarena_human_preference", "chatbot_arena", "both"]
-
-
-class WandbDetailsSpecification(BaseModel):
-    project: str
-    experiment_name: str
-    config_name: str
-    artifact_name: str
-
-    def to_wandb_details(self) -> WandbDetails:
-        return WandbDetails(
-            project=self.project,
-            experiment_name=self.experiment_name,
-            config_name=self.config_name,
-            artifact_name=self.artifact_name,
-            init_project=True,
-        )
 
 
 class ModelSpecification(BaseModel):
@@ -56,17 +39,13 @@ class DataSpecification(BaseModel):
 
 
 class LoggingSpecification(BaseModel):
-    print_every: int
+    """Configuration for logging and console output during training."""
+    run_name: str = Field(description="Name for this training run (will be used for logging)")
+    print_every: int = Field(description="Print progress every N epochs")
     # TODO: Allow to specify timing info logging here + improve how it's logged
-    # TODO: Extend - allow to log to .jsonl file?
-    # Probably best to have some `Logger` class and use that instead of the method in model
 
 
 class TrainingSpecification(BaseModel):
-    wandb: WandbDetailsSpecification | None = Field(
-        default=None,
-        description="Wandb details, if None, wandb is not used",
-    )
     model: ModelSpecification
     data: DataSpecification
     log: LoggingSpecification

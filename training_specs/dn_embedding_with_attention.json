@@ -43,6 +43,7 @@
     }
   },
   "log": {
+    "run_name": "dn-embedding-with-attention-default",
     "print_every": 1
   }
 }

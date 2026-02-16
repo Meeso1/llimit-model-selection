@@ -15,7 +15,6 @@ from src.data_models.dense_network_types import PreprocessedTrainingData, Prompt
 from src.preprocessing.prompt_embedding_preprocessor import PromptEmbeddingPreprocessor
 from src.preprocessing.simple_scaler import SimpleScaler
 from src.utils.training_history import TrainingHistory, TrainingHistoryEntry
-from src.utils.wandb_details import WandbDetails
 from src.utils.string_encoder import StringEncoder
 from src.utils.timer import Timer
 from src.utils.torch_utils import state_dict_to_cpu
@@ -43,7 +42,7 @@ class DenseNetworkModel(ScoringModelBase):
         model_id_embedding_dim: int = 32,
         optimizer_spec: OptimizerSpecification | None = None,
         balance_model_samples: bool = True,
-        wandb_details: WandbDetails | None = None,
+        run_name: str | None = None,
         print_every: int | None = None,
     ) -> None:
         """
@@ -57,7 +56,7 @@ class DenseNetworkModel(ScoringModelBase):
             balance_model_samples: Whether to balance samples by model frequency
             wandb_details: Weights & Biases configuration
         """
-        super().__init__(wandb_details)
+        super().__init__(run_name)
         
         self.embedding_model_name = embedding_model_name
         self.hidden_dims = hidden_dims if hidden_dims is not None else [256, 128, 64]
@@ -120,7 +119,7 @@ class DenseNetworkModel(ScoringModelBase):
             hidden_dims=self.hidden_dims,
         ).to(self.device)
 
-    def get_config_for_wandb(self) -> dict[str, Any]:
+    def get_config_for_logging(self) -> dict[str, Any]:
         """Get configuration dictionary for Weights & Biases logging."""
         return {
             "model_type": "dense_network",
@@ -136,6 +135,7 @@ class DenseNetworkModel(ScoringModelBase):
             "num_models": self._model_encoder.size if self._model_encoder else None,
         }
 
+    # TODO: Track best state
     def train(
         self,
         data: TrainingData,
@@ -185,7 +185,7 @@ class DenseNetworkModel(ScoringModelBase):
                     if scheduler is not None:
                         scheduler.step()
             
-            self.finish_wandb_if_needed()
+            self.finish_logger_if_needed()
 
     def predict(
         self,
@@ -347,7 +347,7 @@ class DenseNetworkModel(ScoringModelBase):
         Returns:
             Preprocessed training data
         """
-        self.init_wandb_if_needed()
+        self.init_logger_if_needed()
         
         preprocessed_data = self.preprocessor.preprocess(data)
         self._model_encoder = preprocessed_data.model_encoder
@@ -545,8 +545,7 @@ class DenseNetworkModel(ScoringModelBase):
             )
             self._history_entries.append(entry)
             
-            if self.wandb_details is not None:
-                self.log_to_wandb(entry)
+            self.append_entry_to_log(entry)
             
         return self.EpochResult(
             epoch=epoch,

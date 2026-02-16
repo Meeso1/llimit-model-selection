@@ -1,5 +1,4 @@
 {
-    "wandb": null,
     "model": {
       "name": "elo-scoring-test",
       "start_state": null,
@@ -18,6 +17,7 @@
       "seed": 42
     },
     "log": {
+      "run_name": "elo-scoring-test",
       "print_every": 1
     },
     "epochs": 10,

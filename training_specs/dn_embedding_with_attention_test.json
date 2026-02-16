@@ -10,11 +10,15 @@
     "name": "dn-embedding-with-attention-test",
     "spec": {
       "model_type": "dn_embedding",
-      "hidden_dims": [256, 128, 64],
+      "hidden_dims": [
+        256,
+        128,
+        64
+      ],
       "optimizer": {
         "optimizer_type": "adamw",
         "learning_rate": 0.001,
-        "weight_decay": 0.00001
+        "weight_decay": 1e-05
       },
       "balance_model_samples": true,
       "embedding_model_name": "all-MiniLM-L6-v2",
@@ -35,7 +39,7 @@
         "optimizer": {
           "optimizer_type": "adamw",
           "learning_rate": 0.0001,
-          "weight_decay": 0.00001
+          "weight_decay": 1e-05
         }
       },
       "min_model_comparisons": 20,
@@ -43,7 +47,7 @@
     }
   },
   "log": {
-    "print_every": 1
+    "print_every": 1,
+    "run_name": "dn-embedding-with-attention-test"
   }
 }
-

@@ -2,11 +2,10 @@
 
 from abc import ABC, abstractmethod
 from typing import Any, Literal
-import wandb
 
 from src.utils.data_split import ValidationSplit
 from src.utils.training_history import TrainingHistory, TrainingHistoryEntry
-from src.utils.wandb_details import WandbDetails
+from src.utils.training_logger import TrainingLogger
 from src.data_models.data_models import TrainingData, InputData
 from src.utils.jars import Jars
 
@@ -17,11 +16,20 @@ class ModelBase[TOutput](ABC):
     """
     Common base class for all models (scoring and length prediction).
     
-    Provides common functionality for training, prediction, serialization, and WandB integration.
+    Provides common functionality for training, prediction, serialization, and logging.
     """
     
-    def __init__(self, wandb_details: WandbDetails | None = None) -> None:
-        self.wandb_details = wandb_details
+    def __init__(self, run_name: str | None = None) -> None:
+        """
+        Initialize the model.
+        
+        Args:
+            run_name: Name for logging this training run. If None, logging is disabled.
+        """
+        if run_name is not None:
+            self._logger: TrainingLogger | None = TrainingLogger(run_name)
+        else:
+            self._logger = None
 
     @property
     @abstractmethod
@@ -29,26 +37,32 @@ class ModelBase[TOutput](ABC):
         """Return the kind of model (scoring or length_prediction)."""
         pass
 
-    def init_wandb_if_needed(self) -> None:
-        if self.wandb_details is not None and self.wandb_details.init_project:
-            wandb.init(
-                project=self.wandb_details.project,
-                name=self.wandb_details.experiment_name,
-                config=self.get_config_for_wandb(),
-                settings=wandb.Settings(silent=True),
-            )
+    def init_logger_if_needed(self) -> None:
+        """Initialize training logger if configured."""
+        if self._logger is not None:
+            self._logger.init(config=self.get_config_for_logging())
 
-    def finish_wandb_if_needed(self) -> None:
-        if self.wandb_details is not None and self.wandb_details.init_project:
-            wandb.finish()
+    def finish_logger_if_needed(self, final_metrics: dict[str, Any] | None = None) -> None:
+        """
+        Finish training logger and optionally log final metrics.
+        
+        Args:
+            final_metrics: Optional dictionary of final metrics to log
+        """
+        if self._logger is not None:
+            if final_metrics is not None:
+                self._logger.log_final_metrics(final_metrics)
+            self._logger.finish()
 
     @abstractmethod
-    def get_config_for_wandb(self) -> dict[str, Any]:
-        """Get configuration dictionary for Weights & Biases logging."""
+    def get_config_for_logging(self) -> dict[str, Any]:
+        """Get configuration dictionary for training logging."""
         pass
 
-    def log_to_wandb(self, entry: TrainingHistoryEntry) -> None:
-        wandb.log(entry.to_wandb_dict())
+    def append_entry_to_log(self, entry: TrainingHistoryEntry) -> None:
+        """Log a training history entry."""
+        if self._logger is not None:
+            self._logger.log(entry.to_dict())
 
     @abstractmethod
     def train(
@@ -90,18 +104,7 @@ class ModelBase[TOutput](ABC):
         """Save model to disk."""
         Jars.models.add(name, self.get_state_dict())
 
-        if self.wandb_details is not None and self.wandb_details.artifact_name is not None:
-            path = Jars.models.get_latest_file_path(name)
-            self._save_model_to_wandb(self.wandb_details.artifact_name, path)
-
     @classmethod
     def load(cls, name: str) -> "ModelBase":
         """Load model from disk."""
         return cls.load_state_dict(Jars.models.get(name))
-
-    def _save_model_to_wandb(self, name: str, path: str) -> None:
-        artifact = wandb.Artifact(name=name, type="model", description="Model state dict")
-        artifact.add_file(path)
-
-        logged_artifact = wandb.log_artifact(artifact)
-        logged_artifact.wait()

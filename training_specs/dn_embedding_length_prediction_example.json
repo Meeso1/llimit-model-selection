@@ -3,7 +3,11 @@
     "name": "length_predictor_example",
     "spec": {
       "model_type": "dn_embedding_length_prediction",
-      "hidden_dims": [256, 128, 64],
+      "hidden_dims": [
+        256,
+        128,
+        64
+      ],
       "optimizer": {
         "optimizer_type": "adamw",
         "learning_rate": 0.001,
@@ -13,7 +17,10 @@
       "embedding_spec": {
         "embedding_type": "frozen",
         "encoder_model_name": "all-MiniLM-L6-v2",
-        "hidden_dims": [256, 128],
+        "hidden_dims": [
+          256,
+          128
+        ],
         "optimizer": {
           "optimizer_type": "adamw",
           "learning_rate": 0.001
@@ -32,7 +39,7 @@
   "epochs": 50,
   "batch_size": 32,
   "log": {
-    "print_every": 1
-  },
-  "wandb": null
+    "print_every": 1,
+    "run_name": "length_predictor_example"
+  }
 }
