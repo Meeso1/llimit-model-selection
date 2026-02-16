@@ -9,7 +9,7 @@ from pydantic import TypeAdapter
 import xgboost as xgb
 import tempfile
 
-from src.models.scoring_model_base import ScoringModelBase
+from src.models.scoring.scoring_model_base import ScoringModelBase
 from src.data_models.data_models import TrainingData, InputData, OutputData
 from src.data_models.gradient_boosting_types import PreprocessedPromptPair, PreprocessedTrainingData, PromptRoutingOutput
 from src.models.embedding_specs.embedding_spec_union import EmbeddingSpec

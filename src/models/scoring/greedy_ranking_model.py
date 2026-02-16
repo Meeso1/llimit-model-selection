@@ -3,7 +3,7 @@
 from typing import Any
 import numpy as np
 
-from src.models.scoring_model_base import ScoringModelBase
+from src.models.scoring.scoring_model_base import ScoringModelBase
 from src.data_models.data_models import TrainingData, InputData
 from src.data_models.dense_network_types import PromptRoutingOutput
 from src.data_models.simple_scoring_types import PreprocessedTrainingData, PreprocessedComparison

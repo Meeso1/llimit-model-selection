@@ -9,7 +9,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset, WeightedRandomSampler
 from collections import Counter
 
-from src.models.scoring_model_base import ScoringModelBase
+from src.models.scoring.scoring_model_base import ScoringModelBase
 from src.data_models.data_models import TrainingData, InputData, OutputData
 from src.data_models.dense_network_types import PreprocessedTrainingData, PromptRoutingOutput
 from src.preprocessing.prompt_embedding_preprocessor import PromptEmbeddingPreprocessor

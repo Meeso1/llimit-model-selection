@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader, TensorDataset, WeightedRandomSampler
 from collections import Counter
 from pydantic import TypeAdapter
 
-from src.models.scoring_model_base import ScoringModelBase
+from src.models.scoring.scoring_model_base import ScoringModelBase
 from src.data_models.data_models import TrainingData, InputData, OutputData
 from src.data_models.response_predictive_types import (
     PreprocessedTrainingDataWithEmbeddings,

@@ -2,7 +2,7 @@
 
 from src.data_models.data_models import InputData
 from src.models.length_prediction.length_prediction_model_base import LengthPredictionModelBase
-from src.models.scoring_model_base import ScoringModelBase
+from src.models.scoring.scoring_model_base import ScoringModelBase
 from src.models.model_loading import LengthPredictionModelType, load_length_prediction_model, ScoringModelType, load_scoring_model
 
 

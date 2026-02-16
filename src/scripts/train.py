@@ -5,16 +5,16 @@ from pathlib import Path
 
 from src import data_loading
 from src.data_models.data_models import TrainingData
-from src.models.dense_network_model import DenseNetworkModel
-from src.models.dn_embedding_model import DnEmbeddingModel
-from src.models.simple_scoring_model import SimpleScoringModel
-from src.models.elo_scoring_model import EloScoringModel
-from src.models.greedy_ranking_model import GreedyRankingModel
-from src.models.mcmf_scoring_model import McmfScoringModel
-from src.models.least_squares_scoring_model import LeastSquaresScoringModel
-from src.models.gradient_boosting_model import GradientBoostingModel
-from src.models.transformer_embedding_model import TransformerEmbeddingModel
-from src.models.response_predictive_model import ResponsePredictiveModel
+from src.models.scoring.dense_network_model import DenseNetworkModel
+from src.models.scoring.dn_embedding_model import DnEmbeddingModel
+from src.models.scoring.simple_scoring_model import SimpleScoringModel
+from src.models.scoring.elo_scoring_model import EloScoringModel
+from src.models.scoring.greedy_ranking_model import GreedyRankingModel
+from src.models.scoring.mcmf_scoring_model import McmfScoringModel
+from src.models.scoring.least_squares_scoring_model import LeastSquaresScoringModel
+from src.models.scoring.gradient_boosting_model import GradientBoostingModel
+from src.models.scoring.transformer_embedding_model import TransformerEmbeddingModel
+from src.models.scoring.response_predictive_model import ResponsePredictiveModel
 from src.models.length_prediction.dn_embedding_length_prediction_model import DnEmbeddingLengthPredictionModel
 from src.models.length_prediction.gb_length_prediction_model import GbLengthPredictionModel
 from src.models.model_base import ModelBase

@@ -7,7 +7,7 @@ from src.data_models.data_models import InputData
 from src.models.length_prediction.length_prediction_model_base import LengthPredictionModelBase
 from src.models.model_loading import ModelType, load_model
 from src.constants import INFERENCE_OUTPUTS_PATH
-from src.models.scoring_model_base import ScoringModelBase
+from src.models.scoring.scoring_model_base import ScoringModelBase
 
 
 def run_infer(args: Any) -> None:

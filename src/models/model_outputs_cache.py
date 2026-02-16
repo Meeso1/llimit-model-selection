@@ -2,7 +2,7 @@
 
 import warnings
 
-from src.models.scoring_model_base import ScoringModelBase
+from src.models.scoring.scoring_model_base import ScoringModelBase
 from src.data_models.data_models import EvaluationEntry, InputData, OutputData
 from src.utils.timer import Timer
 
