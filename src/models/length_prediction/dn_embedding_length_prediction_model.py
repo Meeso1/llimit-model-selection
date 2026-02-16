@@ -28,6 +28,7 @@ from src.utils.data_split import ValidationSplit, split_length_prediction_prepro
 from src.utils.length_prediction_metrics import compute_length_prediction_metrics
 from src.models.optimizers.optimizer_spec import OptimizerSpecification
 from src.models import model_loading
+from src.utils.best_model_tracker import BestModelTracker
 
 
 _DataLoaderType = DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]
@@ -80,6 +81,7 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
         self._scheduler_state: dict[str, Any] | None = None
         self._epochs_completed: int = 0
         self._prompt_features_scaler: SimpleScaler | None = None
+        self._best_model_tracker = BestModelTracker()
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
@@ -209,15 +211,35 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
                     
                     self._log_epoch_result(result)
                     
+                    # Use relative accuracy (1 - avg_relative_error) as the metric to track
+                    train_rel_acc = 1 - result.train_metrics["avg_relative_error"]
+                    val_rel_acc = 1 - result.val_metrics["avg_relative_error"] if result.val_metrics is not None else None
+                    
+                    self._best_model_tracker.record_state(
+                        accuracy=val_rel_acc if val_rel_acc is not None else train_rel_acc,
+                        state_dict=self.get_state_dict(),
+                        epoch=epoch
+                    )
+                    
                     if scheduler is not None:
                         scheduler.step()
                     
                     self._epochs_completed = epoch
             
+            # Revert to best model parameters if available
+            if self._best_model_tracker.has_best_state:
+                print(f"\nReverting to best model parameters from epoch {self._best_model_tracker.best_epoch} (relative error={(1 - self._best_model_tracker.best_accuracy):.4f})")
+                self.load_state_dict(self._best_model_tracker.best_state_dict, instance=self)
+            
             self._optimizer_state = optimizer.state_dict()
             self._scheduler_state = scheduler.state_dict() if scheduler is not None else None
             
-            self.finish_logger_if_needed()
+            final_metrics = {
+                "best_epoch": self._best_model_tracker.best_epoch,
+                "best_accuracy": self._best_model_tracker.best_accuracy,
+                "total_epochs": self._epochs_completed,
+            }
+            self.finish_logger_if_needed(final_metrics=final_metrics)
 
     def predict(
         self,
@@ -318,7 +340,6 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
             "scaler_state": self.scaler.get_state_dict(),
             "prompt_features_scaler_state": self._prompt_features_scaler.get_state_dict(),
             "network_state_dict": state_dict_to_cpu(self.network.state_dict()),
-            "history_entries": self._history_entries,
             "epochs_completed": self._epochs_completed,
             "embedding_type": self.embedding_spec.embedding_type,
             "embedding_spec": self.embedding_spec.model_dump(),
@@ -329,51 +350,55 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
         }
 
     @classmethod
-    def load_state_dict(cls, state_dict: dict[str, Any]) -> "DnEmbeddingLengthPredictionModel":
+    def load_state_dict(cls, state_dict: dict[str, Any], instance: "DnEmbeddingLengthPredictionModel | None" = None) -> "DnEmbeddingLengthPredictionModel":
         """
         Load model from state dictionary.
         
         Args:
             state_dict: State dictionary from get_state_dict()
+            instance: Optional existing model instance to load into
             
         Returns:
             Loaded model instance
         """
-        optimizer_spec = OptimizerSpecification.from_serialized(
-            state_dict["optimizer_type"],
-            state_dict["optimizer_params"],
-        )
-        
-        # Parse embedding spec using Pydantic TypeAdapter
-        embedding_spec_adapter = TypeAdapter(EmbeddingSpec)
-        embedding_spec = embedding_spec_adapter.validate_python(state_dict["embedding_spec"])
-        
-        model = cls(
-            hidden_dims=state_dict["hidden_dims"],
-            optimizer_spec=optimizer_spec,
-            embedding_model_name=state_dict["embedding_model_name"],
-            embedding_spec=embedding_spec,
-            min_model_comparisons=state_dict["min_model_comparisons"],
-            embedding_model_epochs=state_dict["embedding_model_epochs"],
-            print_every=state_dict["print_every"],
-            seed=state_dict["seed"],
-        )
+        if instance is not None:
+            if not isinstance(instance, cls):
+                raise TypeError(f"instance must be of type {cls.__name__}, got {type(instance).__name__}")
+            model = instance
+        else:
+            optimizer_spec = OptimizerSpecification.from_serialized(
+                state_dict["optimizer_type"],
+                state_dict["optimizer_params"],
+            )
+            
+            # Parse embedding spec using Pydantic TypeAdapter
+            embedding_spec_adapter = TypeAdapter(EmbeddingSpec)
+            embedding_spec = embedding_spec_adapter.validate_python(state_dict["embedding_spec"])
+            
+            model = cls(
+                hidden_dims=state_dict["hidden_dims"],
+                optimizer_spec=optimizer_spec,
+                embedding_model_name=state_dict["embedding_model_name"],
+                embedding_spec=embedding_spec,
+                min_model_comparisons=state_dict["min_model_comparisons"],
+                embedding_model_epochs=state_dict["embedding_model_epochs"],
+                print_every=state_dict["print_every"],
+                seed=state_dict["seed"],
+            )
         
         model.embedding_model = EmbeddingModelBase.load_from_state_dict(state_dict["embedding_model_state_dict"])
 
-        model._initialize_network(
-            prompt_embedding_dim=state_dict["prompt_embedding_dim"],
-            prompt_features_dim=state_dict["prompt_features_dim"],
-        )
-        model.network.load_state_dict(
-            state_dict["network_state_dict"], 
-        )
+        if model._network is None:
+            model._initialize_network(
+                prompt_embedding_dim=state_dict["prompt_embedding_dim"],
+                prompt_features_dim=state_dict["prompt_features_dim"],
+            )
+        model.network.load_state_dict(state_dict["network_state_dict"])
         model.network.to(model.device)
         
         model._scaler = SimpleScaler.from_state_dict(state_dict["scaler_state"])
         model._prompt_features_scaler = SimpleScaler.from_state_dict(state_dict["prompt_features_scaler_state"])
         
-        model._history_entries = state_dict["history_entries"]
         model._optimizer_state = state_dict.get("optimizer_state")
         model._scheduler_state = state_dict.get("scheduler_state")
         model._epochs_completed = state_dict.get("epochs_completed", 0)

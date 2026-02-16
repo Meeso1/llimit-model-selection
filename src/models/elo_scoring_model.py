@@ -14,6 +14,7 @@ from src.utils.model_scores_stats import compute_model_scores_stats
 from src.utils.string_encoder import StringEncoder
 from src.utils.timer import Timer
 from src.utils.data_split import ValidationSplit, split_simple_scoring_preprocessed_data
+from src.utils.best_model_tracker import BestModelTracker
 
 
 class EloScoringModel(ScoringModelBase):
@@ -62,6 +63,7 @@ class EloScoringModel(ScoringModelBase):
         self._history_entries: list[TrainingHistoryEntry] = []
         self._model_encoder: StringEncoder | None = None
         self._ratings: np.ndarray | None = None  # [num_models]
+        self._best_model_tracker = BestModelTracker()
         self.last_timer: Timer | None = None
 
     def get_config_for_logging(self) -> dict[str, Any]:
@@ -83,7 +85,6 @@ class EloScoringModel(ScoringModelBase):
             raise RuntimeError("Ratings not initialized")
         return self._ratings
 
-    # TODO: Track best state
     def train(
         self,
         data: TrainingData,
@@ -121,8 +122,25 @@ class EloScoringModel(ScoringModelBase):
                     result = self._train_epoch(epoch, preprocessed_train, preprocessed_val, epochs_timer)
                     
                     self._log_epoch_result(result)
+                    
+                    self._best_model_tracker.record_state(
+                        accuracy=result.val_accuracy if result.val_accuracy is not None else result.train_accuracy,
+                        state_dict=self.get_state_dict(),
+                        epoch=epoch
+                    )
             
-            self.finish_logger_if_needed(final_metrics=compute_model_scores_stats(self.get_all_model_scores()))
+            # Revert to best model parameters if available
+            if self._best_model_tracker.has_best_state:
+                print(f"\nReverting to best model parameters from epoch {self._best_model_tracker.best_epoch} (accuracy={self._best_model_tracker.best_accuracy:.4f})")
+                self.load_state_dict(self._best_model_tracker.best_state_dict, instance=self)
+            
+            final_metrics = {
+                **compute_model_scores_stats(self.get_all_model_scores()),
+                "best_epoch": self._best_model_tracker.best_epoch,
+                "best_accuracy": self._best_model_tracker.best_accuracy,
+                "total_epochs": epochs,
+            }
+            self.finish_logger_if_needed(final_metrics=final_metrics)
 
     def predict(
         self,
@@ -206,33 +224,37 @@ class EloScoringModel(ScoringModelBase):
             "min_model_occurrences": self.min_model_occurrences,
             "ratings": self._ratings.tolist(),
             "model_encoder": self._model_encoder.get_state_dict(),
-            "history_entries": self._history_entries,
         }
 
     @classmethod
-    def load_state_dict(cls, state_dict: dict[str, Any]) -> "EloScoringModel":
+    def load_state_dict(cls, state_dict: dict[str, Any], instance: "EloScoringModel | None" = None) -> "EloScoringModel":
         """
         Load model from state dictionary.
         
         Args:
             state_dict: State dictionary from get_state_dict()
+            instance: Optional existing model instance to load into
             
         Returns:
             Loaded model instance
         """
-        model = cls(
-            initial_rating=state_dict["initial_rating"],
-            k_factor=state_dict["k_factor"],
-            balance_model_samples=state_dict["balance_model_samples"],
-            print_every=state_dict["print_every"],
-            tie_both_bad_epsilon=state_dict["tie_both_bad_epsilon"],
-            non_ranking_loss_coeff=state_dict["non_ranking_loss_coeff"],
-            min_model_occurrences=state_dict["min_model_occurrences"],
-        )
+        if instance is not None:
+            if not isinstance(instance, cls):
+                raise TypeError(f"instance must be of type {cls.__name__}, got {type(instance).__name__}")
+            model = instance
+        else:
+            model = cls(
+                initial_rating=state_dict["initial_rating"],
+                k_factor=state_dict["k_factor"],
+                balance_model_samples=state_dict["balance_model_samples"],
+                print_every=state_dict["print_every"],
+                tie_both_bad_epsilon=state_dict["tie_both_bad_epsilon"],
+                non_ranking_loss_coeff=state_dict["non_ranking_loss_coeff"],
+                min_model_occurrences=state_dict["min_model_occurrences"],
+            )
         
         model._model_encoder = StringEncoder.load_state_dict(state_dict["model_encoder"])
         model._ratings = np.array(state_dict["ratings"])
-        model._history_entries = state_dict["history_entries"]
         
         return model
 

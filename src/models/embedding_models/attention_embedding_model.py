@@ -455,10 +455,7 @@ class AttentionEmbeddingModel(EmbeddingModelBase):
                     accuracy_to_track = val_universal_accuracy if val_universal_accuracy is not None else train_universal_accuracy
                     self._best_model_tracker.record_state(
                         accuracy=accuracy_to_track,
-                        module_dict={
-                            'pair_encoder': state_dict_to_cpu(self._pair_encoder.state_dict()),
-                            'set_aggregator': state_dict_to_cpu(self._set_aggregator.state_dict()),
-                        },
+                        state_dict=self.get_state_dict(),
                         epoch=epoch
                     )
                         
@@ -466,13 +463,11 @@ class AttentionEmbeddingModel(EmbeddingModelBase):
                         scheduler.step()
             
             # Revert to best model parameters if available
-            best_state, best_epoch = self._best_model_tracker.get_best_state()
-            if best_state is not None:
+            if self._best_model_tracker.has_best_state:
                 accuracy_type = "val" if validation_split.val_fraction > 0 else "train"
-                print(f"\nReverting to best model parameters from epoch {best_epoch} "
+                print(f"\nReverting to best model parameters from epoch {self._best_model_tracker.best_epoch} "
                       f"({accuracy_type}_accuracy={self._best_model_tracker.best_accuracy:.4f})")
-                self._pair_encoder.load_state_dict(best_state['pair_encoder'])
-                self._set_aggregator.load_state_dict(best_state['set_aggregator'])
+                self.load_state_dict(self._best_model_tracker.best_state_dict, instance=self)
             
             # Compute final embeddings for all models
             with Timer("compute_model_embeddings", verbosity="start+end", parent=train_timer):
@@ -951,59 +946,71 @@ class AttentionEmbeddingModel(EmbeddingModelBase):
         }
     
     @classmethod
-    def load_state_dict(cls, state_dict: dict[str, Any]) -> "AttentionEmbeddingModel":
-        """Load model from state dict."""
-        optimizer_spec = OptimizerSpecification.from_serialized(
-            state_dict["optimizer_type"],
-            state_dict["optimizer_params"],
-        )
+    def load_state_dict(cls, state_dict: dict[str, Any], instance: "AttentionEmbeddingModel | None" = None) -> "AttentionEmbeddingModel":
+        """
+        Load model from state dict.
         
-        model = cls(
-            embedding_model_name=state_dict["embedding_model_name"],
-            h_emb=state_dict["h_emb"],
-            h_scalar=state_dict["h_scalar"],
-            h_pair=state_dict["h_pair"],
-            d_out=state_dict["d_out"],
-            pair_mlp_layers=state_dict["pair_mlp_layers"],
-            num_attention_heads=state_dict["num_attention_heads"],
-            dropout=state_dict["dropout"],
-            temperature=state_dict["temperature"],
-            optimizer_spec=optimizer_spec,
-            min_model_comparisons=state_dict["min_model_comparisons"],
-            preprocessor_seed=state_dict["preprocessor_seed"],
-            pairs_per_model=state_dict["pairs_per_model"],
-            models_per_batch=state_dict["models_per_batch"],
-            embeddings_per_model=state_dict.get("embeddings_per_model", 4),
-            print_every=state_dict.get("print_every"),
-        )
+        Args:
+            state_dict: State dictionary from get_state_dict()
+            instance: Optional existing model instance to load into
+            
+        Returns:
+            Loaded model instance
+        """
+        if instance is not None:
+            if not isinstance(instance, cls):
+                raise TypeError(f"instance must be of type {cls.__name__}, got {type(instance).__name__}")
+            model = instance
+        else:
+            optimizer_spec = OptimizerSpecification.from_serialized(
+                state_dict["optimizer_type"],
+                state_dict["optimizer_params"],
+            )
+            
+            model = cls(
+                embedding_model_name=state_dict["embedding_model_name"],
+                h_emb=state_dict["h_emb"],
+                h_scalar=state_dict["h_scalar"],
+                h_pair=state_dict["h_pair"],
+                d_out=state_dict["d_out"],
+                pair_mlp_layers=state_dict["pair_mlp_layers"],
+                num_attention_heads=state_dict["num_attention_heads"],
+                dropout=state_dict["dropout"],
+                temperature=state_dict["temperature"],
+                optimizer_spec=optimizer_spec,
+                min_model_comparisons=state_dict["min_model_comparisons"],
+                preprocessor_seed=state_dict["preprocessor_seed"],
+                pairs_per_model=state_dict["pairs_per_model"],
+                models_per_batch=state_dict["models_per_batch"],
+                embeddings_per_model=state_dict.get("embeddings_per_model", 4),
+                print_every=state_dict.get("print_every"),
+            )
         
         # We need to know d_emb and d_scalar to initialize modules
         # These are stored implicitly in the layer weights
         d_emb = state_dict["pair_encoder_state"]["prompt_proj.0.weight"].shape[1]
         d_scalar = state_dict["pair_encoder_state"]["scalar_proj.0.weight"].shape[1]
         
-        model._pair_encoder = PairEncoder(
-            d_emb=d_emb,
-            d_scalar=d_scalar,
-            h_emb=model.h_emb,
-            h_scalar=model.h_scalar,
-            h_pair=model.h_pair,
-            pair_mlp_layers=model.pair_mlp_layers,
-            dropout=model.dropout,
-        ).to(model.device)
-        model._pair_encoder.load_state_dict(
-            state_dict["pair_encoder_state"],
-        )
+        if model._pair_encoder is None:
+            model._pair_encoder = PairEncoder(
+                d_emb=d_emb,
+                d_scalar=d_scalar,
+                h_emb=model.h_emb,
+                h_scalar=model.h_scalar,
+                h_pair=model.h_pair,
+                pair_mlp_layers=model.pair_mlp_layers,
+                dropout=model.dropout,
+            ).to(model.device)
+        model._pair_encoder.load_state_dict(state_dict["pair_encoder_state"])
         model._pair_encoder.to(model.device)
         
-        model._set_aggregator = SetAggregator(
-            h_pair=model.h_pair,
-            d_out=model.d_out,
-            num_attention_heads=model.num_attention_heads,
-        ).to(model.device)
-        model._set_aggregator.load_state_dict(
-            state_dict["set_aggregator_state"],
-        )
+        if model._set_aggregator is None:
+            model._set_aggregator = SetAggregator(
+                h_pair=model.h_pair,
+                d_out=model.d_out,
+                num_attention_heads=model.num_attention_heads,
+            ).to(model.device)
+        model._set_aggregator.load_state_dict(state_dict["set_aggregator_state"])
         model._set_aggregator.to(model.device)
         
         # Load epoch logs and embeddings

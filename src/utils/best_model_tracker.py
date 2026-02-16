@@ -10,34 +10,40 @@ class BestModelTracker:
     def __init__(self) -> None:
         """Initialize the tracker."""
         self.best_accuracy: float | None = None
-        self._best_epoch: int | None = None
-        self._best_state: dict[str, Any] | None = None
+        self.best_epoch: int | None = None
+        self._best_state_dict: dict[str, Any] | None = None
     
     def record_state(
         self,
         accuracy: float,
-        module_dict: dict[str, Any],
+        state_dict: dict[str, Any],
         epoch: int
     ) -> None:
         """
-        Record model state if accuracy is better than previous best.
+        Record model state dict if accuracy is better than previous best.
         
         Args:
             accuracy: Current accuracy to compare
-            module_dict: Dictionary of module states to save
+            state_dict: Full model state dictionary to save
             epoch: Current epoch number
         """
         if self.best_accuracy is None or accuracy > self.best_accuracy:
             self.best_accuracy = accuracy
-            self._best_epoch = epoch
+            self.best_epoch = epoch
             # Deep copy to avoid references to mutable objects
-            self._best_state = copy.deepcopy(module_dict)
+            self._best_state_dict = copy.deepcopy(state_dict)
     
-    def get_best_state(self) -> tuple[dict[str, Any] | None, int | None]:
+    @property
+    def best_state_dict(self) -> dict[str, Any] | None:
         """
-        Get the best recorded state.
+        Get the best recorded state dict.
         
         Returns:
-            Tuple of (module_dict, epoch) or (None, None) if no state recorded
+            Best state dictionary or None if no state recorded
         """
-        return self._best_state, self._best_epoch
+        return self._best_state_dict
+    
+    @property
+    def has_best_state(self) -> bool:
+        """Check if a best state has been recorded."""
+        return self._best_state_dict is not None

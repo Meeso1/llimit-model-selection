@@ -29,6 +29,7 @@ from src.utils.accuracy import compute_pairwise_accuracy
 from src.utils.data_split import ValidationSplit, split_response_predictive_preprocessed_data
 from src.models.optimizers.optimizer_spec import OptimizerSpecification
 from src.models import model_loading
+from src.utils.best_model_tracker import BestModelTracker
 
 
 _DataLoaderType = DataLoader[tuple[
@@ -126,6 +127,7 @@ class ResponsePredictiveModel(ScoringModelBase):
         self._epochs_completed: int = 0
         self._prompt_features_scaler: SimpleScaler | None = None
         self._response_features_scaler: SimpleScaler | None = None
+        self._best_model_tracker = BestModelTracker()
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -278,16 +280,32 @@ class ResponsePredictiveModel(ScoringModelBase):
                     )
 
                     self._log_epoch_result(result)
+                    
+                    self._best_model_tracker.record_state(
+                        accuracy=result.val_accuracy if result.val_accuracy is not None else result.train_accuracy,
+                        state_dict=self.get_state_dict(),
+                        epoch=epoch
+                    )
 
                     if scheduler is not None:
                         scheduler.step()
 
                     self._epochs_completed = epoch
+            
+            # Revert to best model parameters if available
+            if self._best_model_tracker.has_best_state:
+                print(f"\nReverting to best model parameters from epoch {self._best_model_tracker.best_epoch} (accuracy={self._best_model_tracker.best_accuracy:.4f})")
+                self.load_state_dict(self._best_model_tracker.best_state_dict, instance=self)
 
             self._optimizer_state = optimizer.state_dict()
             self._scheduler_state = scheduler.state_dict() if scheduler is not None else None
 
-            self.finish_logger_if_needed()
+            final_metrics = {
+                "best_epoch": self._best_model_tracker.best_epoch,
+                "best_accuracy": self._best_model_tracker.best_accuracy,
+                "total_epochs": self._epochs_completed,
+            }
+            self.finish_logger_if_needed(final_metrics=final_metrics)
 
     def predict(
         self,
@@ -390,7 +408,6 @@ class ResponsePredictiveModel(ScoringModelBase):
             "response_embedding_dim": self._response_embedding_dim,
             "response_features_dim": self._response_features_dim,
             "network_state_dict": state_dict_to_cpu(self.network.state_dict()),
-            "history_entries": self._history_entries,
             "epochs_completed": self._epochs_completed,
             "prompt_features_scaler_state": self._prompt_features_scaler.get_state_dict(),
             "response_features_scaler_state": self._response_features_scaler.get_state_dict(),
@@ -403,61 +420,67 @@ class ResponsePredictiveModel(ScoringModelBase):
         }
 
     @classmethod
-    def load_state_dict(cls, state_dict: dict[str, Any]) -> "ResponsePredictiveModel":
+    def load_state_dict(cls, state_dict: dict[str, Any], instance: "ResponsePredictiveModel | None" = None) -> "ResponsePredictiveModel":
         """
         Load model from state dictionary.
         
         Args:
             state_dict: State dictionary from get_state_dict()
+            instance: Optional existing model instance to load into
             
         Returns:
             Loaded model instance
         """
-        optimizer_spec = OptimizerSpecification.from_serialized(
-            state_dict["optimizer_type"],
-            state_dict["optimizer_params"],
-        )
+        if instance is not None:
+            if not isinstance(instance, cls):
+                raise TypeError(f"instance must be of type {cls.__name__}, got {type(instance).__name__}")
+            model = instance
+        else:
+            optimizer_spec = OptimizerSpecification.from_serialized(
+                state_dict["optimizer_type"],
+                state_dict["optimizer_params"],
+            )
 
-        # Parse embedding spec using Pydantic TypeAdapter
-        embedding_spec_adapter = TypeAdapter(EmbeddingSpec)
-        embedding_spec = embedding_spec_adapter.validate_python(state_dict["embedding_spec"]) \
-            if state_dict["embedding_spec"] is not None else None
+            # Parse embedding spec using Pydantic TypeAdapter
+            embedding_spec_adapter = TypeAdapter(EmbeddingSpec)
+            embedding_spec = embedding_spec_adapter.validate_python(state_dict["embedding_spec"]) \
+                if state_dict["embedding_spec"] is not None else None
 
-        model = cls(
-            response_repr_dim=state_dict["response_repr_dim"],
-            encoder_hidden_dims=state_dict["encoder_hidden_dims"],
-            prediction_loss_weight=state_dict["prediction_loss_weight"],
-            predictor_hidden_dims=state_dict["predictor_hidden_dims"],
-            scorer_hidden_dims=state_dict["scorer_hidden_dims"],
-            dropout=state_dict["dropout"],
-            real_repr_ratio=state_dict["real_repr_ratio"],
-            real_repr_decay_per_epoch=state_dict["real_repr_decay_per_epoch"],
-            optimizer_spec=optimizer_spec,
-            balance_model_samples=state_dict["balance_model_samples"],
-            embedding_model_name=state_dict["embedding_model_name"],
-            embedding_spec=embedding_spec,
-            min_model_comparisons=state_dict["min_model_comparisons"],
-            embedding_model_epochs=state_dict["embedding_model_epochs"],
-            print_every=state_dict["print_every"],
-            save_every=state_dict["save_every"],
-            checkpoint_name=state_dict["checkpoint_name"],
-            seed=state_dict["seed"],
-        )
+            model = cls(
+                response_repr_dim=state_dict["response_repr_dim"],
+                encoder_hidden_dims=state_dict["encoder_hidden_dims"],
+                prediction_loss_weight=state_dict["prediction_loss_weight"],
+                predictor_hidden_dims=state_dict["predictor_hidden_dims"],
+                scorer_hidden_dims=state_dict["scorer_hidden_dims"],
+                dropout=state_dict["dropout"],
+                real_repr_ratio=state_dict["real_repr_ratio"],
+                real_repr_decay_per_epoch=state_dict["real_repr_decay_per_epoch"],
+                optimizer_spec=optimizer_spec,
+                balance_model_samples=state_dict["balance_model_samples"],
+                embedding_model_name=state_dict["embedding_model_name"],
+                embedding_spec=embedding_spec,
+                min_model_comparisons=state_dict["min_model_comparisons"],
+                embedding_model_epochs=state_dict["embedding_model_epochs"],
+                print_every=state_dict["print_every"],
+                save_every=state_dict["save_every"],
+                checkpoint_name=state_dict["checkpoint_name"],
+                seed=state_dict["seed"],
+            )
 
         model.embedding_model = EmbeddingModelBase.load_from_state_dict(state_dict["embedding_model_state_dict"])
         model._prompt_features_scaler = SimpleScaler.from_state_dict(state_dict["prompt_features_scaler_state"])
         model._response_features_scaler = SimpleScaler.from_state_dict(state_dict["response_features_scaler_state"])
 
-        model._initialize_network(
-            prompt_embedding_dim=state_dict["prompt_embedding_dim"],
-            prompt_features_dim=state_dict["prompt_features_dim"],
-            response_embedding_dim=state_dict["response_embedding_dim"],
-            response_features_dim=state_dict["response_features_dim"],
-        )
+        if model._network is None:
+            model._initialize_network(
+                prompt_embedding_dim=state_dict["prompt_embedding_dim"],
+                prompt_features_dim=state_dict["prompt_features_dim"],
+                response_embedding_dim=state_dict["response_embedding_dim"],
+                response_features_dim=state_dict["response_features_dim"],
+            )
         model.network.load_state_dict(state_dict["network_state_dict"])
         model.network.to(model.device)
 
-        model._history_entries = state_dict["history_entries"]
         model._optimizer_state = state_dict["optimizer_state"]
         model._scheduler_state = state_dict["scheduler_state"]
         model._epochs_completed = state_dict["epochs_completed"]

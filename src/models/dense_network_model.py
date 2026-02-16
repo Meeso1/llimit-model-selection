@@ -22,6 +22,7 @@ from src.utils.accuracy import compute_pairwise_accuracy
 from src.utils.data_split import ValidationSplit, split_dense_network_preprocessed_data
 from src.models.optimizers.optimizer_spec import OptimizerSpecification
 from src.models.optimizers.adamw_spec import AdamWSpec
+from src.utils.best_model_tracker import BestModelTracker
 
 
 _DataLoaderType = DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]
@@ -74,6 +75,7 @@ class DenseNetworkModel(ScoringModelBase):
         self._prompt_features_dim: int | None = None
         self._model_encoder: StringEncoder | None = None
         self._prompt_features_scaler: SimpleScaler | None = None
+        self._best_model_tracker = BestModelTracker()
         
         self._history_entries: list[TrainingHistoryEntry] = []
         
@@ -135,7 +137,6 @@ class DenseNetworkModel(ScoringModelBase):
             "num_models": self._model_encoder.size if self._model_encoder else None,
         }
 
-    # TODO: Track best state
     def train(
         self,
         data: TrainingData,
@@ -182,10 +183,26 @@ class DenseNetworkModel(ScoringModelBase):
                     
                     self._log_epoch_result(result)
                     
+                    self._best_model_tracker.record_state(
+                        accuracy=result.val_accuracy if result.val_accuracy is not None else result.train_accuracy,
+                        state_dict=self.get_state_dict(),
+                        epoch=epoch
+                    )
+                    
                     if scheduler is not None:
                         scheduler.step()
             
-            self.finish_logger_if_needed()
+            # Revert to best model parameters if available
+            if self._best_model_tracker.has_best_state:
+                print(f"\nReverting to best model parameters from epoch {self._best_model_tracker.best_epoch} (accuracy={self._best_model_tracker.best_accuracy:.4f})")
+                self.load_state_dict(self._best_model_tracker.best_state_dict, instance=self)
+            
+            final_metrics = {
+                "best_epoch": self._best_model_tracker.best_epoch,
+                "best_accuracy": self._best_model_tracker.best_accuracy,
+                "total_epochs": epochs,
+            }
+            self.finish_logger_if_needed(final_metrics=final_metrics)
 
     def predict(
         self,
@@ -284,47 +301,49 @@ class DenseNetworkModel(ScoringModelBase):
             "network_state_dict": state_dict_to_cpu(self.network.state_dict()),
             "model_encoder": self._model_encoder.get_state_dict(),
             "prompt_features_scaler_state": self._prompt_features_scaler.get_state_dict(),
-            "history_entries": self._history_entries,
         }
 
     @classmethod
-    def load_state_dict(cls, state_dict: dict[str, Any]) -> "DenseNetworkModel":
+    def load_state_dict(cls, state_dict: dict[str, Any], instance: "DenseNetworkModel | None" = None) -> "DenseNetworkModel":
         """
         Load model from state dictionary.
         
         Args:
             state_dict: State dictionary from get_state_dict()
+            instance: Optional existing model instance to load into
             
         Returns:
             Loaded model instance
         """
-        optimizer_spec = OptimizerSpecification.from_serialized(
-            state_dict["optimizer_type"],
-            state_dict["optimizer_params"],
-        )
-        
-        model = cls(
-            embedding_model_name=state_dict["embedding_model_name"],
-            hidden_dims=state_dict["hidden_dims"],
-            model_id_embedding_dim=state_dict["model_id_embedding_dim"],
-            optimizer_spec=optimizer_spec,
-            balance_model_samples=state_dict["balance_model_samples"],
-            print_every=state_dict["print_every"],
-        )
+        if instance is not None:
+            if not isinstance(instance, cls):
+                raise TypeError(f"instance must be of type {cls.__name__}, got {type(instance).__name__}")
+            model = instance
+        else:
+            optimizer_spec = OptimizerSpecification.from_serialized(
+                state_dict["optimizer_type"],
+                state_dict["optimizer_params"],
+            )
+            
+            model = cls(
+                embedding_model_name=state_dict["embedding_model_name"],
+                hidden_dims=state_dict["hidden_dims"],
+                model_id_embedding_dim=state_dict["model_id_embedding_dim"],
+                optimizer_spec=optimizer_spec,
+                balance_model_samples=state_dict["balance_model_samples"],
+                print_every=state_dict["print_every"],
+            )
         
         model._model_encoder = StringEncoder.load_state_dict(state_dict["model_encoder"])
 
-        model._initialize_network(
-            embedding_dim=state_dict["embedding_dim"],
-            prompt_features_dim=state_dict["prompt_features_dim"],
-            num_models=model._model_encoder.size,
-        )
-        model.network.load_state_dict(
-            state_dict["network_state_dict"], 
-        )
+        if model._network is None:
+            model._initialize_network(
+                embedding_dim=state_dict["embedding_dim"],
+                prompt_features_dim=state_dict["prompt_features_dim"],
+                num_models=model._model_encoder.size,
+            )
+        model.network.load_state_dict(state_dict["network_state_dict"])
         model.network.to(model.device)
-        
-        model._history_entries = state_dict["history_entries"]
         
         return model
 

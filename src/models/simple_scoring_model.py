@@ -216,41 +216,44 @@ class SimpleScoringModel(ScoringModelBase):
             "min_model_occurrences": self.min_model_occurrences,
             "network_state_dict": state_dict_to_cpu(self.network.state_dict()),
             "model_encoder": self._model_encoder.get_state_dict(),
-            "history_entries": self._history_entries,
         }
 
     @classmethod
-    def load_state_dict(cls, state_dict: dict[str, Any]) -> "SimpleScoringModel":
+    def load_state_dict(cls, state_dict: dict[str, Any], instance: "SimpleScoringModel | None" = None) -> "SimpleScoringModel":
         """
         Load model from state dictionary.
         
         Args:
             state_dict: State dictionary from get_state_dict()
+            instance: Optional existing model instance to load into
             
         Returns:
             Loaded model instance
         """
-        optimizer_spec = OptimizerSpecification.from_serialized(
-            state_dict["optimizer_type"],
-            state_dict["optimizer_params"],
-        )
-        
-        model = cls(
-            optimizer_spec=optimizer_spec,
-            balance_model_samples=state_dict["balance_model_samples"],
-            print_every=state_dict["print_every"],
-            tie_both_bad_epsilon=state_dict["tie_both_bad_epsilon"],
-            non_ranking_loss_coeff=state_dict["non_ranking_loss_coeff"],
-            min_model_occurrences=state_dict["min_model_occurrences"],
-        )
+        if instance is not None:
+            if not isinstance(instance, cls):
+                raise TypeError(f"instance must be of type {cls.__name__}, got {type(instance).__name__}")
+            model = instance
+        else:
+            optimizer_spec = OptimizerSpecification.from_serialized(
+                state_dict["optimizer_type"],
+                state_dict["optimizer_params"],
+            )
+            
+            model = cls(
+                optimizer_spec=optimizer_spec,
+                balance_model_samples=state_dict["balance_model_samples"],
+                print_every=state_dict["print_every"],
+                tie_both_bad_epsilon=state_dict["tie_both_bad_epsilon"],
+                non_ranking_loss_coeff=state_dict["non_ranking_loss_coeff"],
+                min_model_occurrences=state_dict["min_model_occurrences"],
+            )
         
         model._model_encoder = StringEncoder.load_state_dict(state_dict["model_encoder"])
-        model._initialize_network(num_models=model._model_encoder.size)
-        model.network.load_state_dict(
-            state_dict["network_state_dict"], 
-        )
+        if model._network is None:
+            model._initialize_network(num_models=model._model_encoder.size)
+        model.network.load_state_dict(state_dict["network_state_dict"])
         model.network.to(model.device)
-        model._history_entries = state_dict["history_entries"]
         
         return model
 

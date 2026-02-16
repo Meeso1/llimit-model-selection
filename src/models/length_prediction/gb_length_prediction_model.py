@@ -232,29 +232,25 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
                     # Track best model based on validation accuracy (or train if no validation)
                     accuracy_to_track = result.val_relative_accuracy if result.val_relative_accuracy is not None else result.train_relative_accuracy
                     
-                    # Save model state
-                    xgb_model_bytes = self._serialize_xgb_model(self._xgb_model)
-                    
                     self._best_model_tracker.record_state(
                         accuracy=accuracy_to_track,
-                        module_dict={'xgb_model_bytes': xgb_model_bytes},
+                        state_dict=self.get_state_dict(),
                         epoch=epoch,
                     )
             
             # Revert to best model parameters if available
-            best_state, best_epoch = self._best_model_tracker.get_best_state()
-            if best_state is not None:
+            if self._best_model_tracker.has_best_state:
                 accuracy_type = "val" if validation_split is not None and validation_split.val_fraction > 0 else "train"
                 if self.print_every is not None:
-                    print(f"\nReverting to best model parameters from epoch {best_epoch} "
+                    print(f"\nReverting to best model parameters from epoch {self._best_model_tracker.best_epoch} "
                           f"({accuracy_type}_accuracy={self._best_model_tracker.best_accuracy:.4f})")
                 
-                # Restore XGBoost model from bytes
-                self._xgb_model = self._deserialize_xgb_model(best_state['xgb_model_bytes'])
+                self.load_state_dict(self._best_model_tracker.best_state_dict, instance=self)
             
             final_metrics = {
-                "best_epoch": best_epoch,
+                "best_epoch": self._best_model_tracker.best_epoch,
                 "best_accuracy": self._best_model_tracker.best_accuracy,
+                "total_epochs": epochs,
             }
             self.finish_logger_if_needed(final_metrics=final_metrics)
 
@@ -356,7 +352,6 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
             "scaler_state": self.scaler.get_state_dict(),
             "prompt_features_scaler_state": self._prompt_features_scaler.get_state_dict(),
             "xgb_model_bytes": xgb_model_bytes,
-            "history_entries": self._history_entries,
             "embedding_type": self.embedding_spec.embedding_type,
             "embedding_spec": self.embedding_spec.model_dump(),
             "min_model_comparisons": self.min_model_comparisons,
@@ -374,51 +369,56 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
         }
 
     @classmethod
-    def load_state_dict(cls, state_dict: dict[str, Any]) -> "GbLengthPredictionModel":
+    def load_state_dict(cls, state_dict: dict[str, Any], instance: "GbLengthPredictionModel | None" = None) -> "GbLengthPredictionModel":
         """
         Load model from state dictionary.
         
         Args:
             state_dict: State dictionary from get_state_dict()
+            instance: Optional existing model instance to load into
             
         Returns:
             Loaded model instance
         """        
-        # Parse embedding spec using Pydantic TypeAdapter
-        embedding_spec_adapter = TypeAdapter(EmbeddingSpec)
-        embedding_spec = embedding_spec_adapter.validate_python(state_dict["embedding_spec"])
-        
-        model = cls(
-            embedding_model_name=state_dict["embedding_model_name"],
-            embedding_spec=embedding_spec,
-            min_model_comparisons=state_dict["min_model_comparisons"],
-            embedding_model_epochs=state_dict["embedding_model_epochs"],
-            max_depth=state_dict["max_depth"],
-            learning_rate=state_dict["learning_rate"],
-            colsample_bytree=state_dict["colsample_bytree"],
-            colsample_bylevel=state_dict["colsample_bylevel"],
-            reg_alpha=state_dict["reg_alpha"],
-            reg_lambda=state_dict["reg_lambda"],
-            print_every=state_dict["print_every"],
-            seed=state_dict["seed"],
-            input_features=state_dict.get("input_features", ["prompt_features", "model_embedding", "prompt_embedding"]),
-        )
+        if instance is not None:
+            if not isinstance(instance, cls):
+                raise TypeError(f"instance must be of type {cls.__name__}, got {type(instance).__name__}")
+            model = instance
+        else:
+            # Parse embedding spec using Pydantic TypeAdapter
+            embedding_spec_adapter = TypeAdapter(EmbeddingSpec)
+            embedding_spec = embedding_spec_adapter.validate_python(state_dict["embedding_spec"])
+            
+            model = cls(
+                embedding_model_name=state_dict["embedding_model_name"],
+                embedding_spec=embedding_spec,
+                min_model_comparisons=state_dict["min_model_comparisons"],
+                embedding_model_epochs=state_dict["embedding_model_epochs"],
+                max_depth=state_dict["max_depth"],
+                learning_rate=state_dict["learning_rate"],
+                colsample_bytree=state_dict["colsample_bytree"],
+                colsample_bylevel=state_dict["colsample_bylevel"],
+                reg_alpha=state_dict["reg_alpha"],
+                reg_lambda=state_dict["reg_lambda"],
+                print_every=state_dict["print_every"],
+                seed=state_dict["seed"],
+                input_features=state_dict.get("input_features", ["prompt_features", "model_embedding", "prompt_embedding"]),
+            )
         
         model.embedding_model = EmbeddingModelBase.load_from_state_dict(state_dict["embedding_model_state_dict"])
 
-        model._initialize_dimensions(
-            prompt_embedding_dim=state_dict["prompt_embedding_dim"],
-            prompt_features_dim=state_dict["prompt_features_dim"],
-            model_embedding_dim=state_dict["model_embedding_dim"],
-        )
+        if model._prompt_embedding_dim is None:
+            model._initialize_dimensions(
+                prompt_embedding_dim=state_dict["prompt_embedding_dim"],
+                prompt_features_dim=state_dict["prompt_features_dim"],
+                model_embedding_dim=state_dict["model_embedding_dim"],
+            )
         
         model._scaler = SimpleScaler.from_state_dict(state_dict["scaler_state"])
         model._prompt_features_scaler = SimpleScaler.from_state_dict(state_dict["prompt_features_scaler_state"])
         
         # Load XGBoost model from bytes
         model._xgb_model = model._deserialize_xgb_model(state_dict["xgb_model_bytes"])
-        
-        model._history_entries = state_dict["history_entries"]
         
         return model
 

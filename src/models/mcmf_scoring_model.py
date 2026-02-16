@@ -141,11 +141,26 @@ class McmfScoringModel(ScoringModelBase):
         }
 
     @classmethod
-    def load_state_dict(cls, state_dict: dict[str, Any]) -> "McmfScoringModel":
-        model = cls(
-            min_model_occurrences=state_dict["min_model_occurrences"],
-            print_summary=state_dict["print_summary"],
-        )
+    def load_state_dict(cls, state_dict: dict[str, Any], instance: "McmfScoringModel | None" = None) -> "McmfScoringModel":
+        """
+        Load model from state dictionary.
+        
+        Args:
+            state_dict: State dictionary from get_state_dict()
+            instance: Optional existing model instance to load into
+            
+        Returns:
+            Loaded model instance
+        """
+        if instance is not None:
+            if not isinstance(instance, cls):
+                raise TypeError(f"instance must be of type {cls.__name__}, got {type(instance).__name__}")
+            model = instance
+        else:
+            model = cls(
+                min_model_occurrences=state_dict["min_model_occurrences"],
+                print_summary=state_dict["print_summary"],
+            )
         
         model._model_encoder = StringEncoder.load_state_dict(state_dict["model_encoder"])
         model._scores = np.array(state_dict["scores"])

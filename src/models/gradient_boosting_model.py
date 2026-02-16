@@ -22,6 +22,7 @@ from src.utils.timer import Timer
 from src.utils.data_split import ValidationSplit, split_gradient_boosting_preprocessed_data
 from src.models.model_outputs_cache import ModelOutputsCache
 from src.models import model_loading
+from src.utils.best_model_tracker import BestModelTracker
 import warnings
 
 
@@ -199,6 +200,7 @@ class GradientBoostingModel(ScoringModelBase):
         self._history_entries: list[TrainingHistoryEntry] = []
         self._xgb_model: xgb.Booster | None = None
         self._prompt_features_scaler: SimpleScaler | None = None
+        self._best_model_tracker = BestModelTracker()
         
         self.last_timer: Timer | None = None
 
@@ -378,8 +380,24 @@ class GradientBoostingModel(ScoringModelBase):
                     )
                     
                     self._log_epoch_result(result)
+                    
+                    self._best_model_tracker.record_state(
+                        accuracy=result.val_accuracy if result.val_accuracy is not None else result.train_accuracy,
+                        state_dict=self.get_state_dict(),
+                        epoch=epoch
+                    )
             
-            self.finish_logger_if_needed()
+            # Revert to best model parameters if available
+            if self._best_model_tracker.has_best_state:
+                print(f"\nReverting to best model parameters from epoch {self._best_model_tracker.best_epoch} (accuracy={self._best_model_tracker.best_accuracy:.4f})")
+                self.load_state_dict(self._best_model_tracker.best_state_dict, instance=self)
+            
+            final_metrics = {
+                "best_epoch": self._best_model_tracker.best_epoch,
+                "best_accuracy": self._best_model_tracker.best_accuracy,
+                "total_epochs": epochs,
+            }
+            self.finish_logger_if_needed(final_metrics=final_metrics)
 
     def predict(
         self,
@@ -500,7 +518,6 @@ class GradientBoostingModel(ScoringModelBase):
             "model_embedding_dim": self._model_embedding_dim,
             "xgb_model_bytes": xgb_model_bytes,
             "prompt_features_scaler_state": self._prompt_features_scaler.get_state_dict(),
-            "history_entries": self._history_entries,
             "embedding_type": self.embedding_model.embedding_type,
             "embedding_spec": self.embedding_spec.model_dump() if self.embedding_spec is not None else None,
             "min_model_comparisons": self.min_model_comparisons,
@@ -521,47 +538,54 @@ class GradientBoostingModel(ScoringModelBase):
         }
 
     @classmethod
-    def load_state_dict(cls, state_dict: dict[str, Any]) -> "GradientBoostingModel":
+    def load_state_dict(cls, state_dict: dict[str, Any], instance: "GradientBoostingModel | None" = None) -> "GradientBoostingModel":
         """
         Load model from state dictionary.
         
         Args:
             state_dict: State dictionary from get_state_dict()
+            instance: Optional existing model instance to load into
             
         Returns:
             Loaded model instance
         """        
-        # Parse embedding spec using Pydantic TypeAdapter
-        embedding_spec_adapter = TypeAdapter(EmbeddingSpec)
-        embedding_spec = embedding_spec_adapter.validate_python(state_dict["embedding_spec"]) \
-            if state_dict["embedding_spec"] is not None else None
-        
-        model = cls(
-            balance_model_samples=state_dict["balance_model_samples"],
-            embedding_model_name=state_dict["embedding_model_name"],
-            embedding_spec=embedding_spec,
-            min_model_comparisons=state_dict["min_model_comparisons"],
-            embedding_model_epochs=state_dict["embedding_model_epochs"],
-            max_depth=state_dict["max_depth"],
-            learning_rate=state_dict["learning_rate"],
-            colsample_bytree=state_dict["colsample_bytree"],
-            reg_alpha=state_dict["reg_alpha"],
-            reg_lambda=state_dict["reg_lambda"],
-            base_model_name=state_dict.get("base_model_name", None),
-            print_every=state_dict["print_every"],
-            seed=state_dict["seed"],
-            input_features=state_dict.get("input_features", ["prompt_features", "model_embedding", "prompt_embedding"]),
-        )
+        if instance is not None:
+            if not isinstance(instance, cls):
+                raise TypeError(f"instance must be of type {cls.__name__}, got {type(instance).__name__}")
+            model = instance
+        else:
+            # Parse embedding spec using Pydantic TypeAdapter
+            embedding_spec_adapter = TypeAdapter(EmbeddingSpec)
+            embedding_spec = embedding_spec_adapter.validate_python(state_dict["embedding_spec"]) \
+                if state_dict["embedding_spec"] is not None else None
+            
+            model = cls(
+                balance_model_samples=state_dict["balance_model_samples"],
+                embedding_model_name=state_dict["embedding_model_name"],
+                embedding_spec=embedding_spec,
+                min_model_comparisons=state_dict["min_model_comparisons"],
+                embedding_model_epochs=state_dict["embedding_model_epochs"],
+                max_depth=state_dict["max_depth"],
+                learning_rate=state_dict["learning_rate"],
+                colsample_bytree=state_dict["colsample_bytree"],
+                reg_alpha=state_dict["reg_alpha"],
+                reg_lambda=state_dict["reg_lambda"],
+                base_model_name=state_dict.get("base_model_name", None),
+                print_every=state_dict["print_every"],
+                seed=state_dict["seed"],
+                input_features=state_dict.get("input_features", ["prompt_features", "model_embedding", "prompt_embedding"]),
+            )
         
         model.embedding_model = EmbeddingModelBase.load_from_state_dict(state_dict["embedding_model_state_dict"])
         model._prompt_features_scaler = SimpleScaler.from_state_dict(state_dict["prompt_features_scaler_state"])
 
-        model._initialize_dimensions(
-            prompt_embedding_dim=state_dict["prompt_embedding_dim"],
-            prompt_features_dim=state_dict["prompt_features_dim"],
-            model_embedding_dim=state_dict["model_embedding_dim"],
-            prompt_categories_dim=state_dict.get("prompt_categories_dim", 0),
-        )
+        if model._prompt_embedding_dim is None:
+            model._initialize_dimensions(
+                prompt_embedding_dim=state_dict["prompt_embedding_dim"],
+                prompt_features_dim=state_dict["prompt_features_dim"],
+                model_embedding_dim=state_dict["model_embedding_dim"],
+                prompt_categories_dim=state_dict.get("prompt_categories_dim", 0),
+            )
         
         # Load XGBoost model from bytes
         with tempfile.NamedTemporaryFile(delete=False, suffix='.json') as tmp:
@@ -575,8 +599,6 @@ class GradientBoostingModel(ScoringModelBase):
         finally:
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
-        
-        model._history_entries = state_dict["history_entries"]
         
         # Load base model if present
         if model._base_model_name is not None and state_dict.get("base_model_state_dict") is not None:

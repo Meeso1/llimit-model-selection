@@ -222,21 +222,27 @@ class GreedyRankingModel(ScoringModelBase):
         }
 
     @classmethod
-    def load_state_dict(cls, state_dict: dict[str, Any]) -> "GreedyRankingModel":
+    def load_state_dict(cls, state_dict: dict[str, Any], instance: "GreedyRankingModel | None" = None) -> "GreedyRankingModel":
         """
         Load model from state dictionary.
         
         Args:
             state_dict: State dictionary from get_state_dict()
+            instance: Optional existing model instance to load into
             
         Returns:
             Loaded model instance
         """
-        model = cls(
-            min_model_occurrences=state_dict["min_model_occurrences"],
-            score_normalization=state_dict["score_normalization"],
-            print_summary=state_dict.get("print_summary", True),
-        )
+        if instance is not None:
+            if not isinstance(instance, cls):
+                raise TypeError(f"instance must be of type {cls.__name__}, got {type(instance).__name__}")
+            model = instance
+        else:
+            model = cls(
+                min_model_occurrences=state_dict["min_model_occurrences"],
+                score_normalization=state_dict["score_normalization"],
+                print_summary=state_dict.get("print_summary", True),
+            )
         
         model._model_encoder = StringEncoder.load_state_dict(state_dict["model_encoder"])
         model._ranking = np.array(state_dict["ranking"])

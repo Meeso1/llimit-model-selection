@@ -275,7 +275,7 @@ class TransformerEmbeddingModel(ScoringModelBase):
                     
                     self._best_model_tracker.record_state(
                         accuracy=result.val_accuracy if result.val_accuracy is not None else result.train_accuracy,
-                        module_dict=state_dict_to_cpu(self._network.state_dict()),
+                        state_dict=self.get_state_dict(),
                         epoch=epoch
                     )
                     
@@ -290,17 +290,17 @@ class TransformerEmbeddingModel(ScoringModelBase):
                         self.save(checkpoint_name)
             
             # Revert to best model parameters if available
-            best_state, best_epoch = self._best_model_tracker.get_best_state()
-            if best_state is not None:
-                print(f"\nReverting to best model parameters from epoch {best_epoch} (accuracy={self._best_model_tracker.best_accuracy:.4f})")
-                self._network.load_state_dict(state_dict_to_device(best_state, self.device))
+            if self._best_model_tracker.has_best_state:
+                print(f"\nReverting to best model parameters from epoch {self._best_model_tracker.best_epoch} (accuracy={self._best_model_tracker.best_accuracy:.4f})")
+                self.load_state_dict(self._best_model_tracker.best_state_dict, instance=self)
             
             self._optimizer_state = optimizer.state_dict()
             self._scheduler_state = scheduler.state_dict() if scheduler is not None else None
             
             final_metrics = {
-                "best_epoch": best_epoch,
+                "best_epoch": self._best_model_tracker.best_epoch,
                 "best_accuracy": self._best_model_tracker.best_accuracy,
+                "total_epochs": self._epochs_completed,
             }
             self.finish_logger_if_needed(final_metrics=final_metrics)
 
@@ -426,7 +426,6 @@ class TransformerEmbeddingModel(ScoringModelBase):
             "preprocessor_version": self.preprocessor.version,
             "prompt_features_dim": self._prompt_features_dim,
             "network_state_dict": state_dict_to_cpu(self.network.state_dict()),
-            "history_entries": self._history_entries,
             "epochs_completed": self._epochs_completed,
             "prompt_features_scaler_state": self._prompt_features_scaler.get_state_dict(),
             
@@ -443,63 +442,69 @@ class TransformerEmbeddingModel(ScoringModelBase):
         }
 
     @classmethod
-    def load_state_dict(cls, state_dict: dict[str, Any]) -> "TransformerEmbeddingModel":
+    def load_state_dict(cls, state_dict: dict[str, Any], instance: "TransformerEmbeddingModel | None" = None) -> "TransformerEmbeddingModel":
         """
         Load model from state dictionary.
         
         Args:
             state_dict: State dictionary from get_state_dict()
+            instance: Optional existing model instance to load into
             
         Returns:
             Loaded model instance
         """
-        optimizer_spec = OptimizerSpecification.from_serialized(
-            state_dict["optimizer_type"],
-            state_dict["optimizer_params"],
-        )
-        
-        # Parse embedding spec using Pydantic TypeAdapter
-        embedding_spec_adapter = TypeAdapter(EmbeddingSpec)
-        embedding_spec = embedding_spec_adapter.validate_python(state_dict["embedding_spec"]) \
-            if state_dict["embedding_spec"] is not None else None
-        
-        finetuning_spec = FineTuningSpecification.from_serialized(
-            state_dict["finetuning_method"],
-            state_dict["finetuning_spec"],
-        )
-        
-        model = cls(
-            transformer_model_name=state_dict["transformer_model_name"],
-            finetuning_spec=finetuning_spec,
-            hidden_dims=state_dict["hidden_dims"],
-            dropout=state_dict["dropout"],
-            max_length=state_dict["max_length"],
-            optimizer_spec=optimizer_spec,
-            balance_model_samples=state_dict["balance_model_samples"],
-            embedding_spec=embedding_spec,
-            min_model_comparisons=state_dict["min_model_comparisons"],
-            embedding_model_epochs=state_dict["embedding_model_epochs"],
-            scoring_head_lr_multiplier=state_dict.get("scoring_head_lr_multiplier", 1.0),
-            base_model_name=state_dict.get("base_model_name", None),
-            print_every=state_dict["print_every"],
-            save_every=state_dict.get("save_every", None),
-            checkpoint_name=state_dict.get("checkpoint_name", None),
-            seed=state_dict["seed"],
-        )
+        if instance is not None:
+            if not isinstance(instance, cls):
+                raise TypeError(f"instance must be of type {cls.__name__}, got {type(instance).__name__}")
+            model = instance
+        else:
+            optimizer_spec = OptimizerSpecification.from_serialized(
+                state_dict["optimizer_type"],
+                state_dict["optimizer_params"],
+            )
+            
+            # Parse embedding spec using Pydantic TypeAdapter
+            embedding_spec_adapter = TypeAdapter(EmbeddingSpec)
+            embedding_spec = embedding_spec_adapter.validate_python(state_dict["embedding_spec"]) \
+                if state_dict["embedding_spec"] is not None else None
+            
+            finetuning_spec = FineTuningSpecification.from_serialized(
+                state_dict["finetuning_method"],
+                state_dict["finetuning_spec"],
+            )
+            
+            model = cls(
+                transformer_model_name=state_dict["transformer_model_name"],
+                finetuning_spec=finetuning_spec,
+                hidden_dims=state_dict["hidden_dims"],
+                dropout=state_dict["dropout"],
+                max_length=state_dict["max_length"],
+                optimizer_spec=optimizer_spec,
+                balance_model_samples=state_dict["balance_model_samples"],
+                embedding_spec=embedding_spec,
+                min_model_comparisons=state_dict["min_model_comparisons"],
+                embedding_model_epochs=state_dict["embedding_model_epochs"],
+                scoring_head_lr_multiplier=state_dict.get("scoring_head_lr_multiplier", 1.0),
+                base_model_name=state_dict.get("base_model_name", None),
+                print_every=state_dict["print_every"],
+                save_every=state_dict.get("save_every", None),
+                checkpoint_name=state_dict.get("checkpoint_name", None),
+                seed=state_dict["seed"],
+            )
         
         model.embedding_model = EmbeddingModelBase.load_from_state_dict(state_dict["embedding_model_state_dict"])
         model._prompt_features_scaler = SimpleScaler.from_state_dict(state_dict["prompt_features_scaler_state"])
 
-        model._initialize_network(
-            prompt_features_dim=state_dict["prompt_features_dim"],
-        )
+        if model._network is None:
+            model._initialize_network(
+                prompt_features_dim=state_dict["prompt_features_dim"],
+            )
         model.network.load_state_dict(
             state_dict["network_state_dict"],
             strict=False,
         )
         model.network.to(model.device)
         
-        model._history_entries = state_dict["history_entries"]
         model._optimizer_state = state_dict.get("optimizer_state")
         model._scheduler_state = state_dict.get("scheduler_state")
         model._epochs_completed = state_dict.get("epochs_completed", 0)

@@ -1,7 +1,7 @@
 """Common base class for all models."""
 
 from abc import ABC, abstractmethod
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
 from src.utils.data_split import ValidationSplit
 from src.utils.training_history import TrainingHistory, TrainingHistoryEntry
@@ -96,8 +96,19 @@ class ModelBase[TOutput](ABC):
 
     @classmethod
     @abstractmethod
-    def load_state_dict(cls, state_dict: dict[str, Any]) -> "ModelBase":
-        """Load model from state dictionary."""
+    def load_state_dict(cls, state_dict: dict[str, Any], instance: Self | None = None) -> Self:
+        """
+        Load model from state dictionary.
+        
+        Args:
+            state_dict: State dictionary to load
+            instance: Optional existing model instance to load into. If provided,
+                     loads state into this instance instead of creating a new one.
+                     Must be of the same type as cls.
+        
+        Returns:
+            The loaded model instance (either newly created or the provided instance)
+        """
         pass
 
     def save(self, name: str) -> None:
@@ -105,6 +116,6 @@ class ModelBase[TOutput](ABC):
         Jars.models.add(name, self.get_state_dict())
 
     @classmethod
-    def load(cls, name: str) -> "ModelBase":
+    def load(cls, name: str) -> Self:
         """Load model from disk."""
         return cls.load_state_dict(Jars.models.get(name))
