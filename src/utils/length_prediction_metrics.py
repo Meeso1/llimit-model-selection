@@ -13,7 +13,7 @@ def compute_length_prediction_metrics(
     Compute evaluation metrics for length prediction.
     
     Metrics computed:
-    - avg_relative_error: 1 - abs(1 - predicted/actual) (higher is better, max 1.0)
+    - avg_relative_error: abs(1 - predicted/actual) (lower is better, min 0.0)
     - avg_relative_ratio: mean(predicted/actual) (should be close to 1.0)
     - stddev_ratio: stddev(predictions)/stddev(actuals) (should be close to 1.0)
     - rmse: root mean squared error in scaled space
@@ -33,9 +33,9 @@ def compute_length_prediction_metrics(
     # Avoid division by zero
     actuals_nonzero = np.where(actuals_descaled == 0, 1e-6, actuals_descaled)
     
-    # Average relative error magnitude: 1 - abs(1 - predicted/actual)
+    # Average relative error magnitude: abs(1 - predicted/actual)
     relative_ratios = predictions_descaled / actuals_nonzero
-    avg_relative_error = float(1 - np.mean(np.abs(1 - relative_ratios)))
+    avg_relative_error = float(np.mean(np.abs(1 - relative_ratios)))
     
     # Average relative ratio: mean(predicted/actual)
     avg_relative_ratio = float(np.mean(relative_ratios))
@@ -51,7 +51,11 @@ def compute_length_prediction_metrics(
     # Mean absolute error in descaled space
     mae = float(np.mean(np.abs(predictions_descaled - actuals_descaled)))
     
+    # Synthetic accuracy metric - 1 if avg_relative_error is 0, 0.5 if avg_relative_error is 1, halves every time avg_relative_error increases by 1
+    accuracy = 1 / 2**avg_relative_error
+    
     return {
+        "accuracy": accuracy,
         "avg_relative_error": avg_relative_error,
         "avg_relative_ratio": avg_relative_ratio,
         "stddev_ratio": stddev_ratio,

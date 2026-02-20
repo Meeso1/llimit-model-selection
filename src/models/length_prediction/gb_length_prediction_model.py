@@ -127,8 +127,8 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
             "reg_lambda": self.reg_lambda,
             "embedding_model_name": self.embedding_model_name,
             "preprocessor_version": self.preprocessor.version,
-            "embedding_type": self.embedding_spec.embedding_type,
-            "embedding_spec": self.embedding_spec.model_dump(),
+            "embedding_type": self.embedding_model.embedding_type,
+            "embedding_spec": self.embedding_spec.model_dump() if self.embedding_spec is not None else None,
             "min_model_comparisons": self.min_model_comparisons,
             "embedding_model_epochs": self.embedding_model_epochs,
             "input_features": self.input_features,
@@ -173,6 +173,8 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
                         epochs=self.embedding_model_epochs, 
                         batch_size=batch_size,
                     )
+            
+            self.init_logger_if_needed() # Must be called after embedding model is initialized
             
             with Timer("encode_prompts", verbosity="start+end", parent=train_timer):
                 preprocessed_without_embeddings = self.preprocessor.preprocess(data)
@@ -230,7 +232,7 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
                     self._log_epoch_result(result)
                     
                     # Track best model based on validation accuracy (or train if no validation)
-                    accuracy_to_track = result.val_relative_accuracy if result.val_relative_accuracy is not None else result.train_relative_accuracy
+                    accuracy_to_track = result.val_accuracy if result.val_accuracy is not None else result.train_accuracy
                     
                     self._best_model_tracker.record_state(
                         accuracy=accuracy_to_track,
@@ -356,8 +358,8 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
             "scaler_state": self.scaler.get_state_dict(),
             "prompt_features_scaler_state": self._prompt_features_scaler.get_state_dict(),
             "xgb_model_bytes": xgb_model_bytes,
-            "embedding_type": self.embedding_spec.embedding_type,
-            "embedding_spec": self.embedding_spec.model_dump(),
+            "embedding_type": self.embedding_model.embedding_type,
+            "embedding_spec": self.embedding_spec.model_dump() if self.embedding_spec is not None else None,
             "min_model_comparisons": self.min_model_comparisons,
             "embedding_model_epochs": self.embedding_model_epochs,
             "embedding_model_state_dict": self.embedding_model.get_state_dict(),
@@ -601,8 +603,8 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
                 epoch=epoch,
                 total_loss=train_metrics["rmse"],
                 val_loss=val_metrics["rmse"] if val_metrics is not None else None,
-                train_accuracy=train_metrics["avg_relative_error"],
-                val_accuracy=val_metrics["avg_relative_error"] if val_metrics is not None else None,
+                train_accuracy=train_metrics["accuracy"],
+                val_accuracy=val_metrics["accuracy"] if val_metrics is not None else None,
                 additional_metrics=additional_metrics,
             )
             self._history_entries.append(entry)
@@ -613,8 +615,10 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
             epoch=epoch,
             train_rmse=train_metrics["rmse"],
             val_rmse=val_metrics["rmse"] if val_metrics is not None else None,
-            train_relative_accuracy=train_metrics["avg_relative_error"],
-            val_relative_accuracy=val_metrics["avg_relative_error"] if val_metrics is not None else None,
+            train_accuracy=train_metrics["accuracy"],
+            val_accuracy=val_metrics["accuracy"] if val_metrics is not None else None,
+            train_relative_error=train_metrics["avg_relative_error"],
+            val_relative_error=val_metrics["avg_relative_error"] if val_metrics is not None else None,
             train_mae=train_metrics["mae"],
             val_mae=val_metrics["mae"] if val_metrics is not None else None,
             duration=timer.elapsed_time,
@@ -627,13 +631,15 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
         if not result.epoch % self.print_every == 0:
             return
         
-        if result.val_rmse is None or result.val_relative_accuracy is None:
+        if result.val_rmse is None or result.val_accuracy is None or result.val_relative_error is None or result.val_rmse is None:
             print(f"Round {result.epoch:>4}: rmse = {result.train_rmse:.4f}, "
-                  f"rel_acc = {(result.train_relative_accuracy*100):.2f}%, "
+                  f"accuracy = {(result.train_accuracy*100):.2f}%, "
+                  f"rel_err = {(result.train_relative_error*100):.2f}%, "
                   f"mae = {result.train_mae:.1f} - {result.duration:.2f}s")
         else:
             print(f"Round {result.epoch:>4}: rmse = {result.train_rmse:.4f}/{result.val_rmse:.4f}, "
-                  f"rel_acc = {(result.train_relative_accuracy*100):.2f}%/{(result.val_relative_accuracy*100):.2f}%, "
+                  f"accuracy = {(result.train_accuracy*100):.2f}%/{(result.val_accuracy*100):.2f}%, "
+                  f"rel_err = {(result.train_relative_error*100):.2f}%/{(result.val_relative_error*100):.2f}%, "
                   f"mae = {result.train_mae:.1f}/{result.val_mae:.1f} - {result.duration:.2f}s")
 
     @dataclass
@@ -641,8 +647,10 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
         epoch: int
         train_rmse: float
         val_rmse: float | None
-        train_relative_accuracy: float
-        val_relative_accuracy: float | None
+        train_accuracy: float
+        val_accuracy: float | None
+        train_relative_error: float
+        val_relative_error: float | None
         train_mae: float
         val_mae: float | None
         duration: float

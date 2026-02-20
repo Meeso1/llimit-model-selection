@@ -130,13 +130,12 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
             "optimizer_params": self.optimizer_spec.to_dict(),
             "embedding_model_name": self.embedding_model_name,
             "preprocessor_version": self.preprocessor.version,
-            "embedding_type": self.embedding_spec.embedding_type,
-            "embedding_spec": self.embedding_spec.model_dump(),
+            "embedding_type": self.embedding_model.embedding_type,
+            "embedding_spec": self.embedding_spec.model_dump() if self.embedding_spec is not None else None,
             "min_model_comparisons": self.min_model_comparisons,
             "embedding_model_epochs": self.embedding_model_epochs,
         }
 
-    # TODO: Track best state
     def train(
         self,
         data: TrainingData,
@@ -159,7 +158,9 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
                         )
                     else:
                         raise RuntimeError("No embedding model available and no way to create one")
-            
+ 
+            self.init_logger_if_needed() # Must be called after embedding model is initialized
+
             with Timer("train_embedding_model", verbosity="start+end", parent=train_timer):
                 if not self.embedding_model.is_initialized:
                     self.embedding_model.train(
@@ -345,8 +346,8 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
             "prompt_features_scaler_state": self._prompt_features_scaler.get_state_dict(),
             "network_state_dict": state_dict_to_cpu(self.network.state_dict()),
             "epochs_completed": self._epochs_completed,
-            "embedding_type": self.embedding_spec.embedding_type,
-            "embedding_spec": self.embedding_spec.model_dump(),
+            "embedding_type": self.embedding_model.embedding_type,
+            "embedding_spec": self.embedding_spec.model_dump() if self.embedding_spec is not None else None,
             "min_model_comparisons": self.min_model_comparisons,
             "embedding_model_epochs": self.embedding_model_epochs,
             "embedding_model_state_dict": self.embedding_model.get_state_dict(),
@@ -552,8 +553,8 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
                 epoch=epoch,
                 total_loss=avg_loss,
                 val_loss=val_loss,
-                train_accuracy=train_metrics["avg_relative_error"],
-                val_accuracy=val_metrics["avg_relative_error"] if val_metrics is not None else None,
+                train_accuracy=train_metrics["accuracy"],
+                val_accuracy=val_metrics["accuracy"] if val_metrics is not None else None,
                 additional_metrics=additional_metrics,
             )
             self._history_entries.append(entry)
@@ -617,7 +618,6 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
         
         return avg_loss, val_metrics
 
-
     def _log_epoch_result(self, result: "DnEmbeddingLengthPredictionModel.EpochResult") -> None:
         if self.print_every is None:
             return
@@ -630,11 +630,13 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
         
         if val_metrics is None:
             print(f"Epoch {result.epoch:>4}: loss = {result.total_loss:.4f}, "
+                  f"accuracy = {(train_metrics['accuracy']*100):.2f}%, "
                   f"rel_err = {(train_metrics['avg_relative_error']*100):.2f}%, "
                   f"ratio = {train_metrics['avg_relative_ratio']:.3f}, "
                   f"mae = {train_metrics['mae']:.1f} - {result.duration:.2f}s")
         else:
             print(f"Epoch {result.epoch:>4}: loss = {result.total_loss:.4f}/{result.val_loss:.4f}, "
+                  f"accuracy = {(train_metrics['accuracy']*100):.2f}%/{(val_metrics['accuracy']*100):.2f}%, "
                   f"rel_err = {(train_metrics['avg_relative_error']*100):.2f}%/{(val_metrics['avg_relative_error']*100):.2f}%, "
                   f"ratio = {train_metrics['avg_relative_ratio']:.3f}/{val_metrics['avg_relative_ratio']:.3f}, "
                   f"mae = {train_metrics['mae']:.1f}/{val_metrics['mae']:.1f} - {result.duration:.2f}s")
