@@ -32,6 +32,23 @@ class SimpleScaler:
         self.scale = np.where(self.scale == 0, 1.0, self.scale)
         self._is_fitted = True
         return self
+
+    def fit_unbalanced(self, X: list[np.ndarray]) -> "SimpleScaler":
+        """
+        Fit the scaler to the data, handling different counts of samples for each feature.
+        
+        Args:
+            X: List of values for each feature
+            
+        Returns:
+            Self for chaining
+        """
+        self.mean = np.array([np.mean(values) for values in X])  # [n_features]
+        self.scale = np.array([np.std(values) for values in X])  # [n_features]
+        # Avoid division by zero
+        self.scale = np.where(self.scale == 0, 1.0, self.scale)
+        self._is_fitted = True
+        return self
     
     def transform(self, X: np.ndarray) -> np.ndarray:  # [n_samples, n_features]
         """
@@ -47,6 +64,25 @@ class SimpleScaler:
         assert self.mean is not None and self.scale is not None
         
         return (X - self.mean) / self.scale
+
+    def transform_unbalanced(self, X: list[np.ndarray]) -> list[np.ndarray]:
+        """
+        Transform the data using fitted parameters, handling different counts of samples for each feature.
+        
+        Args:
+            X: List of values for each feature
+            
+        Returns:
+            Normalized feature array
+        """
+        assert self._is_fitted, "Scaler must be fitted before transform_unbalanced"
+        assert self.mean is not None and self.scale is not None
+        
+        result = []
+        for i, values in enumerate(X):
+            result.append((values - self.mean[i]) / self.scale[i])
+
+        return result
     
     def inverse_transform(self, X: np.ndarray) -> np.ndarray:  # [n_samples, n_features]
         """
@@ -63,6 +99,24 @@ class SimpleScaler:
         
         return X * self.scale + self.mean
     
+    def inverse_transform_unbalanced(self, X: list[np.ndarray]) -> list[np.ndarray]:
+        """
+        Inverse transform the normalized data back to original scale, handling different counts of samples for each feature.
+        
+        Args:
+            X: List of normalized values for each feature
+            
+        Returns:
+            Original scale feature array
+        """
+        assert self._is_fitted, "Scaler must be fitted before inverse_transform_unbalanced"
+        assert self.mean is not None and self.scale is not None
+        
+        result = []
+        for i, values in enumerate(X):
+            result.append(values * self.scale[i] + self.mean[i])
+        return result
+
     def fit_transform(self, X: np.ndarray) -> np.ndarray:  # [n_samples, n_features]
         """
         Fit and transform in one step.

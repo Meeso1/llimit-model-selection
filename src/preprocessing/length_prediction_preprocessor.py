@@ -9,13 +9,14 @@ from src.data_models.length_prediction.length_prediction_data_models import (
     PreprocessedLengthPredictionTrainingData,
     PreprocessedLengthPredictionInferenceInput,
 )
-from src.preprocessing.prompt_embedding_preprocessor import PromptEmbeddingPreprocessor
+from src.preprocessing.prompt_embedding_preprocessor import PromptEmbeddingPreprocessor, PreprocessedPromptPair
 from src.utils.jars import Jars
 from src.utils.string_encoder import StringEncoder
 from src.utils.timer import Timer
 from src.preprocessing.simple_scaler import SimpleScaler
 
 
+# TODO: Predict log response length in all length prediction models
 class LengthPredictionPreprocessor:
     """
     Preprocessor for length prediction models.
@@ -72,17 +73,27 @@ class LengthPredictionPreprocessor:
                 preprocessed = self.prompt_embedding_preprocessor.preprocess(data)
             
             filtered_entries = [data.entries[i] for i in preprocessed.filtered_indexes]
+
+            assert len(preprocessed.pairs) == len(filtered_entries)
+
+            with Timer("filter_out_empty_responses", verbosity="start+end", parent=timer):
+                non_empty_entries: list[EvaluationEntry] = []
+                non_empty_pairs: list[PreprocessedPromptPair] = []
+                filtered_indexes: list[int] = []
+                for i, entry, preprocessed_pair in zip(preprocessed.filtered_indexes, filtered_entries, preprocessed.pairs):
+                    if len(entry.model_a_response.strip()) > 0 and len(entry.model_b_response.strip()) > 0:
+                        non_empty_entries.append(entry)
+                        non_empty_pairs.append(preprocessed_pair)
+                        filtered_indexes.append(i)
             
             with Timer("compute_response_lengths", verbosity="start+end", parent=timer):
-                response_lengths_a, response_lengths_b = self._compute_response_lengths(filtered_entries)
+                response_lengths_a, response_lengths_b = self._compute_response_lengths(non_empty_entries)
                 
             # Fit scaler on all lengths and transform
             scaler = SimpleScaler().fit(np.array(response_lengths_a + response_lengths_b))
             
             response_lengths_a_scaled = scaler.transform(np.array(response_lengths_a))  # [n_pairs]
             response_lengths_b_scaled = scaler.transform(np.array(response_lengths_b))  # [n_pairs]
-            
-            assert len(preprocessed.pairs) == len(filtered_entries)
             
             samples = [
                 PreprocessedLengthPredictionSample(
@@ -93,7 +104,7 @@ class LengthPredictionPreprocessor:
                     response_length_a=response_lengths_a_scaled[i],
                     response_length_b=response_lengths_b_scaled[i],
                 )
-                for i, pair in enumerate(preprocessed.pairs)
+                for i, pair in enumerate(non_empty_pairs)
             ]
             
             preprocessed_data = PreprocessedLengthPredictionTrainingData(
@@ -101,7 +112,7 @@ class LengthPredictionPreprocessor:
                 embedding_dim=preprocessed.embedding_dim,
                 prompt_features_dim=preprocessed.prompt_features_dim,
                 model_encoder=preprocessed.model_encoder,
-                filtered_indexes=preprocessed.filtered_indexes,
+                filtered_indexes=filtered_indexes,
                 prompt_features_scaler_state=preprocessed.scaler_state,
                 output_scaler_state=scaler.get_state_dict(),
             )

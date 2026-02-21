@@ -22,7 +22,7 @@ from src.preprocessing.utils import (
     filter_out_rare_models,
     create_encoder,
 )
-from src.preprocessing.scoring_feature_extraction import extract_prompt_features_for_many
+from src.preprocessing.scoring_feature_extraction import extract_and_transform_all_prompt_features
 from src.preprocessing.model_embedding_feature_extraction import extract_response_features_for_many
 
 
@@ -87,7 +87,7 @@ class ResponsePredictivePreprocessor:
                 filtered_data, model_encoder, filtered_indexes = self._filter_data_and_fit_encoder(data)
             
             with Timer("extract_prompt_features", verbosity="start+end", parent=timer) as prompt_features_timer:
-                prompt_features_list, prompt_scaler = extract_prompt_features_for_many(
+                prompt_features_list, prompt_scaler = extract_and_transform_all_prompt_features(
                     [entry.user_prompt for entry in filtered_data.entries],
                     [entry.conversation_history for entry in filtered_data.entries],
                     timer=prompt_features_timer
@@ -214,7 +214,7 @@ class ResponsePredictivePreprocessor:
         Returns:
             ResponsePredictiveInferenceData with embeddings and features
         """
-        prompt_features_list, _ = extract_prompt_features_for_many(
+        prompt_features_list, _ = extract_and_transform_all_prompt_features(
             prompts,
             [[] for _ in prompts],
             prompt_scaler,

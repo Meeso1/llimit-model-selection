@@ -1,5 +1,6 @@
 """Feature extraction functions for prompt embeddings in scoring models."""
 
+from dataclasses import dataclass
 import re
 import numpy as np
 from src.data_models.data_models import EvaluationMessage
@@ -87,7 +88,8 @@ def extract_prompt_complexity_features(prompt: str) -> np.ndarray:  # [8], all f
     # Vocabulary complexity
     unique_words = set(w.lower() for w in words)
     type_token_ratio = len(unique_words) / max(len(words), 1)
-    features.append(type_token_ratio)
+    inverse_type_token_ratio = 1 - type_token_ratio # TODO: handle backwards compatibility with changes to features
+    features.append(inverse_type_token_ratio)
     
     # Average word length (longer words = more technical)
     avg_word_len = np.mean([len(w) for w in words]) if words else 0.0
@@ -296,14 +298,15 @@ def extract_all_prompt_features(
         np.concatenate([task_type_boolean, style_boolean, context_boolean, output_format_boolean])
 
 
-def extract_prompt_features_for_many(
+def extract_and_transform_all_prompt_features(
     prompts: list[str],
     conversation_histories: list[list[EvaluationMessage]],
     scaler: SimpleScaler | None = None,
     timer: Timer | None = None
 ) -> tuple[list[np.ndarray], SimpleScaler]:
     """
-    Extract all scalar features for a list of prompts.
+    Extract all scalar features for a list of prompts, transforming and scaling them.
+    Output from this function can be used as input for a model.
     """
     numeric_features = []
     boolean_features = []
@@ -315,12 +318,131 @@ def extract_prompt_features_for_many(
     numeric_features = np.stack(numeric_features)
     boolean_features = np.stack(boolean_features)
 
-    if scaler is None:
-        scaler = SimpleScaler().fit(numeric_features)
+    numeric_feature_descriptions, _ = get_feature_descriptions()
+    scaling_data: list[np.ndarray] = []
+    non_zero_indexes_per_feature: list[np.ndarray] = []
+    for index, feature_description in enumerate(numeric_feature_descriptions):
+        values = numeric_features[:, index]
+        non_zero_indexes = np.nonzero(values)[0]
+        non_zero_indexes_per_feature.append(non_zero_indexes)
 
-    numeric_features = scaler.transform(numeric_features)
+        if feature_description.logarythmic:
+            # Clip values to 1e-6 to avoid log(0)
+            values = np.log(np.where(values > 1e-6, values, 1e-6))
+        if feature_description.many_zeros:
+            # If the feature has many zeros, we only want to scale the non-zero values. Zeros will be treated separately.
+            values = values[non_zero_indexes]
+        scaling_data.append(values)
+
+    if scaler is None:
+        scaler = SimpleScaler().fit_unbalanced(scaling_data)
+
+    scaled_data = scaler.transform_unbalanced(scaling_data)
+    for index, feature_description in enumerate(numeric_feature_descriptions):
+        if feature_description.many_zeros:
+            # Use softplus for non-zero values, setting zeros to 0
+            non_zero_indexes = non_zero_indexes_per_feature[index]
+            numeric_features[:, index] = 0
+            numeric_features[non_zero_indexes, index] = np.log(1 + np.exp(scaled_data[index]))
+        else:
+            numeric_features[:, index] = scaled_data[index]
 
     return [
         np.concatenate([numeric_feature, boolean_feature]) \
         for numeric_feature, boolean_feature in zip(numeric_features, boolean_features) \
     ], scaler  # [n_prompts, n_features]
+
+
+def unscale_prompt_features(
+    prompt_features: list[np.ndarray],
+    scaler: SimpleScaler
+) -> list[np.ndarray]:
+    """
+    Unscale numeric prompt features, leaving boolean features as is.
+    """
+    features_array = np.stack(prompt_features)  # [n_samples, n_features]
+    
+    # Numeric features are the first 27, boolean are the remaining 18
+    numeric_dim = 27
+    numeric_part = features_array[:, :numeric_dim]  # [n_samples, 27]
+    
+    unscaled_numeric = scaler.inverse_transform(numeric_part)  # [n_samples, 27]
+    boolean_part = features_array[:, numeric_dim:]  # [n_samples, 18]
+    
+    unscaled_features = np.concatenate([unscaled_numeric, boolean_part], axis=1)  # [n_samples, 45]
+    
+    return [unscaled_features[i] for i in range(len(prompt_features))]
+
+
+def get_feature_descriptions() -> tuple[list["NumericFeatureDescription"], list["BooleanFeatureDescription"]]:
+    """
+    Get the names of all prompt features, in order of appearance.
+    """
+    return [
+        # Complexity (8)
+        NumericFeatureDescription(name="Character count", logarythmic=True),
+        NumericFeatureDescription(name="Word count", logarythmic=True),
+        NumericFeatureDescription(name="Sentence count", logarythmic=True),
+        NumericFeatureDescription(name="Inverse Type-token ratio", many_zeros=True),
+        NumericFeatureDescription(name="Average word length", logarythmic=True),
+        NumericFeatureDescription(name="Question density", logarythmic=True, many_zeros=True),
+        NumericFeatureDescription(name="Nesting depth", logarythmic=True, many_zeros=True),
+        NumericFeatureDescription(name="Multi-part request density", logarythmic=True, many_zeros=True),
+        # Domain (12)
+        NumericFeatureDescription(name="Science domain score", many_zeros=True, logarythmic=True),
+        NumericFeatureDescription(name="Medicine domain score", many_zeros=True, logarythmic=True),
+        NumericFeatureDescription(name="Law domain score", many_zeros=True, logarythmic=True),
+        NumericFeatureDescription(name="Finance domain score", many_zeros=True, logarythmic=True),
+        NumericFeatureDescription(name="Tech domain score", many_zeros=True, logarythmic=True),
+        NumericFeatureDescription(name="Academic domain score", many_zeros=True, logarythmic=True),
+        NumericFeatureDescription(name="Casual domain score", many_zeros=True, logarythmic=True),
+        NumericFeatureDescription(name="Formal domain score", many_zeros=True, logarythmic=True),
+        NumericFeatureDescription(name="Philosophical domain score", many_zeros=True, logarythmic=True),
+        NumericFeatureDescription(name="Historical domain score", many_zeros=True, logarythmic=True),
+        NumericFeatureDescription(name="Personal domain score", many_zeros=True, logarythmic=True),
+        NumericFeatureDescription(name="Business domain score", many_zeros=True, logarythmic=True),
+        # Style numeric (4)
+        NumericFeatureDescription(name="Informal marker density", logarythmic=True, many_zeros=True),
+        NumericFeatureDescription(name="Specificity density", logarythmic=True, many_zeros=True),
+        NumericFeatureDescription(name="Politeness density", logarythmic=True, many_zeros=True),
+        NumericFeatureDescription(name="Urgency density", logarythmic=True, many_zeros=True),
+        # Context numeric (3)
+        NumericFeatureDescription(name="Conversation turn count", logarythmic=True, many_zeros=True),
+        NumericFeatureDescription(name="Total context length", logarythmic=True, many_zeros=True),
+        NumericFeatureDescription(name="Assistant turn count", logarythmic=True, many_zeros=True),
+    ], \
+    [
+        # Task type (10)
+        BooleanFeatureDescription(name="Has code request"),
+        BooleanFeatureDescription(name="Has code block"),
+        BooleanFeatureDescription(name="Has math"),
+        BooleanFeatureDescription(name="Has numbers"),
+        BooleanFeatureDescription(name="Has math symbols"),
+        BooleanFeatureDescription(name="Has creative writing"),
+        BooleanFeatureDescription(name="Has factual query"),
+        BooleanFeatureDescription(name="Has instruction following"),
+        BooleanFeatureDescription(name="Has roleplay"),
+        BooleanFeatureDescription(name="Has analysis"),
+        # Style boolean (2)
+        BooleanFeatureDescription(name="Starts with verb"),
+        BooleanFeatureDescription(name="Is question"),
+        # Context boolean (1)
+        BooleanFeatureDescription(name="Is follow-up"),
+        # Output format (5)
+        BooleanFeatureDescription(name="Expects list"),
+        BooleanFeatureDescription(name="Expects table"),
+        BooleanFeatureDescription(name="Expects JSON"),
+        BooleanFeatureDescription(name="Expects code"),
+        BooleanFeatureDescription(name="Expects long response"),
+    ]
+
+
+@dataclass
+class NumericFeatureDescription:
+    name: str
+    logarythmic: bool = False
+    many_zeros: bool = False
+
+@dataclass
+class BooleanFeatureDescription:
+    name: str
