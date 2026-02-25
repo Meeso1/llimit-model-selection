@@ -4,6 +4,7 @@ import hashlib
 import numpy as np
 
 from src.data_models.data_models import TrainingData, EvaluationEntry
+from src.data_models.dense_network_types import PreprocessedTrainingData
 from src.data_models.length_prediction.length_prediction_data_models import (
     PreprocessedLengthPredictionSample,
     PreprocessedLengthPredictionTrainingData,
@@ -45,7 +46,7 @@ class LengthPredictionPreprocessor:
             min_model_comparisons=min_model_comparisons,
         )
         
-        self.version = "v2"
+        self.version = "v4"
         self.last_timer: Timer | None = None
 
     def preprocess(
@@ -77,17 +78,10 @@ class LengthPredictionPreprocessor:
             assert len(preprocessed.pairs) == len(filtered_entries)
 
             with Timer("filter_out_empty_responses", verbosity="start+end", parent=timer):
-                non_empty_entries: list[EvaluationEntry] = []
-                non_empty_pairs: list[PreprocessedPromptPair] = []
-                filtered_indexes: list[int] = []
-                for i, entry, preprocessed_pair in zip(preprocessed.filtered_indexes, filtered_entries, preprocessed.pairs):
-                    if len(entry.model_a_response.strip()) > 0 and len(entry.model_b_response.strip()) > 0:
-                        non_empty_entries.append(entry)
-                        non_empty_pairs.append(preprocessed_pair)
-                        filtered_indexes.append(i)
+                preprocessed, filtered_entries = self._filter_out(preprocessed, filtered_entries)
             
             with Timer("compute_response_lengths", verbosity="start+end", parent=timer):
-                response_lengths_a, response_lengths_b = self._compute_response_lengths(non_empty_entries)
+                response_lengths_a, response_lengths_b = self._compute_response_lengths(filtered_entries)
             
             with Timer("log_and_scale_response_lengths", verbosity="start+end", parent=timer):    
                 log_response_lengths_a = np.log(np.array(response_lengths_a))  # [n_pairs]
@@ -108,7 +102,7 @@ class LengthPredictionPreprocessor:
                     log_response_length_a=log_response_lengths_a_scaled[i],
                     log_response_length_b=log_response_lengths_b_scaled[i],
                 )
-                for i, pair in enumerate(non_empty_pairs)
+                for i, pair in enumerate(preprocessed.pairs)
             ]
             
             preprocessed_data = PreprocessedLengthPredictionTrainingData(
@@ -116,7 +110,7 @@ class LengthPredictionPreprocessor:
                 embedding_dim=preprocessed.embedding_dim,
                 prompt_features_dim=preprocessed.prompt_features_dim,
                 model_encoder=preprocessed.model_encoder,
-                filtered_indexes=filtered_indexes,
+                filtered_indexes=preprocessed.filtered_indexes,
                 prompt_features_scaler_state=preprocessed.scaler_state,
                 output_scaler_state=scaler.get_state_dict(),
             )
@@ -180,6 +174,41 @@ class LengthPredictionPreprocessor:
             prompt_embeddings=preprocessed.prompt_embeddings,  # [n_prompts, embedding_dim]
             prompt_features=preprocessed.prompt_features,  # [n_prompts, prompt_features_dim]
         )
+
+    def _filter_out(
+        self,
+        preprocessed_data: PreprocessedTrainingData,
+        entries: list[EvaluationEntry]
+    ) -> tuple[PreprocessedTrainingData, list[EvaluationEntry]]:
+        assert len(preprocessed_data.pairs) == len(entries)
+        
+        response_length_limit = np.percentile(np.array(
+            [len(entry.model_a_response.strip()) for entry in entries] 
+            + [len(entry.model_b_response.strip()) for entry in entries]), 99) * 1.3
+        
+        remaining_entries: list[EvaluationEntry] = []
+        remaining_pairs: list[PreprocessedPromptPair] = []
+        filtered_indexes: list[int] = []
+        for i, entry, preprocessed_pair in zip(preprocessed_data.filtered_indexes, entries, preprocessed_data.pairs):
+            if len(entry.model_a_response.strip()) == 0 or len(entry.model_b_response.strip()) == 0:
+                continue
+            
+            if len(entry.model_a_response.strip()) > response_length_limit or len(entry.model_b_response.strip()) > response_length_limit:
+                continue
+            
+            remaining_entries.append(entry)
+            remaining_pairs.append(preprocessed_pair)
+            filtered_indexes.append(i)
+        
+        filtered_data = PreprocessedTrainingData(
+            pairs=remaining_pairs,
+            embedding_dim=preprocessed_data.embedding_dim,
+            prompt_features_dim=preprocessed_data.prompt_features_dim,
+            model_encoder=preprocessed_data.model_encoder,
+            filtered_indexes=filtered_indexes,
+            scaler_state=preprocessed_data.scaler_state,
+        )
+        return filtered_data, remaining_entries
 
     def _compute_response_lengths(
         self, 
