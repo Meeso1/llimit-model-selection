@@ -305,10 +305,11 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
                             batch_model_embedding,
                         )  # [batch_size]
                         
-                        # Inverse transform using scaler to get back to original scale
+                        # Convert scaled log-lengths to raw lengths
                         batch_predictions_np = batch_predictions.cpu().numpy()  # [batch_size]
-                        batch_predictions_descaled = self.scaler.inverse_transform(batch_predictions_np)  # [batch_size]
-                        model_predictions.append(batch_predictions_descaled)
+                        batch_predictions_log = self.scaler.inverse_transform(batch_predictions_np)  # [batch_size]
+                        batch_predictions_raw = np.exp(batch_predictions_log)  # [batch_size]
+                        model_predictions.append(batch_predictions_raw)
                     
                     predictions_dict[model_name] = np.concatenate(model_predictions) # [n_prompts]
             
@@ -436,13 +437,13 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
             prompt_embeddings_list.append(torch.from_numpy(sample.prompt_embedding))
             prompt_features_list.append(torch.from_numpy(sample.prompt_features))
             model_embeddings_list.append(torch.from_numpy(sample.model_embedding_a))
-            lengths_list.append(sample.response_length_a)
+            lengths_list.append(sample.log_response_length_a)
             
             # Add model B sample
             prompt_embeddings_list.append(torch.from_numpy(sample.prompt_embedding))
             prompt_features_list.append(torch.from_numpy(sample.prompt_features))
             model_embeddings_list.append(torch.from_numpy(sample.model_embedding_b))
-            lengths_list.append(sample.response_length_b)
+            lengths_list.append(sample.log_response_length_b)
         
         prompt_embeddings = torch.stack(prompt_embeddings_list)  # [n_samples, embedding_dim]
         prompt_features = torch.stack(prompt_features_list)  # [n_samples, prompt_features_dim]

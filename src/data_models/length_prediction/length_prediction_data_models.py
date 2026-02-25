@@ -20,8 +20,8 @@ class PreprocessedLengthPredictionSample:
     prompt_features: np.ndarray  # [prompt_features_dim]
     model_id_a: int
     model_id_b: int
-    response_length_a: float  # Scaled response length for model A
-    response_length_b: float  # Scaled response length for model B
+    log_response_length_a: float  # Scaled response length for model A
+    log_response_length_b: float  # Scaled response length for model B
 
 
 @dataclass
@@ -33,8 +33,8 @@ class PreprocessedLengthPredictionSampleWithEmbedding:
     model_embedding_b: np.ndarray  # [model_embedding_dim]
     model_id_a: int
     model_id_b: int
-    response_length_a: float  # Scaled response length for model A
-    response_length_b: float  # Scaled response length for model B
+    log_response_length_a: float  # Scaled response length for model A
+    log_response_length_b: float  # Scaled response length for model B
 
 
 @dataclass
@@ -76,8 +76,8 @@ class PreprocessedLengthPredictionTrainingData:
                     model_embedding_b=model_embeddings[model_name_b],
                     model_id_a=sample.model_id_a,
                     model_id_b=sample.model_id_b,
-                    response_length_a=sample.response_length_a,
-                    response_length_b=sample.response_length_b,
+                    log_response_length_a=sample.log_response_length_a,
+                    log_response_length_b=sample.log_response_length_b,
                 )
             )
         

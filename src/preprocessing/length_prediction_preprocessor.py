@@ -88,12 +88,16 @@ class LengthPredictionPreprocessor:
             
             with Timer("compute_response_lengths", verbosity="start+end", parent=timer):
                 response_lengths_a, response_lengths_b = self._compute_response_lengths(non_empty_entries)
-                
-            # Fit scaler on all lengths and transform
-            scaler = SimpleScaler().fit(np.array(response_lengths_a + response_lengths_b))
             
-            response_lengths_a_scaled = scaler.transform(np.array(response_lengths_a))  # [n_pairs]
-            response_lengths_b_scaled = scaler.transform(np.array(response_lengths_b))  # [n_pairs]
+            with Timer("log_and_scale_response_lengths", verbosity="start+end", parent=timer):    
+                log_response_lengths_a = np.log(np.array(response_lengths_a))  # [n_pairs]
+                log_response_lengths_b = np.log(np.array(response_lengths_b))  # [n_pairs]
+                    
+                # Fit scaler on all lengths and transform
+                scaler = SimpleScaler().fit(np.array(log_response_lengths_a + log_response_lengths_b))
+                
+                log_response_lengths_a_scaled = scaler.transform(np.array(log_response_lengths_a))  # [n_pairs]
+                log_response_lengths_b_scaled = scaler.transform(np.array(log_response_lengths_b))  # [n_pairs]
             
             samples = [
                 PreprocessedLengthPredictionSample(
@@ -101,8 +105,8 @@ class LengthPredictionPreprocessor:
                     prompt_features=pair.prompt_features,
                     model_id_a=pair.model_id_a,
                     model_id_b=pair.model_id_b,
-                    response_length_a=response_lengths_a_scaled[i],
-                    response_length_b=response_lengths_b_scaled[i],
+                    log_response_length_a=log_response_lengths_a_scaled[i],
+                    log_response_length_b=log_response_lengths_b_scaled[i],
                 )
                 for i, pair in enumerate(non_empty_pairs)
             ]

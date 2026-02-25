@@ -319,12 +319,12 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
                 for pred, prompt_idx, model_name in zip(raw_predictions, prompt_indices, model_names_flat):
                     predictions_dict[model_name].append(pred)
                 
-                # Convert to numpy arrays and inverse transform
+                # Convert scaled log-lengths to raw lengths
                 predictions_dict_np: dict[str, np.ndarray] = {}
                 for model, preds in predictions_dict.items():
                     preds_scaled = np.array(preds)  # [n_prompts]
-                    preds_descaled = self.scaler.inverse_transform(preds_scaled)  # [n_prompts]
-                    predictions_dict_np[model] = preds_descaled
+                    preds_log = self.scaler.inverse_transform(preds_scaled)  # [n_prompts]
+                    predictions_dict_np[model] = np.exp(preds_log)  # [n_prompts]
             
             return LengthPredictionOutputData(predictions=predictions_dict_np)
 
@@ -452,7 +452,7 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
                 sample.model_embedding_a
             )
             features_list.append(features_a)
-            lengths_list.append(sample.response_length_a)
+            lengths_list.append(sample.log_response_length_a)
             
             # Create feature vector for model B
             features_b = self._create_features(
@@ -461,7 +461,7 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
                 sample.model_embedding_b
             )
             features_list.append(features_b)
-            lengths_list.append(sample.response_length_b)
+            lengths_list.append(sample.log_response_length_b)
         
         X = np.array(features_list)  # [n_samples, feature_dim]
         y = np.array(lengths_list)  # [n_samples]

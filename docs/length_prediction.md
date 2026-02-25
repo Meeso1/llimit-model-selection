@@ -63,11 +63,12 @@ A neural network model that predicts response lengths using:
 - Predictions are automatically descaled to original token count range
 
 **Training:**
-- Loss function: Mean Squared Error (MSE) on standardized lengths (mean=0, stddev=1)
+- Loss function: Mean Squared Error (MSE) on standardized log-lengths
 - Optimizer: AdamW (configurable)
 - Supports validation splits
-- Uses SimpleScaler for standardization (saved with model)
-- Tracks training/validation loss and custom metrics
+- Uses `_scaler` (fits on raw lengths from preprocessing) for both input and output transforms
+- The network learns to predict `scaler.transform(log(raw_length))`; predictions are converted back to raw token counts via `exp(scaler.inverse_transform(output))`
+- Tracks training/validation loss and custom metrics (metrics are always reported in original token-count space)
 - Integrates with Weights & Biases
 - **Automatically trains embedding model if not initialized**
 
@@ -110,10 +111,12 @@ Supports configurable input features (via `input_features` parameter):
 - Predictions are automatically descaled to original token count range
 
 **Training:**
-- Loss function: Mean Squared Error (RMSE reported)
+- Loss function: Mean Squared Error (RMSE reported) on standardized log-lengths
 - Configurable XGBoost hyperparameters (depth, learning rate, regularization)
 - Supports validation splits
-- Uses SimpleScaler for standardization (saved with model)
+- Uses `_scaler` (fits on raw lengths from preprocessing) for both input and output transforms
+- XGBoost trees learn to predict `scaler.transform(log(raw_length))`; predictions are converted back to raw token counts via `exp(scaler.inverse_transform(output))`
+- Metrics are always reported in original token-count space
 - **Automatically trains embedding model if not initialized**
 - **Implements best model tracking**: Reverts to epoch with highest validation accuracy after training
 
@@ -417,14 +420,18 @@ Currently uses a simple heuristic for token estimation:
 
 ### Length Scaling
 
-Lengths are standardized using `SimpleScaler` (mean=0, stddev=1):
-- **Scaler**: Fits on all lengths during preprocessing
-- **Stored in model**: Scaler state saved with model for inference
-- **Inverse transform**: Automatically applied during prediction to get original scale
-- **Benefits**: 
-  - More stable training with standard normal distribution
-  - Model can extrapolate beyond training range
-  - No artificial bounds on predictions
+Lengths are processed in log-space for training, then converted back to raw token counts for output:
+
+A single `_scaler` (fitted on raw lengths by the preprocessor) is reused for log-space training:
+
+**Training flow**: `raw_length → log(raw_length) → scaler.transform → log_scaled_length` (target)
+
+**Inference flow**: `model_output (log_scaled) → scaler.inverse_transform → log_length → exp → raw_length`
+
+**Benefits of log-space prediction**:
+- Response lengths span several orders of magnitude; log-space reduces the effective scale and makes training more stable
+- MSE in log-space approximates relative (percentage) error, which is more appropriate for lengths
+- Better handling of long-tail distributions (very long or very short responses)
 
 ### Performance Considerations
 

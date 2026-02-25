@@ -5,8 +5,8 @@ from src.preprocessing.simple_scaler import SimpleScaler
 
 
 def compute_length_prediction_metrics(
-    predictions: np.ndarray,  # [n_samples] - scaled
-    actuals: np.ndarray,  # [n_samples] - scaled
+    log_predictions: np.ndarray,  # [n_samples] - scaled(log(raw_length))
+    log_actuals: np.ndarray,  # [n_samples] - scaled(log(raw_length))
     scaler: SimpleScaler,
 ) -> dict[str, float]:
     """
@@ -20,13 +20,16 @@ def compute_length_prediction_metrics(
     - mae: mean absolute error in descaled space
     
     Args:
-        predictions: Predicted lengths (scaled)  # [n_samples]
-        actuals: Actual lengths (scaled)  # [n_samples]
+        log_predictions: Predicted lengths (scaled(log(raw_length)))  # [n_samples]
+        log_actuals: Actual lengths (scaled(log(raw_length)))  # [n_samples]
         scaler: Scaler used for standardization
         
     Returns:
         Dictionary of metrics
     """
+    predictions = np.exp(log_predictions)  # [n_samples]
+    actuals = np.exp(log_actuals)  # [n_samples]
+    
     predictions_descaled = scaler.inverse_transform(predictions)  # [n_samples]
     actuals_descaled = scaler.inverse_transform(actuals)  # [n_samples]
     
