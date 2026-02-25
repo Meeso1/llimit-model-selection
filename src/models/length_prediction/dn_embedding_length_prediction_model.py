@@ -40,6 +40,7 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
     def __init__(
         self,
         hidden_dims: list[int] | None = None,
+        dropout: float = 0.2,
         optimizer_spec: OptimizerSpecification | None = None,
         embedding_model_name: str = "all-MiniLM-L6-v2",
         embedding_spec: EmbeddingSpec | None = None,
@@ -51,11 +52,9 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
         seed: int = 42,
     ) -> None:
         super().__init__(run_name)
-
-        if load_embedding_model_from is None and embedding_spec is None:
-            raise ValueError("Either embedding_spec or load_embedding_model_from must be specified")
         
         self.hidden_dims = hidden_dims if hidden_dims is not None else [256, 128, 64]
+        self.dropout = dropout
         self.optimizer_spec = optimizer_spec if optimizer_spec is not None else AdamWSpec(learning_rate=0.001)
         self.embedding_model_name = embedding_model_name
         self.print_every = print_every
@@ -82,6 +81,7 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
         self._epochs_completed: int = 0
         self._prompt_features_scaler: SimpleScaler | None = None
         self._best_model_tracker = BestModelTracker()
+        self._model_avg_lengths: dict[str, float] = {}
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
@@ -119,6 +119,7 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
             prompt_features_dim=prompt_features_dim,
             model_embedding_dim=self.embedding_model.embedding_dim,
             hidden_dims=self.hidden_dims,
+            dropout=self.dropout,
         ).to(self.device)
 
     def get_config_for_logging(self) -> dict[str, Any]:
@@ -197,9 +198,11 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
                     seed=validation_split.seed if validation_split is not None else 42,
                 )
             
+            self._model_avg_lengths = self._compute_model_avg_lengths(preprocessed_train)
+            
             with Timer("prepare_dataloaders", verbosity="start+end", parent=train_timer):
-                dataloader = self._prepare_dataloader(preprocessed_train, batch_size)
-                val_dataloader = self._prepare_dataloader(preprocessed_val, batch_size) if preprocessed_val is not None else None
+                dataloader = self._prepare_dataloader(preprocessed_train, batch_size, self._model_avg_lengths)
+                val_dataloader = self._prepare_dataloader(preprocessed_val, batch_size, self._model_avg_lengths) if preprocessed_val is not None else None
             
             optimizer, scheduler = self._create_optimizer_and_scheduler()
             
@@ -305,8 +308,9 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
                             batch_model_embedding,
                         )  # [batch_size]
                         
-                        # Convert scaled log-lengths to raw lengths
+                        # Add back per-model average, then convert scaled log-lengths to raw lengths
                         batch_predictions_np = batch_predictions.cpu().numpy()  # [batch_size]
+                        batch_predictions_np = batch_predictions_np + self._model_avg_lengths.get(model_name, 0.0)  # [batch_size]
                         batch_predictions_log = self.scaler.inverse_transform(batch_predictions_np)  # [batch_size]
                         batch_predictions_raw = np.exp(batch_predictions_log)  # [batch_size]
                         model_predictions.append(batch_predictions_raw)
@@ -338,6 +342,7 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
             "optimizer_state": self._optimizer_state,
             "scheduler_state": self._scheduler_state,
             "hidden_dims": self.hidden_dims,
+            "dropout": self.dropout,
             "embedding_model_name": self.embedding_model_name,
             "print_every": self.print_every,
             "preprocessor_version": self.preprocessor.version,
@@ -353,6 +358,7 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
             "embedding_model_epochs": self.embedding_model_epochs,
             "embedding_model_state_dict": self.embedding_model.get_state_dict(),
             "seed": self.seed,
+            "model_avg_lengths": self._model_avg_lengths,
         }
 
     @classmethod
@@ -383,6 +389,7 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
             
             model = cls(
                 hidden_dims=state_dict["hidden_dims"],
+                dropout=state_dict.get("dropout", 0.2),
                 optimizer_spec=optimizer_spec,
                 embedding_model_name=state_dict["embedding_model_name"],
                 embedding_spec=embedding_spec,
@@ -408,13 +415,39 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
         model._optimizer_state = state_dict.get("optimizer_state")
         model._scheduler_state = state_dict.get("scheduler_state")
         model._epochs_completed = state_dict.get("epochs_completed", 0)
+        model._model_avg_lengths = state_dict.get("model_avg_lengths", {})
         
         return model
+
+    def _compute_model_avg_lengths(
+        self,
+        preprocessed_data: PreprocessedLengthPredictionTrainingDataWithEmbeddings,
+    ) -> dict[str, float]:
+        """
+        Compute per-model average scaled log-length from training data.
+
+        The model will learn to predict residuals from these averages, encoding
+        the per-model verbosity baseline separately from the prompt-driven deviation.
+
+        Args:
+            preprocessed_data: Preprocessed training data (training split only)
+
+        Returns:
+            Dict mapping model name to its mean scaled log-length across all training samples
+        """
+        model_lengths: dict[str, list[float]] = {}
+        for sample in preprocessed_data.samples:
+            name_a = preprocessed_data.model_encoder.decode(sample.model_id_a)
+            name_b = preprocessed_data.model_encoder.decode(sample.model_id_b)
+            model_lengths.setdefault(name_a, []).append(sample.log_response_length_a)
+            model_lengths.setdefault(name_b, []).append(sample.log_response_length_b)
+        return {name: float(np.mean(lengths)) for name, lengths in model_lengths.items()}
 
     def _prepare_dataloader(
         self, 
         preprocessed_data: PreprocessedLengthPredictionTrainingDataWithEmbeddings, 
         batch_size: int,
+        model_avg_lengths: dict[str, float],
     ) -> _DataLoaderType:
         """
         Prepare dataloader from preprocessed training data.
@@ -422,6 +455,8 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
         Args:
             preprocessed_data: Preprocessed training data
             batch_size: Batch size
+            model_avg_lengths: Per-model average scaled log-length (training-split averages);
+                               targets are stored as residuals relative to these averages
             
         Returns:
             DataLoader for training/validation
@@ -433,17 +468,22 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
         lengths_list = []  # [n_samples]
         
         for sample in preprocessed_data.samples:
-            # Add model A sample
+            name_a = preprocessed_data.model_encoder.decode(sample.model_id_a)
+            name_b = preprocessed_data.model_encoder.decode(sample.model_id_b)
+            avg_a = model_avg_lengths.get(name_a, 0.0)
+            avg_b = model_avg_lengths.get(name_b, 0.0)
+
+            # Add model A sample (target is residual from per-model average)
             prompt_embeddings_list.append(torch.from_numpy(sample.prompt_embedding))
             prompt_features_list.append(torch.from_numpy(sample.prompt_features))
             model_embeddings_list.append(torch.from_numpy(sample.model_embedding_a))
-            lengths_list.append(sample.log_response_length_a)
+            lengths_list.append(sample.log_response_length_a - avg_a)
             
-            # Add model B sample
+            # Add model B sample (target is residual from per-model average)
             prompt_embeddings_list.append(torch.from_numpy(sample.prompt_embedding))
             prompt_features_list.append(torch.from_numpy(sample.prompt_features))
             model_embeddings_list.append(torch.from_numpy(sample.model_embedding_b))
-            lengths_list.append(sample.log_response_length_b)
+            lengths_list.append(sample.log_response_length_b - avg_b)
         
         prompt_embeddings = torch.stack(prompt_embeddings_list)  # [n_samples, embedding_dim]
         prompt_features = torch.stack(prompt_features_list)  # [n_samples, prompt_features_dim]
@@ -651,6 +691,27 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
         val_metrics: dict[str, float] | None
         duration: float
 
+    class _ResidualBlock(nn.Module):
+        """Dense layer with a linear skip connection (projection shortcut).
+
+        The main path applies Linear → LeakyReLU → Dropout; the shortcut is a
+        bias-free linear projection that matches dimensions.  The two paths are
+        summed so that gradients can flow directly through the shortcut, easing
+        optimisation of deeper networks.
+        """
+
+        def __init__(self, in_dim: int, out_dim: int, dropout: float) -> None:
+            super().__init__()
+            self.main = nn.Sequential(
+                nn.Linear(in_dim, out_dim),
+                nn.LeakyReLU(negative_slope=0.01),
+                nn.Dropout(dropout),
+            )
+            self.shortcut = nn.Linear(in_dim, out_dim, bias=False)
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:  # [batch_size, in_dim] -> [batch_size, out_dim]
+            return self.main(x) + self.shortcut(x)
+
     class _DenseNetwork(nn.Module):
         def __init__(
             self,
@@ -658,21 +719,19 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
             prompt_features_dim: int,
             model_embedding_dim: int,
             hidden_dims: list[int],
+            dropout: float = 0.2,
         ) -> None:
             super().__init__()
             
-            layers = []
+            blocks = []
             prev_dim = prompt_embedding_dim + prompt_features_dim + model_embedding_dim
             
             for hidden_dim in hidden_dims:
-                layers.append(nn.Linear(prev_dim, hidden_dim))
-                layers.append(nn.LeakyReLU(negative_slope=0.01))
-                layers.append(nn.Dropout(0.2))
+                blocks.append(DnEmbeddingLengthPredictionModel._ResidualBlock(prev_dim, hidden_dim, dropout))
                 prev_dim = hidden_dim
             
-            layers.append(nn.Linear(prev_dim, 1))
-            
-            self.dense_network = nn.Sequential(*layers)
+            self.blocks = nn.ModuleList(blocks)
+            self.output_layer = nn.Linear(prev_dim, 1)
 
         def forward(
             self,
@@ -680,7 +739,8 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
             prompt_features: torch.Tensor,  # [batch_size, prompt_features_dim]
             model_embedding: torch.Tensor,  # [batch_size, model_embedding_dim]
         ) -> torch.Tensor:
-            combined = torch.cat([prompt_embedding, prompt_features, model_embedding], dim=1)  # [batch_size, prompt_embedding_dim + prompt_features_dim + model_embedding_dim]
-            output: torch.Tensor = self.dense_network(combined)  # [batch_size, 1]
-            
+            x = torch.cat([prompt_embedding, prompt_features, model_embedding], dim=1)  # [batch_size, total_input_dim]
+            for block in self.blocks:
+                x = block(x)  # [batch_size, hidden_dim]
+            output: torch.Tensor = self.output_layer(x)  # [batch_size, 1]
             return output.squeeze(-1)  # [batch_size]

@@ -57,17 +57,18 @@ A neural network model that predicts response lengths using:
 
 **Architecture:**
 - Concatenates prompt embedding, prompt features, and model embedding
-- Passes through configurable dense layers (default: [256, 128, 64])
-- Uses LeakyReLU activations (negative_slope=0.01) and dropout (0.2)
-- Outputs single scalar (no activation - can predict any value)
+- Passes through configurable residual blocks (default: [256, 128, 64]):
+  - Each block has a **main path** (Linear → LeakyReLU → Dropout) and a **projection shortcut** (bias-free Linear), summed together
+  - Shortcut always projects since dimensions change between blocks, enabling direct gradient flow
+- Final `Linear(last_hidden_dim, 1)` output layer (no activation — unbounded regression)
 - Predictions are automatically descaled to original token count range
 
 **Training:**
-- Loss function: Mean Squared Error (MSE) on standardized log-lengths
+- Loss function: Mean Squared Error (MSE) on standardized log-length **residuals**
 - Optimizer: AdamW (configurable)
 - Supports validation splits
 - Uses `_scaler` (fits on raw lengths from preprocessing) for both input and output transforms
-- The network learns to predict `scaler.transform(log(raw_length))`; predictions are converted back to raw token counts via `exp(scaler.inverse_transform(output))`
+- **Per-model average lengths** (`_model_avg_lengths`) are computed from the training split at the start of training. The network learns to predict `scaler.transform(log(raw_length)) - model_avg`, i.e. the deviation from each model's baseline verbosity. During inference the per-model average is added back before inverse-scaling.
 - Tracks training/validation loss and custom metrics (metrics are always reported in original token-count space)
 - Integrates with Weights & Biases
 - **Automatically trains embedding model if not initialized**
@@ -111,11 +112,11 @@ Supports configurable input features (via `input_features` parameter):
 - Predictions are automatically descaled to original token count range
 
 **Training:**
-- Loss function: Mean Squared Error (RMSE reported) on standardized log-lengths
+- Loss function: Mean Squared Error (RMSE reported) on standardized log-length **residuals**
 - Configurable XGBoost hyperparameters (depth, learning rate, regularization)
 - Supports validation splits
 - Uses `_scaler` (fits on raw lengths from preprocessing) for both input and output transforms
-- XGBoost trees learn to predict `scaler.transform(log(raw_length))`; predictions are converted back to raw token counts via `exp(scaler.inverse_transform(output))`
+- **Per-model average lengths** (`_model_avg_lengths`) are computed from the training split at the start of training. XGBoost trees learn to predict `scaler.transform(log(raw_length)) - model_avg`; predictions are converted back to raw token counts via `model_avg + output → scaler.inverse_transform → exp`.
 - Metrics are always reported in original token-count space
 - **Automatically trains embedding model if not initialized**
 - **Implements best model tracking**: Reverts to epoch with highest validation accuracy after training
@@ -418,19 +419,25 @@ Currently uses a simple heuristic for token estimation:
 - **Accuracy**: Sufficient for relative length prediction
 - **Alternative**: Could be replaced with tiktoken for exact counts if needed
 
-### Length Scaling
+### Length Scaling and Per-Model Baseline
 
-Lengths are processed in log-space for training, then converted back to raw token counts for output:
+Lengths are processed in log-space for training, then converted back to raw token counts for output.
 
-A single `_scaler` (fitted on raw lengths by the preprocessor) is reused for log-space training:
+A single `_scaler` (fitted on raw lengths by the preprocessor) is reused for log-space training.
 
-**Training flow**: `raw_length → log(raw_length) → scaler.transform → log_scaled_length` (target)
+**Per-model average (residual learning):**
 
-**Inference flow**: `model_output (log_scaled) → scaler.inverse_transform → log_length → exp → raw_length`
+Both models compute `_model_avg_lengths` — a dict mapping each model name to its mean scaled log-length across the training split. The network/trees learn to predict the *deviation* from this baseline:
 
-**Benefits of log-space prediction**:
-- Response lengths span several orders of magnitude; log-space reduces the effective scale and makes training more stable
-- MSE in log-space approximates relative (percentage) error, which is more appropriate for lengths
+- **Training flow**: `raw_length → log → scaler.transform → subtract model_avg → residual` (target)
+- **Inference flow**: `model_output (residual) → add model_avg → scaler.inverse_transform → exp → raw_length`
+
+For unseen models at inference time, `model_avg` defaults to `0.0` (global mean in scaled space).
+
+**Benefits:**
+- Separates the easily-captured per-model verbosity level from the harder prompt-driven variance
+- The network only needs to model relative deviations, reducing the effective prediction range
+- Log-space MSE approximates relative (percentage) error, which is more appropriate for lengths
 - Better handling of long-tail distributions (very long or very short responses)
 
 ### Performance Considerations

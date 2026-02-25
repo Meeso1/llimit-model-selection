@@ -26,12 +26,12 @@ def compute_length_prediction_metrics(
         
     Returns:
         Dictionary of metrics
-    """
-    predictions = np.exp(log_predictions)  # [n_samples]
-    actuals = np.exp(log_actuals)  # [n_samples]
+    """    
+    log_predictions_descaled = scaler.inverse_transform(log_predictions)  # [n_samples]
+    log_actuals_descaled = scaler.inverse_transform(log_actuals)  # [n_samples]
     
-    predictions_descaled = scaler.inverse_transform(predictions)  # [n_samples]
-    actuals_descaled = scaler.inverse_transform(actuals)  # [n_samples]
+    predictions_descaled = np.exp(log_predictions_descaled)  # [n_samples]
+    actuals_descaled = np.exp(log_actuals_descaled)  # [n_samples]
     
     # Avoid division by zero
     actuals_nonzero = np.where(actuals_descaled == 0, 1e-6, actuals_descaled)
@@ -49,13 +49,13 @@ def compute_length_prediction_metrics(
     stddev_ratio = float(pred_std / actual_std) if actual_std > 0 else 1.0
     
     # RMSE in scaled space
-    rmse = float(np.sqrt(np.mean((predictions - actuals) ** 2)))
+    rmse = float(np.sqrt(np.mean((log_predictions - log_actuals) ** 2)))
     
     # Mean absolute error in descaled space
     mae = float(np.mean(np.abs(predictions_descaled - actuals_descaled)))
     
     # Synthetic accuracy metric - 1 if avg_relative_error is 0, 0.5 if avg_relative_error is 1, halves every time avg_relative_error increases by 1
-    accuracy = 1 / 2**avg_relative_error
+    accuracy = 1 / 2**np.minimum(avg_relative_error, 10)
     
     return {
         "accuracy": accuracy,

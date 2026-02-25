@@ -51,9 +51,6 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
     ) -> None:
         super().__init__(run_name)
 
-        if load_embedding_model_from is None and embedding_spec is None:
-            raise ValueError("Either embedding_spec or load_embedding_model_from must be specified")
-        
         if len(input_features) == 0:
             raise ValueError("input_features must contain at least one feature type")
         
@@ -89,6 +86,7 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
         self._history_entries: list[TrainingHistoryEntry] = []
         self._xgb_model: xgb.Booster | None = None
         self._best_model_tracker = BestModelTracker()
+        self._model_avg_lengths: dict[str, float] = {}
         
         self.last_timer: Timer | None = None
 
@@ -201,9 +199,11 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
                     seed=validation_split.seed if validation_split is not None else 42,
                 )
             
+            self._model_avg_lengths = self._compute_model_avg_lengths(preprocessed_train)
+            
             with Timer("prepare_xgboost_data", verbosity="start+end", parent=train_timer):
-                dtrain = self._prepare_xgboost_data(preprocessed_train)
-                dval = self._prepare_xgboost_data(preprocessed_val) if preprocessed_val is not None else None
+                dtrain = self._prepare_xgboost_data(preprocessed_train, self._model_avg_lengths)
+                dval = self._prepare_xgboost_data(preprocessed_val, self._model_avg_lengths) if preprocessed_val is not None else None
             
             params = {
                 'max_depth': self.max_depth,
@@ -319,10 +319,10 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
                 for pred, prompt_idx, model_name in zip(raw_predictions, prompt_indices, model_names_flat):
                     predictions_dict[model_name].append(pred)
                 
-                # Convert scaled log-lengths to raw lengths
+                # Add back per-model average, then convert scaled log-lengths to raw lengths
                 predictions_dict_np: dict[str, np.ndarray] = {}
                 for model, preds in predictions_dict.items():
-                    preds_scaled = np.array(preds)  # [n_prompts]
+                    preds_scaled = np.array(preds) + self._model_avg_lengths.get(model, 0.0)  # [n_prompts]
                     preds_log = self.scaler.inverse_transform(preds_scaled)  # [n_prompts]
                     predictions_dict_np[model] = np.exp(preds_log)  # [n_prompts]
             
@@ -364,6 +364,7 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
             "embedding_model_epochs": self.embedding_model_epochs,
             "embedding_model_state_dict": self.embedding_model.get_state_dict(),
             "seed": self.seed,
+            "model_avg_lengths": self._model_avg_lengths,
             # XGBoost hyperparameters
             "max_depth": self.max_depth,
             "learning_rate": self.learning_rate,
@@ -393,7 +394,7 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
         else:
             # Parse embedding spec using Pydantic TypeAdapter
             embedding_spec_adapter = TypeAdapter(EmbeddingSpec)
-            embedding_spec = embedding_spec_adapter.validate_python(state_dict["embedding_spec"])
+            embedding_spec = embedding_spec_adapter.validate_python(state_dict["embedding_spec"]) if state_dict["embedding_spec"] is not None else None
             
             model = cls(
                 embedding_model_name=state_dict["embedding_model_name"],
@@ -425,18 +426,46 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
         
         # Load XGBoost model from bytes
         model._xgb_model = model._deserialize_xgb_model(state_dict["xgb_model_bytes"])
+        model._model_avg_lengths = state_dict.get("model_avg_lengths", {})
         
         return model
 
+    def _compute_model_avg_lengths(
+        self,
+        preprocessed_data: PreprocessedLengthPredictionTrainingDataWithEmbeddings,
+    ) -> dict[str, float]:
+        """
+        Compute per-model average scaled log-length from training data.
+
+        The model will learn to predict residuals from these averages, encoding
+        the per-model verbosity baseline separately from the prompt-driven deviation.
+
+        Args:
+            preprocessed_data: Preprocessed training data (training split only)
+
+        Returns:
+            Dict mapping model name to its mean scaled log-length across all training samples
+        """
+        model_lengths: dict[str, list[float]] = {}
+        for sample in preprocessed_data.samples:
+            name_a = preprocessed_data.model_encoder.decode(sample.model_id_a)
+            name_b = preprocessed_data.model_encoder.decode(sample.model_id_b)
+            model_lengths.setdefault(name_a, []).append(sample.log_response_length_a)
+            model_lengths.setdefault(name_b, []).append(sample.log_response_length_b)
+        return {name: float(np.mean(lengths)) for name, lengths in model_lengths.items()}
+
     def _prepare_xgboost_data(
         self, 
-        preprocessed_data: PreprocessedLengthPredictionTrainingDataWithEmbeddings, 
+        preprocessed_data: PreprocessedLengthPredictionTrainingDataWithEmbeddings,
+        model_avg_lengths: dict[str, float],
     ) -> xgb.DMatrix:
         """
         Prepare data for XGBoost training.
         
         Args:
             preprocessed_data: Preprocessed training data
+            model_avg_lengths: Per-model average scaled log-length (training-split averages);
+                               labels are stored as residuals relative to these averages
             
         Returns:
             DMatrix with features [n_samples, feature_dim] and labels [n_samples]
@@ -445,23 +474,28 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
         lengths_list = []  # [n_samples]
         
         for sample in preprocessed_data.samples:
-            # Create feature vector for model A
+            name_a = preprocessed_data.model_encoder.decode(sample.model_id_a)
+            name_b = preprocessed_data.model_encoder.decode(sample.model_id_b)
+            avg_a = model_avg_lengths.get(name_a, 0.0)
+            avg_b = model_avg_lengths.get(name_b, 0.0)
+
+            # Create feature vector for model A (label is residual from per-model average)
             features_a = self._create_features(
                 sample.prompt_embedding, 
                 sample.prompt_features, 
                 sample.model_embedding_a
             )
             features_list.append(features_a)
-            lengths_list.append(sample.log_response_length_a)
+            lengths_list.append(sample.log_response_length_a - avg_a)
             
-            # Create feature vector for model B
+            # Create feature vector for model B (label is residual from per-model average)
             features_b = self._create_features(
                 sample.prompt_embedding, 
                 sample.prompt_features, 
                 sample.model_embedding_b
             )
             features_list.append(features_b)
-            lengths_list.append(sample.log_response_length_b)
+            lengths_list.append(sample.log_response_length_b - avg_b)
         
         X = np.array(features_list)  # [n_samples, feature_dim]
         y = np.array(lengths_list)  # [n_samples]

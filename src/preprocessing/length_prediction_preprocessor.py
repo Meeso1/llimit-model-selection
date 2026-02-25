@@ -45,7 +45,7 @@ class LengthPredictionPreprocessor:
             min_model_comparisons=min_model_comparisons,
         )
         
-        self.version = "v1"
+        self.version = "v2"
         self.last_timer: Timer | None = None
 
     def preprocess(
