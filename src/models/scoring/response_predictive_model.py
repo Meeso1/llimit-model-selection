@@ -1,7 +1,7 @@
 """Response predictive model for prompt routing."""
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 import numpy as np
 import torch
 import torch.nn as nn
@@ -63,6 +63,7 @@ class ResponsePredictiveModel(ScoringModelBase):
         prediction_loss_weight: float = 1.0,
         predictability_loss_weight: float = 0.2,
         repr_kl_loss_weight: float = 0.01,
+        prediction_loss_type: Literal["mse", "cosine", "huber"] = "mse",
         # Architecture
         predictor_hidden_dims: list[int] | None = None,
         scorer_hidden_dims: list[int] | None = None,
@@ -94,6 +95,7 @@ class ResponsePredictiveModel(ScoringModelBase):
         self.prediction_loss_weight = prediction_loss_weight
         self.predictability_loss_weight = predictability_loss_weight
         self.repr_kl_loss_weight = repr_kl_loss_weight
+        self.prediction_loss_type = prediction_loss_type
         self.predictor_hidden_dims = predictor_hidden_dims if predictor_hidden_dims is not None else [512, 256]
         self.scorer_hidden_dims = scorer_hidden_dims if scorer_hidden_dims is not None else [256, 128]
         self.dropout = dropout
@@ -184,6 +186,7 @@ class ResponsePredictiveModel(ScoringModelBase):
             "prediction_loss_weight": self.prediction_loss_weight,
             "predictability_loss_weight": self.predictability_loss_weight,
             "repr_kl_loss_weight": self.repr_kl_loss_weight,
+            "prediction_loss_type": self.prediction_loss_type,
             "predictor_hidden_dims": self.predictor_hidden_dims,
             "scorer_hidden_dims": self.scorer_hidden_dims,
             "dropout": self.dropout,
@@ -268,10 +271,6 @@ class ResponsePredictiveModel(ScoringModelBase):
 
             optimizer, scheduler = self._create_optimizer_and_scheduler()
 
-            # Loss functions
-            criterion_ranking = nn.MarginRankingLoss(margin=0.1)
-            criterion_prediction = nn.CosineEmbeddingLoss(margin=0.0)
-
             with Timer("epochs", verbosity="start+end", parent=train_timer) as epochs_timer:
                 for epoch in range(self._epochs_completed + 1, self._epochs_completed + epochs + 1):
                     result = self._train_epoch(
@@ -279,8 +278,6 @@ class ResponsePredictiveModel(ScoringModelBase):
                         dataloader,
                         val_dataloader,
                         optimizer,
-                        criterion_ranking,
-                        criterion_prediction,
                         epochs_timer,
                     )
 
@@ -403,6 +400,7 @@ class ResponsePredictiveModel(ScoringModelBase):
             "prediction_loss_weight": self.prediction_loss_weight,
             "predictability_loss_weight": self.predictability_loss_weight,
             "repr_kl_loss_weight": self.repr_kl_loss_weight,
+            "prediction_loss_type": self.prediction_loss_type,
             "predictor_hidden_dims": self.predictor_hidden_dims,
             "scorer_hidden_dims": self.scorer_hidden_dims,
             "dropout": self.dropout,
@@ -464,6 +462,7 @@ class ResponsePredictiveModel(ScoringModelBase):
                 prediction_loss_weight=state_dict["prediction_loss_weight"],
                 predictability_loss_weight=state_dict.get("predictability_loss_weight", 0.0),
                 repr_kl_loss_weight=state_dict.get("repr_kl_loss_weight", 0.0),
+                prediction_loss_type=state_dict.get("prediction_loss_type", "cosine"),
                 predictor_hidden_dims=state_dict["predictor_hidden_dims"],
                 scorer_hidden_dims=state_dict["scorer_hidden_dims"],
                 dropout=state_dict["dropout"],
@@ -624,8 +623,6 @@ class ResponsePredictiveModel(ScoringModelBase):
         dataloader: _DataLoaderType,
         val_dataloader: _DataLoaderType | None,
         optimizer: optim.Optimizer,
-        criterion_ranking: nn.Module,
-        criterion_prediction: nn.Module,
         epochs_timer: Timer,
     ) -> "ResponsePredictiveModel.EpochResult":
         """Train for one epoch."""
@@ -704,15 +701,14 @@ class ResponsePredictiveModel(ScoringModelBase):
                 )  # [batch, response_repr_dim]
 
                 # 3. Prediction loss: train predictor to match encoder (encoder treated as fixed target)
-                target_ones = torch.ones(batch_size, device=self.device)  # [batch]
-                pred_loss_a: torch.Tensor = criterion_prediction(pred_repr_a, real_repr_a.detach(), target_ones)
-                pred_loss_b: torch.Tensor = criterion_prediction(pred_repr_b, real_repr_b.detach(), target_ones)
+                pred_loss_a: torch.Tensor = self._compute_prediction_loss(pred_repr_a, real_repr_a.detach())
+                pred_loss_b: torch.Tensor = self._compute_prediction_loss(pred_repr_b, real_repr_b.detach())
                 pred_loss = pred_loss_a + pred_loss_b
 
                 # 4. Predictability loss: encourage encoder to produce predictable representations (predictor treated as fixed reference)
                 # When predictability_loss_weight=0, encoder gets no gradient from the predictor at all.
-                predictability_loss_a: torch.Tensor = criterion_prediction(pred_repr_a.detach(), real_repr_a, target_ones)
-                predictability_loss_b: torch.Tensor = criterion_prediction(pred_repr_b.detach(), real_repr_b, target_ones)
+                predictability_loss_a: torch.Tensor = self._compute_prediction_loss(pred_repr_a.detach(), real_repr_a)
+                predictability_loss_b: torch.Tensor = self._compute_prediction_loss(pred_repr_b.detach(), real_repr_b)
                 predictability_loss = predictability_loss_a + predictability_loss_b
 
                 # 4b. KL-style loss to prevent representation collapse
@@ -735,7 +731,7 @@ class ResponsePredictiveModel(ScoringModelBase):
                     batch_prompt_feat_b,
                     repr_b,
                 )  # [batch]
-                scoring_loss: torch.Tensor = criterion_ranking(score_a, score_b, batch_labels)
+                scoring_loss: torch.Tensor = F.margin_ranking_loss(score_a, score_b, batch_labels, margin=0.1)
 
                 # 7. Total loss
                 total_batch_loss = (
@@ -785,8 +781,6 @@ class ResponsePredictiveModel(ScoringModelBase):
             with Timer("perform_validation", verbosity="start+end", parent=timer):
                 val_metrics = self._perform_validation(
                     val_dataloader,
-                    criterion_ranking,
-                    criterion_prediction,
                     current_ratio,
                     epoch,
                     timer,
@@ -838,8 +832,6 @@ class ResponsePredictiveModel(ScoringModelBase):
     def _perform_validation(
         self,
         val_dataloader: _DataLoaderType,
-        criterion_ranking: nn.Module,
-        criterion_prediction: nn.Module,
         current_ratio: float,
         epoch: int,
         timer: Timer,
@@ -912,14 +904,13 @@ class ResponsePredictiveModel(ScoringModelBase):
                 )  # [batch, response_repr_dim]
 
                 # Prediction loss (predictor toward encoder)
-                target_ones = torch.ones(batch_size, device=self.device)  # [batch]
-                pred_loss_a = criterion_prediction(pred_repr_a, real_repr_a, target_ones)
-                pred_loss_b = criterion_prediction(pred_repr_b, real_repr_b, target_ones)
+                pred_loss_a = self._compute_prediction_loss(pred_repr_a, real_repr_a)
+                pred_loss_b = self._compute_prediction_loss(pred_repr_b, real_repr_b)
                 pred_loss = pred_loss_a + pred_loss_b
 
                 # Predictability loss (encoder toward predictor)
-                predictability_loss_a = criterion_prediction(pred_repr_a, real_repr_a, target_ones)
-                predictability_loss_b = criterion_prediction(pred_repr_b, real_repr_b, target_ones)
+                predictability_loss_a = self._compute_prediction_loss(pred_repr_a, real_repr_a)
+                predictability_loss_b = self._compute_prediction_loss(pred_repr_b, real_repr_b)
                 predictability_loss = predictability_loss_a + predictability_loss_b
 
                 # KL-style loss
@@ -942,7 +933,7 @@ class ResponsePredictiveModel(ScoringModelBase):
                     batch_prompt_feat_b,
                     repr_b,
                 )  # [batch]
-                scoring_loss = criterion_ranking(score_a, score_b, batch_labels)
+                scoring_loss = F.margin_ranking_loss(score_a, score_b, batch_labels, margin=0.1)
 
                 # Total loss
                 batch_loss = (
@@ -980,6 +971,22 @@ class ResponsePredictiveModel(ScoringModelBase):
             "predictability_loss": total_predictability_loss / n_batches,
             "repr_kl_loss": total_repr_kl_loss / n_batches,
         }
+
+    def _compute_prediction_loss(
+        self,
+        pred: torch.Tensor,  # [batch, response_repr_dim]
+        target: torch.Tensor,  # [batch, response_repr_dim]
+    ) -> torch.Tensor:
+        """Compute prediction loss between pred and target representations."""
+        if self.prediction_loss_type == "mse":
+            return F.mse_loss(pred, target)
+        elif self.prediction_loss_type == "cosine":
+            ones = torch.ones(len(pred), device=pred.device)  # [batch]
+            return F.cosine_embedding_loss(pred, target, ones, margin=0.0)
+        elif self.prediction_loss_type == "huber":
+            return F.smooth_l1_loss(pred, target)
+        else:
+            raise ValueError(f"Unknown prediction_loss_type: {self.prediction_loss_type!r}")
 
     @staticmethod
     def _compute_repr_kl_loss(reprs: torch.Tensor) -> torch.Tensor:

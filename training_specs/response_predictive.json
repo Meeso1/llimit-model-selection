@@ -15,6 +15,9 @@
         256
       ],
       "prediction_loss_weight": 1.0,
+      "predictability_loss_weight": 0.2,
+      "repr_kl_loss_weight": 0.01,
+      "prediction_loss_type": "mse",
       "predictor_hidden_dims": [
         512,
         256
@@ -26,6 +29,7 @@
       "dropout": 0.2,
       "real_repr_ratio": 0.8,
       "real_repr_decay_per_epoch": 0.04,
+      "min_real_repr_ratio": 0.1,
       "optimizer": {
         "optimizer_type": "adamw",
         "learning_rate": 0.001,

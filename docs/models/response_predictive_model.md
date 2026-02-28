@@ -101,6 +101,7 @@ Where:
 - `prediction_loss`: Trains the **predictor** to match the encoder's output — encoder is treated as a fixed target (its output is detached)
 - `predictability_loss`: Trains the **encoder** to produce representations the predictor can currently match — predictor output is detached
 - `repr_kl_loss`: KL divergence of the batch representation distribution from N(0, 1), applied to encoder outputs only — prevents representation collapse
+- Both `prediction_loss` and `predictability_loss` use the same `prediction_loss_type` function (MSE, cosine, or Huber). MSE is the natural pairing with the KL regularisation since the KL loss normalises the representation space, making all dimensions roughly equally scaled and MSE gradients well-balanced.
 - `alpha`: `prediction_loss_weight` hyperparameter (default: 1.0)
 - `beta`: `predictability_loss_weight` hyperparameter (default: 0.2)
 - `gamma`: `repr_kl_loss_weight` hyperparameter (default: 0.01)
@@ -289,6 +290,7 @@ The response representation must be both predictable and informative. These goal
 | `prediction_loss_weight` | 1.0 | 0.1-2.0 | Weight for predictor→encoder loss (alpha); trains predictor |
 | `predictability_loss_weight` | 0.2 | 0.0-1.0 | Weight for encoder→predictor nudge (beta); 0 = encoder shaped only by scoring |
 | `repr_kl_loss_weight` | 0.01 | 0.0-0.1 | Weight for KL divergence loss preventing representation collapse (gamma) |
+| `prediction_loss_type` | `"mse"` | `"mse"`, `"cosine"`, `"huber"` | Loss function for prediction/predictability terms. MSE matches direction and magnitude (recommended with KL). Cosine is direction-only. Huber (SmoothL1) is MSE near zero, L1 for large errors. |
 | `encoder_hidden_dims` | [256] | [128]-[256, 128] | Encoder capacity |
 | `predictor_hidden_dims` | [512, 256] | [256, 128]-[512, 384, 256] | Larger for harder prediction |
 | `scorer_hidden_dims` | [256, 128] | [128, 64]-[256, 128] | Similar to existing scoring heads |
@@ -411,6 +413,7 @@ Example spec:
       "min_real_repr_ratio": 0.1,
       "predictability_loss_weight": 0.2,
       "repr_kl_loss_weight": 0.01,
+      "prediction_loss_type": "mse",
       "optimizer": {
         "optimizer_type": "adamw",
         "learning_rate": 0.001,
