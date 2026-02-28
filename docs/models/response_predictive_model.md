@@ -93,15 +93,17 @@ layers:
 All three components (ResponseEncoder, ResponsePredictor, ResponseScorer) train simultaneously with three loss functions:
 
 ```
-total_loss = scoring_loss + alpha * prediction_loss + beta * predictability_loss
+total_loss = scoring_loss + alpha * prediction_loss + beta * predictability_loss + gamma * repr_kl_loss
 ```
 
 Where:
 - `scoring_loss`: Margin ranking loss on pairwise model comparisons
 - `prediction_loss`: Trains the **predictor** to match the encoder's output — encoder is treated as a fixed target (its output is detached)
 - `predictability_loss`: Trains the **encoder** to produce representations the predictor can currently match — predictor output is detached
+- `repr_kl_loss`: KL divergence of the batch representation distribution from N(0, 1), applied to encoder outputs only — prevents representation collapse
 - `alpha`: `prediction_loss_weight` hyperparameter (default: 1.0)
 - `beta`: `predictability_loss_weight` hyperparameter (default: 0.2)
+- `gamma`: `repr_kl_loss_weight` hyperparameter (default: 0.01)
 
 **Why two separate losses instead of one?** A single symmetric cosine loss `cosine(pred_repr, real_repr)` creates a bidirectional gradient coupling that causes representation collapse: the encoder learns to ignore response content and simply match whatever the predictor produces, since that minimises the loss even without meaningful representations. By splitting into two asymmetric losses with stop-gradients, each component is trained by clearly separated signals:
 
@@ -162,8 +164,14 @@ score_a = network.forward_score(prompt_emb, prompt_features, repr_a)
 score_b = network.forward_score(prompt_emb, prompt_features, repr_b)
 scoring_loss = margin_ranking_loss(score_a, score_b, labels)
 
-# 7. Total loss and backprop
-total_loss = scoring_loss + alpha * pred_loss + beta * predictability_loss
+# 7. KL-style loss to prevent representation collapse
+all_real_reprs = torch.cat([real_repr_a, real_repr_b], dim=0)  # [2*batch, d]
+mu = all_real_reprs.mean(dim=0)   # [d]
+var = all_real_reprs.var(dim=0)   # [d]
+repr_kl_loss = 0.5 * (var + mu**2 - 1 - log(var)).mean()
+
+# 8. Total loss and backprop
+total_loss = scoring_loss + alpha * pred_loss + beta * predictability_loss + gamma * repr_kl_loss
 total_loss.backward()
 optimizer.step()
 ```
@@ -221,6 +229,7 @@ All numeric features are normalized using `SimpleScaler` (separate scalers for p
 | `scoring_loss` | [0, ∞) | MarginRankingLoss component |
 | `prediction_loss` | [0, ∞) | CosineEmbeddingLoss for predictor (encoder detached) |
 | `predictability_loss` | [0, ∞) | CosineEmbeddingLoss for encoder predictability (predictor detached) |
+| `repr_kl_loss` | [0, ∞) | KL(N(μ_batch, σ²_batch) ∥ N(0,1)) over encoder outputs; 0 = perfect N(0,1) distribution |
 | `prediction_quality` | [0, 1] | Mean cosine similarity between predicted and real representations, rescaled: `(1 + cos_sim) / 2`. 0.5 = random, 1.0 = perfect |
 | `scorer_real_repr_accuracy` | [0, 1] | Accuracy when using **real** representations (scorer performance in isolation) |
 | `repr_mean_variance` | [0, ∞) | Mean per-dimension variance of encoder outputs (monitors collapse, should stay > 0.01) |
@@ -233,7 +242,8 @@ All numeric features are normalized using `SimpleScaler` (separate scalers for p
 1. **`prediction_quality` should increase** over epochs. If it stays near 0.5, the ResponsePredictor isn't learning.
 2. **`scorer_real_repr_accuracy` > `train_accuracy`**: If the scorer can't score well even with real representations, the ResponseEncoder isn't producing useful representations.
 3. **Gap between `scorer_real_repr_accuracy` and `train_accuracy`**: Represents the "prediction quality tax" — accuracy lost due to imperfect response prediction.
-4. **`repr_mean_variance` should stay > 0.01**: If it drops toward 0, representation collapse is occurring.
+4. **`repr_mean_variance` should stay > 0.01**: If it drops toward 0, representation collapse is occurring. The `repr_kl_loss` provides an active gradient against this.
+4a. **`repr_kl_loss` as a collapse signal**: A sharply rising `repr_kl_loss` during early epochs indicates the model is briefly collapsing before recovering. The KL weight should be sufficient to keep this from happening.
 5. **Smooth transition**: As `current_real_repr_ratio` decreases, verify `train_accuracy` doesn't drop suddenly.
 
 ## Why This Could Work
@@ -278,6 +288,7 @@ The response representation must be both predictable and informative. These goal
 | `response_repr_dim` | 128 | 32-256 | Lower = easier to predict, higher = more expressive |
 | `prediction_loss_weight` | 1.0 | 0.1-2.0 | Weight for predictor→encoder loss (alpha); trains predictor |
 | `predictability_loss_weight` | 0.2 | 0.0-1.0 | Weight for encoder→predictor nudge (beta); 0 = encoder shaped only by scoring |
+| `repr_kl_loss_weight` | 0.01 | 0.0-0.1 | Weight for KL divergence loss preventing representation collapse (gamma) |
 | `encoder_hidden_dims` | [256] | [128]-[256, 128] | Encoder capacity |
 | `predictor_hidden_dims` | [512, 256] | [256, 128]-[512, 384, 256] | Larger for harder prediction |
 | `scorer_hidden_dims` | [256, 128] | [128, 64]-[256, 128] | Similar to existing scoring heads |
@@ -399,6 +410,7 @@ Example spec:
       "real_repr_decay_per_epoch": 0.04,
       "min_real_repr_ratio": 0.1,
       "predictability_loss_weight": 0.2,
+      "repr_kl_loss_weight": 0.01,
       "optimizer": {
         "optimizer_type": "adamw",
         "learning_rate": 0.001,
@@ -483,7 +495,7 @@ If the full model doesn't outperform baselines, the ResponseScorer alone (traine
 |------|-----------|--------|------------|
 | Response prediction too noisy | High | High | Lower `response_repr_dim`, monitor `prediction_quality` |
 | Distribution shift (predicted vs real) | Medium | High | Mixed-representation training with linear decay |
-| Representation collapse | Medium | High | Monitor `repr_mean_variance`, scoring loss provides natural pressure |
+| Representation collapse | Medium | High | `repr_kl_loss` provides active gradient against collapse; monitor `repr_mean_variance` and `repr_kl_loss` |
 | Prediction loss dominates | Medium | Medium | Tune `prediction_loss_weight`, monitor both loss components |
 | Overfitting (more parameters) | Medium | Low | Dropout, validation monitoring |
 
@@ -495,7 +507,7 @@ These are **not** currently implemented but listed for reference:
 2. **Attention-based ResponsePredictor**: Use cross-attention between prompt tokens and model embedding
 3. **Auxiliary losses**: Add objectives like predicting response length or style features
 4. **Base model support**: Learn incremental improvements over a base scoring model
-5. **KL regularization**: Regularize the response representation space (if collapse becomes an issue)
+5. ~~**KL regularization**~~: Implemented via `repr_kl_loss_weight`
 
 ## Related Documentation
 
