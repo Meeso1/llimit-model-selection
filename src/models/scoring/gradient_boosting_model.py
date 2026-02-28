@@ -160,9 +160,6 @@ class GradientBoostingModel(ScoringModelBase):
     ) -> None:
         super().__init__(run_name)
 
-        if load_embedding_model_from is None and embedding_spec is None:
-            raise ValueError("Either embedding_spec or load_embedding_model_from must be specified")
-        
         if len(input_features) == 0:
             raise ValueError("input_features must contain at least one feature type")
         

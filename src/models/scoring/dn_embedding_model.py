@@ -50,9 +50,6 @@ class DnEmbeddingModel(ScoringModelBase):
     ) -> None:
         super().__init__(run_name)
 
-        if load_embedding_model_from is None and embedding_spec is None:
-            raise ValueError("Either embedding_spec or load_embedding_model_from must be specified")
-        
         self.hidden_dims = hidden_dims if hidden_dims is not None else [256, 128, 64]
         self.optimizer_spec = optimizer_spec if optimizer_spec is not None else AdamWSpec(learning_rate=0.001)
         self.balance_model_samples = balance_model_samples

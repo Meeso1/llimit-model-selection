@@ -86,9 +86,6 @@ class ResponsePredictiveModel(ScoringModelBase):
     ) -> None:
         super().__init__(run_name)
 
-        if load_embedding_model_from is None and embedding_spec is None:
-            raise ValueError("Either embedding_spec or load_embedding_model_from must be specified")
-
         self.response_repr_dim = response_repr_dim
         self.encoder_hidden_dims = encoder_hidden_dims if encoder_hidden_dims is not None else [256]
         self.prediction_loss_weight = prediction_loss_weight
