@@ -61,6 +61,7 @@ class ResponsePredictiveModel(ScoringModelBase):
         response_repr_dim: int = 128,
         encoder_hidden_dims: list[int] | None = None,
         prediction_loss_weight: float = 1.0,
+        predictability_loss_weight: float = 0.2,
         # Architecture
         predictor_hidden_dims: list[int] | None = None,
         scorer_hidden_dims: list[int] | None = None,
@@ -68,6 +69,7 @@ class ResponsePredictiveModel(ScoringModelBase):
         # Mixed representation training
         real_repr_ratio: float = 0.8,
         real_repr_decay_per_epoch: float = 0.04,
+        min_real_repr_ratio: float = 0.1,
         # Embedding model (for model embeddings)
         embedding_model_name: str = "all-MiniLM-L6-v2",
         embedding_spec: EmbeddingSpec | None = None,
@@ -89,11 +91,13 @@ class ResponsePredictiveModel(ScoringModelBase):
         self.response_repr_dim = response_repr_dim
         self.encoder_hidden_dims = encoder_hidden_dims if encoder_hidden_dims is not None else [256]
         self.prediction_loss_weight = prediction_loss_weight
+        self.predictability_loss_weight = predictability_loss_weight
         self.predictor_hidden_dims = predictor_hidden_dims if predictor_hidden_dims is not None else [512, 256]
         self.scorer_hidden_dims = scorer_hidden_dims if scorer_hidden_dims is not None else [256, 128]
         self.dropout = dropout
         self.real_repr_ratio = real_repr_ratio
         self.real_repr_decay_per_epoch = real_repr_decay_per_epoch
+        self.min_real_repr_ratio = min_real_repr_ratio
         self.optimizer_spec = optimizer_spec if optimizer_spec is not None else AdamWSpec(learning_rate=0.001)
         self.balance_model_samples = balance_model_samples
         self.embedding_model_name = embedding_model_name
@@ -176,11 +180,13 @@ class ResponsePredictiveModel(ScoringModelBase):
             "response_repr_dim": self.response_repr_dim,
             "encoder_hidden_dims": self.encoder_hidden_dims,
             "prediction_loss_weight": self.prediction_loss_weight,
+            "predictability_loss_weight": self.predictability_loss_weight,
             "predictor_hidden_dims": self.predictor_hidden_dims,
             "scorer_hidden_dims": self.scorer_hidden_dims,
             "dropout": self.dropout,
             "real_repr_ratio": self.real_repr_ratio,
             "real_repr_decay_per_epoch": self.real_repr_decay_per_epoch,
+            "min_real_repr_ratio": self.min_real_repr_ratio,
             "optimizer_type": self.optimizer_spec.optimizer_type,
             "optimizer_params": self.optimizer_spec.to_dict(),
             "balance_model_samples": self.balance_model_samples,
@@ -192,7 +198,6 @@ class ResponsePredictiveModel(ScoringModelBase):
             "embedding_model_epochs": self.embedding_model_epochs,
         }
 
-    # TODO: Track best state
     def train(
         self,
         data: TrainingData,
@@ -393,11 +398,13 @@ class ResponsePredictiveModel(ScoringModelBase):
             "response_repr_dim": self.response_repr_dim,
             "encoder_hidden_dims": self.encoder_hidden_dims,
             "prediction_loss_weight": self.prediction_loss_weight,
+            "predictability_loss_weight": self.predictability_loss_weight,
             "predictor_hidden_dims": self.predictor_hidden_dims,
             "scorer_hidden_dims": self.scorer_hidden_dims,
             "dropout": self.dropout,
             "real_repr_ratio": self.real_repr_ratio,
             "real_repr_decay_per_epoch": self.real_repr_decay_per_epoch,
+            "min_real_repr_ratio": self.min_real_repr_ratio,
             "balance_model_samples": self.balance_model_samples,
             "embedding_model_name": self.embedding_model_name,
             "print_every": self.print_every,
@@ -451,11 +458,13 @@ class ResponsePredictiveModel(ScoringModelBase):
                 response_repr_dim=state_dict["response_repr_dim"],
                 encoder_hidden_dims=state_dict["encoder_hidden_dims"],
                 prediction_loss_weight=state_dict["prediction_loss_weight"],
+                predictability_loss_weight=state_dict.get("predictability_loss_weight", 0.0),
                 predictor_hidden_dims=state_dict["predictor_hidden_dims"],
                 scorer_hidden_dims=state_dict["scorer_hidden_dims"],
                 dropout=state_dict["dropout"],
                 real_repr_ratio=state_dict["real_repr_ratio"],
                 real_repr_decay_per_epoch=state_dict["real_repr_decay_per_epoch"],
+                min_real_repr_ratio=state_dict.get("min_real_repr_ratio", 0.0),
                 optimizer_spec=optimizer_spec,
                 balance_model_samples=state_dict["balance_model_samples"],
                 embedding_model_name=state_dict["embedding_model_name"],
@@ -619,7 +628,7 @@ class ResponsePredictiveModel(ScoringModelBase):
             self.network.train()
 
             # Compute current real representation ratio
-            current_ratio = max(0.0, self.real_repr_ratio - self.real_repr_decay_per_epoch * (epoch - 1))
+            current_ratio = max(self.min_real_repr_ratio, self.real_repr_ratio - self.real_repr_decay_per_epoch * (epoch - 1))
 
             # Create seeded generator for reproducible mixing
             generator = torch.Generator(device=self.device).manual_seed(self.seed + epoch)
@@ -628,6 +637,7 @@ class ResponsePredictiveModel(ScoringModelBase):
             total_loss = 0.0
             total_scoring_loss = 0.0
             total_prediction_loss = 0.0
+            total_predictability_loss = 0.0
             total_train_accuracy = 0.0
             total_prediction_quality = 0.0
             total_scorer_real_repr_accuracy = 0.0
@@ -687,18 +697,24 @@ class ResponsePredictiveModel(ScoringModelBase):
                     batch_response_feat_b,
                 )  # [batch, response_repr_dim]
 
-                # 3. Prediction loss (cosine embedding loss)
+                # 3. Prediction loss: train predictor to match encoder (encoder treated as fixed target)
                 target_ones = torch.ones(batch_size, device=self.device)  # [batch]
-                pred_loss_a: torch.Tensor = criterion_prediction(pred_repr_a, real_repr_a, target_ones)
-                pred_loss_b: torch.Tensor = criterion_prediction(pred_repr_b, real_repr_b, target_ones)
+                pred_loss_a: torch.Tensor = criterion_prediction(pred_repr_a, real_repr_a.detach(), target_ones)
+                pred_loss_b: torch.Tensor = criterion_prediction(pred_repr_b, real_repr_b.detach(), target_ones)
                 pred_loss = pred_loss_a + pred_loss_b
 
-                # 4. Mix representations based on current ratio
+                # 4. Predictability loss: encourage encoder to produce predictable representations (predictor treated as fixed reference)
+                # When predictability_loss_weight=0, encoder gets no gradient from the predictor at all.
+                predictability_loss_a: torch.Tensor = criterion_prediction(pred_repr_a.detach(), real_repr_a, target_ones)
+                predictability_loss_b: torch.Tensor = criterion_prediction(pred_repr_b.detach(), real_repr_b, target_ones)
+                predictability_loss = predictability_loss_a + predictability_loss_b
+
+                # 5. Mix representations based on current ratio
                 use_real = torch.rand(batch_size, device=self.device, generator=generator) < current_ratio  # [batch]
                 repr_a = torch.where(use_real.unsqueeze(-1), real_repr_a, pred_repr_a)  # [batch, response_repr_dim]
                 repr_b = torch.where(use_real.unsqueeze(-1), real_repr_b, pred_repr_b)  # [batch, response_repr_dim]
 
-                # 5. Score (mixed) representations
+                # 6. Score (mixed) representations
                 score_a = self.network.forward_score(
                     batch_prompt_emb_a,
                     batch_prompt_feat_a,
@@ -711,8 +727,12 @@ class ResponsePredictiveModel(ScoringModelBase):
                 )  # [batch]
                 scoring_loss: torch.Tensor = criterion_ranking(score_a, score_b, batch_labels)
 
-                # 6. Total loss
-                total_batch_loss = scoring_loss + self.prediction_loss_weight * pred_loss
+                # 7. Total loss
+                total_batch_loss = (
+                    scoring_loss
+                    + self.prediction_loss_weight * pred_loss
+                    + self.predictability_loss_weight * predictability_loss
+                )
                 total_batch_loss.backward()
                 optimizer.step()
 
@@ -720,6 +740,7 @@ class ResponsePredictiveModel(ScoringModelBase):
                 total_loss += total_batch_loss.item()
                 total_scoring_loss += scoring_loss.item()
                 total_prediction_loss += pred_loss.item()
+                total_predictability_loss += predictability_loss.item()
 
                 with torch.no_grad():
                     metrics = self._compute_batch_metrics(
@@ -741,6 +762,7 @@ class ResponsePredictiveModel(ScoringModelBase):
             avg_loss = total_loss / n_batches
             avg_scoring_loss = total_scoring_loss / n_batches
             avg_prediction_loss = total_prediction_loss / n_batches
+            avg_predictability_loss = total_predictability_loss / n_batches
             avg_train_accuracy = total_train_accuracy / n_batches
             avg_prediction_quality = total_prediction_quality / n_batches
             avg_scorer_real_repr_accuracy = total_scorer_real_repr_accuracy / n_batches
@@ -761,6 +783,7 @@ class ResponsePredictiveModel(ScoringModelBase):
             additional_metrics = {
                 "scoring_loss": avg_scoring_loss,
                 "prediction_loss": avg_prediction_loss,
+                "predictability_loss": avg_predictability_loss,
                 "prediction_quality": avg_prediction_quality,
                 "scorer_real_repr_accuracy": avg_scorer_real_repr_accuracy,
                 "repr_mean_variance": avg_repr_variance,
@@ -772,6 +795,7 @@ class ResponsePredictiveModel(ScoringModelBase):
                     "val_prediction_quality": val_metrics["prediction_quality"],
                     "val_scorer_real_repr_accuracy": val_metrics["scorer_real_repr_accuracy"],
                     "val_repr_mean_variance": val_metrics["repr_mean_variance"],
+                    "val_predictability_loss": val_metrics["predictability_loss"],
                 })
 
             entry = TrainingHistoryEntry(
@@ -816,6 +840,7 @@ class ResponsePredictiveModel(ScoringModelBase):
         total_prediction_quality = 0.0
         total_scorer_real_repr_accuracy = 0.0
         total_repr_variance = 0.0
+        total_predictability_loss = 0.0
         n_batches = 0
 
         for (
@@ -870,11 +895,16 @@ class ResponsePredictiveModel(ScoringModelBase):
                     batch_response_feat_b,
                 )  # [batch, response_repr_dim]
 
-                # Prediction loss
+                # Prediction loss (predictor toward encoder)
                 target_ones = torch.ones(batch_size, device=self.device)  # [batch]
                 pred_loss_a = criterion_prediction(pred_repr_a, real_repr_a, target_ones)
                 pred_loss_b = criterion_prediction(pred_repr_b, real_repr_b, target_ones)
                 pred_loss = pred_loss_a + pred_loss_b
+
+                # Predictability loss (encoder toward predictor)
+                predictability_loss_a = criterion_prediction(pred_repr_a, real_repr_a, target_ones)
+                predictability_loss_b = criterion_prediction(pred_repr_b, real_repr_b, target_ones)
+                predictability_loss = predictability_loss_a + predictability_loss_b
 
                 # Mix representations (same as training)
                 use_real = torch.rand(batch_size, device=self.device, generator=generator) < current_ratio  # [batch]
@@ -895,8 +925,13 @@ class ResponsePredictiveModel(ScoringModelBase):
                 scoring_loss = criterion_ranking(score_a, score_b, batch_labels)
 
                 # Total loss
-                batch_loss = scoring_loss + self.prediction_loss_weight * pred_loss
+                batch_loss = (
+                    scoring_loss
+                    + self.prediction_loss_weight * pred_loss
+                    + self.predictability_loss_weight * predictability_loss
+                )
                 total_loss += batch_loss.item()
+                total_predictability_loss += predictability_loss.item()
 
                 # Compute metrics using shared function
                 metrics = self._compute_batch_metrics(
@@ -920,6 +955,7 @@ class ResponsePredictiveModel(ScoringModelBase):
             "prediction_quality": total_prediction_quality / n_batches,
             "scorer_real_repr_accuracy": total_scorer_real_repr_accuracy / n_batches,
             "repr_mean_variance": total_repr_variance / n_batches,
+            "predictability_loss": total_predictability_loss / n_batches,
         }
 
     def _compute_batch_metrics(
