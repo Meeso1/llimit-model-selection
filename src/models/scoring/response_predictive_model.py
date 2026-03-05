@@ -228,6 +228,8 @@ class ResponsePredictiveModel(ScoringModelBase):
                     else:
                         raise RuntimeError("No embedding model available and no way to create one")
 
+            self.init_logger_if_needed()
+
             with Timer("train_embedding_model", verbosity="start+end", parent=train_timer):
                 if not self.embedding_model.is_initialized:
                     self.embedding_model.train(
