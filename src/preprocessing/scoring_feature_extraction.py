@@ -342,7 +342,7 @@ def extract_and_transform_all_prompt_features(
         if feature_description.many_zeros:
             # Use softplus for non-zero values, setting zeros to 0
             non_zero_indexes = non_zero_indexes_per_feature[index]
-            numeric_features[:, index] = 0
+            numeric_features[:, index] = -1
             numeric_features[non_zero_indexes, index] = np.log(1 + np.exp(scaled_data[index]))
         else:
             numeric_features[:, index] = scaled_data[index]
