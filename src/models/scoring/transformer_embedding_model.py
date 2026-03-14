@@ -686,7 +686,7 @@ class TransformerEmbeddingModel(ScoringModelBase):
                 
                 loss: torch.Tensor = criterion(scores_a, scores_b, labels)
                 loss.backward()
-                
+                torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=1.0)
                 optimizer.step()
                 
                 total_loss += loss.item()

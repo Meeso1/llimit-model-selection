@@ -68,6 +68,8 @@ class ResponsePredictiveModel(ScoringModelBase):
         predictor_hidden_dims: list[int] | None = None,
         scorer_hidden_dims: list[int] | None = None,
         dropout: float = 0.2,
+        predictor_input_proj_dim: int = 64,
+        scorer_input_proj_dim: int = 64,
         # Mixed representation training
         real_repr_ratio: float = 0.8,
         real_repr_decay_per_epoch: float = 0.04,
@@ -97,6 +99,8 @@ class ResponsePredictiveModel(ScoringModelBase):
         self.predictor_hidden_dims = predictor_hidden_dims if predictor_hidden_dims is not None else [512, 256]
         self.scorer_hidden_dims = scorer_hidden_dims if scorer_hidden_dims is not None else [256, 128]
         self.dropout = dropout
+        self.predictor_input_proj_dim = predictor_input_proj_dim
+        self.scorer_input_proj_dim = scorer_input_proj_dim
         self.real_repr_ratio = real_repr_ratio
         self.real_repr_decay_per_epoch = real_repr_decay_per_epoch
         self.min_real_repr_ratio = min_real_repr_ratio
@@ -171,6 +175,8 @@ class ResponsePredictiveModel(ScoringModelBase):
             predictor_hidden_dims=self.predictor_hidden_dims,
             scorer_hidden_dims=self.scorer_hidden_dims,
             dropout=self.dropout,
+            predictor_input_proj_dim=self.predictor_input_proj_dim,
+            scorer_input_proj_dim=self.scorer_input_proj_dim,
         ).to(self.device)
 
     def get_config_for_logging(self) -> dict[str, Any]:
@@ -186,6 +192,8 @@ class ResponsePredictiveModel(ScoringModelBase):
             "predictor_hidden_dims": self.predictor_hidden_dims,
             "scorer_hidden_dims": self.scorer_hidden_dims,
             "dropout": self.dropout,
+            "predictor_input_proj_dim": self.predictor_input_proj_dim,
+            "scorer_input_proj_dim": self.scorer_input_proj_dim,
             "real_repr_ratio": self.real_repr_ratio,
             "real_repr_decay_per_epoch": self.real_repr_decay_per_epoch,
             "min_real_repr_ratio": self.min_real_repr_ratio,
@@ -402,6 +410,8 @@ class ResponsePredictiveModel(ScoringModelBase):
             "predictor_hidden_dims": self.predictor_hidden_dims,
             "scorer_hidden_dims": self.scorer_hidden_dims,
             "dropout": self.dropout,
+            "predictor_input_proj_dim": self.predictor_input_proj_dim,
+            "scorer_input_proj_dim": self.scorer_input_proj_dim,
             "real_repr_ratio": self.real_repr_ratio,
             "real_repr_decay_per_epoch": self.real_repr_decay_per_epoch,
             "min_real_repr_ratio": self.min_real_repr_ratio,
@@ -462,6 +472,8 @@ class ResponsePredictiveModel(ScoringModelBase):
                 predictor_hidden_dims=state_dict["predictor_hidden_dims"],
                 scorer_hidden_dims=state_dict["scorer_hidden_dims"],
                 dropout=state_dict["dropout"],
+                predictor_input_proj_dim=state_dict.get("predictor_input_proj_dim", 64),
+                scorer_input_proj_dim=state_dict.get("scorer_input_proj_dim", 64),
                 real_repr_ratio=state_dict["real_repr_ratio"],
                 real_repr_decay_per_epoch=state_dict["real_repr_decay_per_epoch"],
                 min_real_repr_ratio=state_dict.get("min_real_repr_ratio", 0.0),
@@ -735,6 +747,7 @@ class ResponsePredictiveModel(ScoringModelBase):
                     + self.repr_kl_loss_weight * repr_kl_loss
                 )
                 total_batch_loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=1.0)
                 optimizer.step()
 
                 # Compute metrics
@@ -1087,6 +1100,123 @@ class ResponsePredictiveModel(ScoringModelBase):
         duration: float
         additional_metrics: dict[str, float]
 
+    class _ResidualBlock(nn.Module):
+        def __init__(self, in_dim: int, out_dim: int, dropout: float) -> None:
+            super().__init__()
+            self.linear = nn.Linear(in_dim, out_dim)
+            self.norm = nn.LayerNorm(out_dim)
+            self.activation = nn.LeakyReLU(0.1)
+            self.dropout = nn.Dropout(dropout)
+            self.skip: nn.Module = nn.Identity() if in_dim == out_dim else nn.Linear(in_dim, out_dim, bias=False)
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:  # [batch, in_dim] -> [batch, out_dim]
+            h = self.dropout(self.activation(self.norm(self.linear(x))))  # [batch, out_dim]
+            return h + self.skip(x)  # [batch, out_dim]
+
+    class _ResponseEncoder(nn.Module):
+        """Plain MLP: (response_embedding + response_features) -> response_repr_dim. Kept shallow."""
+
+        def __init__(
+            self,
+            response_embedding_dim: int,
+            response_features_dim: int,
+            response_repr_dim: int,
+            hidden_dims: list[int],
+            dropout: float,
+        ) -> None:
+            super().__init__()
+            layers: list[nn.Module] = []
+            prev_dim = response_embedding_dim + response_features_dim
+            for hidden_dim in hidden_dims:
+                layers.append(nn.Linear(prev_dim, hidden_dim))
+                layers.append(nn.LeakyReLU(0.1))
+                layers.append(nn.Dropout(dropout))
+                prev_dim = hidden_dim
+            layers.append(nn.Linear(prev_dim, response_repr_dim))
+            self.mlp = nn.Sequential(*layers)
+
+        def forward(
+            self,
+            response_embedding: torch.Tensor,  # [batch, d_response_emb]
+            response_features: torch.Tensor,   # [batch, d_response_features]
+        ) -> torch.Tensor:
+            combined = torch.cat([response_embedding, response_features], dim=1)  # [batch, d_response_emb + d_response_features]
+            return self.mlp(combined)  # [batch, response_repr_dim]
+
+    class _ResponsePredictor(nn.Module):
+        """Residual MLP with per-modality input projections: (prompt_embedding + prompt_features + model_embedding) -> response_repr_dim."""
+
+        def __init__(
+            self,
+            prompt_embedding_dim: int,
+            prompt_features_dim: int,
+            model_embedding_dim: int,
+            response_repr_dim: int,
+            hidden_dims: list[int],
+            dropout: float,
+            input_proj_dim: int,
+        ) -> None:
+            super().__init__()
+            self.prompt_proj = nn.Sequential(nn.Linear(prompt_embedding_dim, input_proj_dim), nn.LeakyReLU(0.1))
+            self.feat_proj = nn.Sequential(nn.Linear(prompt_features_dim, input_proj_dim), nn.LeakyReLU(0.1))
+            self.model_proj = nn.Sequential(nn.Linear(model_embedding_dim, input_proj_dim), nn.LeakyReLU(0.1))
+
+            blocks: list[nn.Module] = []
+            prev_dim = input_proj_dim * 3
+            for hidden_dim in hidden_dims:
+                blocks.append(ResponsePredictiveModel._ResidualBlock(prev_dim, hidden_dim, dropout))
+                prev_dim = hidden_dim
+            blocks.append(nn.Linear(prev_dim, response_repr_dim))
+            self.trunk = nn.Sequential(*blocks)
+
+        def forward(
+            self,
+            prompt_embedding: torch.Tensor,  # [batch, d_prompt_emb]
+            prompt_features: torch.Tensor,   # [batch, d_prompt_features]
+            model_embedding: torch.Tensor,   # [batch, d_model_emb]
+        ) -> torch.Tensor:
+            pe = self.prompt_proj(prompt_embedding)  # [batch, input_proj_dim]
+            pf = self.feat_proj(prompt_features)     # [batch, input_proj_dim]
+            me = self.model_proj(model_embedding)    # [batch, input_proj_dim]
+            return self.trunk(torch.cat([pe, pf, me], dim=1))  # [batch, response_repr_dim]
+
+    class _ResponseScorer(nn.Module):
+        """Residual MLP with per-modality input projections: (prompt_embedding + prompt_features + response_repr) -> scalar score in [-1, 1]."""
+
+        def __init__(
+            self,
+            prompt_embedding_dim: int,
+            prompt_features_dim: int,
+            response_repr_dim: int,
+            hidden_dims: list[int],
+            dropout: float,
+            input_proj_dim: int,
+        ) -> None:
+            super().__init__()
+            self.prompt_proj = nn.Sequential(nn.Linear(prompt_embedding_dim, input_proj_dim), nn.LeakyReLU(0.1))
+            self.feat_proj = nn.Sequential(nn.Linear(prompt_features_dim, input_proj_dim), nn.LeakyReLU(0.1))
+            self.repr_proj = nn.Sequential(nn.Linear(response_repr_dim, input_proj_dim), nn.LeakyReLU(0.1))
+
+            blocks: list[nn.Module] = []
+            prev_dim = input_proj_dim * 3
+            for hidden_dim in hidden_dims:
+                blocks.append(ResponsePredictiveModel._ResidualBlock(prev_dim, hidden_dim, dropout))
+                prev_dim = hidden_dim
+            blocks.append(nn.Linear(prev_dim, 1))
+            self.trunk = nn.Sequential(*blocks)
+
+        def forward(
+            self,
+            prompt_embedding: torch.Tensor,  # [batch, d_prompt_emb]
+            prompt_features: torch.Tensor,   # [batch, d_prompt_features]
+            response_repr: torch.Tensor,     # [batch, response_repr_dim]
+        ) -> torch.Tensor:
+            pe = self.prompt_proj(prompt_embedding)  # [batch, input_proj_dim]
+            pf = self.feat_proj(prompt_features)     # [batch, input_proj_dim]
+            rr = self.repr_proj(response_repr)       # [batch, input_proj_dim]
+            combined = torch.cat([pe, pf, rr], dim=1)  # [batch, input_proj_dim * 3]
+            return torch.tanh(self.trunk(combined).squeeze(-1))  # [batch]
+
     class _ResponsePredictiveNetwork(nn.Module):
         """Neural network with three components: ResponseEncoder, ResponsePredictor, ResponseScorer."""
 
@@ -1102,138 +1232,71 @@ class ResponsePredictiveModel(ScoringModelBase):
             predictor_hidden_dims: list[int],
             scorer_hidden_dims: list[int],
             dropout: float,
+            predictor_input_proj_dim: int = 64,
+            scorer_input_proj_dim: int = 64,
         ) -> None:
             super().__init__()
-
-            self.response_encoder = self._create_response_encoder(
-                response_embedding_dim,
-                response_features_dim,
-                response_repr_dim,
-                encoder_hidden_dims,
+            self.response_encoder = ResponsePredictiveModel._ResponseEncoder(
+                response_embedding_dim, 
+                response_features_dim, 
+                response_repr_dim, 
+                encoder_hidden_dims, 
                 dropout,
             )
-
-            self.response_predictor = self._create_response_predictor(
-                prompt_embedding_dim,
-                prompt_features_dim,
-                model_embedding_dim,
-                response_repr_dim,
-                predictor_hidden_dims,
-                dropout,
+            self.response_predictor = ResponsePredictiveModel._ResponsePredictor(
+                prompt_embedding_dim, 
+                prompt_features_dim, 
+                model_embedding_dim, 
+                response_repr_dim, 
+                predictor_hidden_dims, 
+                dropout, 
+                predictor_input_proj_dim,
             )
-
-            self.response_scorer = self._create_response_scorer(
-                prompt_embedding_dim,
-                prompt_features_dim,
-                response_repr_dim,
-                scorer_hidden_dims,
+            self.response_scorer = ResponsePredictiveModel._ResponseScorer(
+                prompt_embedding_dim, 
+                prompt_features_dim, 
+                response_repr_dim, 
+                scorer_hidden_dims, 
                 dropout,
+                scorer_input_proj_dim,
             )
-
-        @staticmethod
-        def _create_response_encoder(
-            response_embedding_dim: int,
-            response_features_dim: int,
-            response_repr_dim: int,
-            hidden_dims: list[int],
-            dropout: float,
-        ) -> nn.Sequential:
-            """Create ResponseEncoder: (response_embedding + response_features) -> response_repr_dim."""
-            layers = []
-            input_dim = response_embedding_dim + response_features_dim
-            prev_dim = input_dim
-
-            for hidden_dim in hidden_dims:
-                layers.append(nn.Linear(prev_dim, hidden_dim))
-                layers.append(nn.LeakyReLU(0.1))
-                layers.append(nn.Dropout(dropout))
-                prev_dim = hidden_dim
-
-            layers.append(nn.Linear(prev_dim, response_repr_dim))
-            return nn.Sequential(*layers)
-
-        @staticmethod
-        def _create_response_predictor(
-            prompt_embedding_dim: int,
-            prompt_features_dim: int,
-            model_embedding_dim: int,
-            response_repr_dim: int,
-            hidden_dims: list[int],
-            dropout: float,
-        ) -> nn.Sequential:
-            """Create ResponsePredictor: (prompt_embedding + prompt_features + model_embedding) -> response_repr_dim."""
-            layers = []
-            input_dim = prompt_embedding_dim + prompt_features_dim + model_embedding_dim
-            prev_dim = input_dim
-
-            for hidden_dim in hidden_dims:
-                layers.append(nn.Linear(prev_dim, hidden_dim))
-                layers.append(nn.LeakyReLU(0.1))
-                layers.append(nn.Dropout(dropout))
-                prev_dim = hidden_dim
-
-            layers.append(nn.Linear(prev_dim, response_repr_dim))
-            return nn.Sequential(*layers)
-
-        @staticmethod
-        def _create_response_scorer(
-            prompt_embedding_dim: int,
-            prompt_features_dim: int,
-            response_repr_dim: int,
-            hidden_dims: list[int],
-            dropout: float,
-        ) -> nn.Sequential:
-            """Create ResponseScorer: (prompt_embedding + prompt_features + response_repr) -> 1."""
-            layers = []
-            input_dim = prompt_embedding_dim + prompt_features_dim + response_repr_dim
-            prev_dim = input_dim
-
-            for hidden_dim in hidden_dims:
-                layers.append(nn.Linear(prev_dim, hidden_dim))
-                layers.append(nn.LeakyReLU(0.1))
-                layers.append(nn.Dropout(dropout))
-                prev_dim = hidden_dim
-
-            layers.append(nn.Linear(prev_dim, 1))
-            return nn.Sequential(*layers)
+            self._init_weights()
 
         def forward_predict(
             self,
             prompt_embedding: torch.Tensor,  # [batch, d_prompt_emb]
-            prompt_features: torch.Tensor,  # [batch, d_prompt_features]
-            model_embedding: torch.Tensor,  # [batch, d_model_emb]
+            prompt_features: torch.Tensor,   # [batch, d_prompt_features]
+            model_embedding: torch.Tensor,   # [batch, d_model_emb]
         ) -> torch.Tensor:
-            """Predict response representation."""
-            combined = torch.cat([prompt_embedding, prompt_features, model_embedding], dim=1)  # [batch, d_prompt_emb + d_prompt_features + d_model_emb]
-            return self.response_predictor(combined)  # [batch, response_repr_dim]
+            return self.response_predictor(prompt_embedding, prompt_features, model_embedding)  # [batch, response_repr_dim]
 
         def forward_encode_response(
             self,
             response_embedding: torch.Tensor,  # [batch, d_response_emb]
-            response_features: torch.Tensor,  # [batch, d_response_features]
+            response_features: torch.Tensor,   # [batch, d_response_features]
         ) -> torch.Tensor:
-            """Encode real response to response representation."""
-            combined = torch.cat([response_embedding, response_features], dim=1)  # [batch, d_response_emb + d_response_features]
-            return self.response_encoder(combined)  # [batch, response_repr_dim]
+            return self.response_encoder(response_embedding, response_features)  # [batch, response_repr_dim]
 
         def forward_score(
             self,
             prompt_embedding: torch.Tensor,  # [batch, d_prompt_emb]
-            prompt_features: torch.Tensor,  # [batch, d_prompt_features]
-            response_repr: torch.Tensor,  # [batch, response_repr_dim]
+            prompt_features: torch.Tensor,   # [batch, d_prompt_features]
+            response_repr: torch.Tensor,     # [batch, response_repr_dim]
         ) -> torch.Tensor:
-            """Score a response representation in context of a prompt."""
-            combined = torch.cat([prompt_embedding, prompt_features, response_repr], dim=1)  # [batch, d_prompt_emb + d_prompt_features + response_repr_dim]
-            output: torch.Tensor = self.response_scorer(combined)  # [batch, 1]
-            score = output.squeeze(-1)  # [batch]
-            return torch.tanh(score)  # [batch] - constrained to [-1, 1]
+            return self.response_scorer(prompt_embedding, prompt_features, response_repr)  # [batch]
 
         def forward(
             self,
             prompt_embedding: torch.Tensor,  # [batch, d_prompt_emb]
-            prompt_features: torch.Tensor,  # [batch, d_prompt_features]
-            model_embedding: torch.Tensor,  # [batch, d_model_emb]
+            prompt_features: torch.Tensor,   # [batch, d_prompt_features]
+            model_embedding: torch.Tensor,   # [batch, d_model_emb]
         ) -> torch.Tensor:
-            """Full forward pass for inference: predict then score."""
             predicted_repr = self.forward_predict(prompt_embedding, prompt_features, model_embedding)  # [batch, response_repr_dim]
             return self.forward_score(prompt_embedding, prompt_features, predicted_repr)  # [batch]
+
+        def _init_weights(self) -> None:
+            for m in self.modules():
+                if isinstance(m, nn.Linear):
+                    nn.init.kaiming_normal_(m.weight, a=0.1, nonlinearity="leaky_relu")
+                    if m.bias is not None:
+                        nn.init.zeros_(m.bias)

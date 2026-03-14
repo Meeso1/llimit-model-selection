@@ -315,6 +315,8 @@ def _create_starting_response_predictive(training_spec: TrainingSpecification) -
         predictor_hidden_dims=model_spec.predictor_hidden_dims,
         scorer_hidden_dims=model_spec.scorer_hidden_dims,
         dropout=model_spec.dropout,
+        predictor_input_proj_dim=model_spec.predictor_input_proj_dim,
+        scorer_input_proj_dim=model_spec.scorer_input_proj_dim,
         real_repr_ratio=model_spec.real_repr_ratio,
         real_repr_decay_per_epoch=model_spec.real_repr_decay_per_epoch,
         optimizer_spec=model_spec.optimizer,

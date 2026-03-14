@@ -114,6 +114,8 @@ class ResponsePredictiveSpecification(ModelSpecBase):
     predictor_hidden_dims: list[int] = [512, 256]
     scorer_hidden_dims: list[int] = [256, 128]
     dropout: float = 0.2
+    predictor_input_proj_dim: int = 64
+    scorer_input_proj_dim: int = 64
     real_repr_ratio: float = 0.8
     real_repr_decay_per_epoch: float = 0.04
     optimizer: OptimizerSpec
