@@ -152,6 +152,8 @@ def _create_starting_dn_embedding(training_spec: TrainingSpecification) -> DnEmb
         embedding_spec=model_spec.embedding_spec,
         min_model_comparisons=model_spec.min_model_comparisons,
         embedding_model_epochs=model_spec.embedding_model_epochs,
+        use_skip_connections=model_spec.use_skip_connections,
+        input_proj_dim=model_spec.input_proj_dim,
         wandb_details=training_spec.wandb.to_wandb_details() if training_spec.wandb is not None else None,
         print_every=training_spec.log.print_every,
     )

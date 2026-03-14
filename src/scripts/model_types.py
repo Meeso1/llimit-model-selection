@@ -28,6 +28,8 @@ class DnEmbeddingSpecification(ModelSpecBase):
     embedding_spec: EmbeddingSpec
     min_model_comparisons: int = 20
     embedding_model_epochs: int = 10
+    use_skip_connections: bool = False
+    input_proj_dim: int = 64
 
 
 class SimpleScoringSpecification(ModelSpecBase):

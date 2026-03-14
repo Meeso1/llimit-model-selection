@@ -37,6 +37,8 @@ class DnEmbeddingModel(ScoringModelBase):
         self,
         hidden_dims: list[int] | None = None,
         dropout: float = 0.2,
+        use_skip_connections: bool = False,
+        input_proj_dim: int = 64,
         optimizer_spec: OptimizerSpecification | None = None,
         balance_model_samples: bool = True,
         embedding_model_name: str = "all-MiniLM-L6-v2",
@@ -52,6 +54,8 @@ class DnEmbeddingModel(ScoringModelBase):
 
         self.hidden_dims = hidden_dims if hidden_dims is not None else [256, 128, 64]
         self.dropout = dropout
+        self.use_skip_connections = use_skip_connections
+        self.input_proj_dim = input_proj_dim
         self.optimizer_spec = optimizer_spec if optimizer_spec is not None else AdamWSpec(learning_rate=0.001)
         self.balance_model_samples = balance_model_samples
         self.embedding_model_name = embedding_model_name
@@ -110,6 +114,8 @@ class DnEmbeddingModel(ScoringModelBase):
             model_embedding_dim=self.embedding_model.embedding_dim,
             hidden_dims=self.hidden_dims,
             dropout=self.dropout,
+            use_skip_connections=self.use_skip_connections,
+            input_proj_dim=self.input_proj_dim,
         ).to(self.device)
 
     def get_config_for_logging(self) -> dict[str, Any]:
@@ -118,6 +124,8 @@ class DnEmbeddingModel(ScoringModelBase):
             "model_type": "dn_embedding",
             "hidden_dims": self.hidden_dims,
             "dropout": self.dropout,
+            "use_skip_connections": self.use_skip_connections,
+            "input_proj_dim": self.input_proj_dim,
             "optimizer_type": self.optimizer_spec.optimizer_type,
             "optimizer_params": self.optimizer_spec.to_dict(),
             "balance_model_samples": self.balance_model_samples,
@@ -334,6 +342,8 @@ class DnEmbeddingModel(ScoringModelBase):
             "scheduler_state": self._scheduler_state,
             "hidden_dims": self.hidden_dims,
             "dropout": self.dropout,
+            "use_skip_connections": self.use_skip_connections,
+            "input_proj_dim": self.input_proj_dim,
             "balance_model_samples": self.balance_model_samples,
             "embedding_model_name": self.embedding_model_name,
             "print_every": self.print_every,
@@ -382,6 +392,8 @@ class DnEmbeddingModel(ScoringModelBase):
             model = cls(
                 hidden_dims=state_dict["hidden_dims"],
                 dropout=state_dict.get("dropout", 0.2),
+                use_skip_connections=state_dict.get("use_skip_connections", False),
+                input_proj_dim=state_dict.get("input_proj_dim", 64),
                 optimizer_spec=optimizer_spec,
                 balance_model_samples=state_dict["balance_model_samples"],
                 embedding_model_name=state_dict["embedding_model_name"],
@@ -584,7 +596,7 @@ class DnEmbeddingModel(ScoringModelBase):
                 
                 loss: torch.Tensor = criterion(scores_a, scores_b, batch_labels) # [batch_size]
                 loss.backward()
-                
+                torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=1.0)
                 optimizer.step()
                 
                 total_loss += loss.mean().item()
@@ -685,6 +697,30 @@ class DnEmbeddingModel(ScoringModelBase):
         duration: float
 
     class _DenseNetwork(nn.Module):
+
+        class _ResidualBlock(nn.Module):
+            def __init__(
+                self,
+                in_dim: int,
+                out_dim: int,
+                dropout: float,
+                use_skip_connection: bool,
+            ) -> None:
+                super().__init__()
+                self.linear = nn.Linear(in_dim, out_dim)
+                self.norm = nn.LayerNorm(out_dim)
+                self.activation = nn.LeakyReLU(0.1)
+                self.dropout = nn.Dropout(dropout)
+                if use_skip_connection:
+                    self.skip: nn.Module = nn.Identity() if in_dim == out_dim else nn.Linear(in_dim, out_dim, bias=False)
+                self.use_skip_connection = use_skip_connection
+
+            def forward(self, x: torch.Tensor) -> torch.Tensor:  # [batch_size, in_dim] -> [batch_size, out_dim]
+                h = self.dropout(self.activation(self.norm(self.linear(x))))  # [batch_size, out_dim]
+                if self.use_skip_connection:
+                    return h + self.skip(x)  # [batch_size, out_dim]
+                return h  # [batch_size, out_dim]
+
         def __init__(
             self,
             prompt_embedding_dim: int,
@@ -692,30 +728,40 @@ class DnEmbeddingModel(ScoringModelBase):
             model_embedding_dim: int,
             hidden_dims: list[int],
             dropout: float = 0.2,
+            use_skip_connections: bool = False,
+            input_proj_dim: int = 64,
         ) -> None:
             super().__init__()
 
-            layers = []
-            prev_dim = prompt_embedding_dim + prompt_features_dim + model_embedding_dim
+            self.prompt_emb_proj = nn.Sequential(nn.Linear(prompt_embedding_dim, input_proj_dim), nn.LeakyReLU(0.1))
+            self.prompt_feat_proj = nn.Sequential(nn.Linear(prompt_features_dim, input_proj_dim), nn.LeakyReLU(0.1))
+            self.model_emb_proj = nn.Sequential(nn.Linear(model_embedding_dim, input_proj_dim), nn.LeakyReLU(0.1))
 
+            blocks: list[nn.Module] = []
+            prev_dim = input_proj_dim * 3
             for hidden_dim in hidden_dims:
-                layers.append(nn.Linear(prev_dim, hidden_dim))
-                layers.append(nn.LeakyReLU(0.1))
-                layers.append(nn.Dropout(dropout))
+                blocks.append(self._ResidualBlock(prev_dim, hidden_dim, dropout, use_skip_connections))
                 prev_dim = hidden_dim
+            blocks.append(nn.Linear(prev_dim, 1))
+            self.trunk = nn.Sequential(*blocks)
 
-            layers.append(nn.Linear(prev_dim, 1))
-
-            self.dense_network = nn.Sequential(*layers)
+            self._init_weights()
 
         def forward(
             self,
-            prompt_embedding: torch.Tensor, # [batch_size, prompt_embedding_dim]
-            prompt_features: torch.Tensor, # [batch_size, prompt_features_dim]
-            model_embedding: torch.Tensor, # [batch_size, model_embedding_dim]
+            prompt_embedding: torch.Tensor,  # [batch_size, prompt_embedding_dim]
+            prompt_features: torch.Tensor,   # [batch_size, prompt_features_dim]
+            model_embedding: torch.Tensor,   # [batch_size, model_embedding_dim]
         ) -> torch.Tensor:
-            combined = torch.cat([prompt_embedding, prompt_features, model_embedding], dim=1) # [batch_size, prompt_embedding_dim + prompt_features_dim + model_embedding_dim]
-            output: torch.Tensor = self.dense_network(combined)  # [batch_size, 1]
-            
-            return output.squeeze(-1)  # [batch_size]
+            pe = self.prompt_emb_proj(prompt_embedding)  # [batch_size, input_proj_dim]
+            pf = self.prompt_feat_proj(prompt_features)  # [batch_size, input_proj_dim]
+            me = self.model_emb_proj(model_embedding)    # [batch_size, input_proj_dim]
+            return self.trunk(torch.cat([pe, pf, me], dim=1)).squeeze(-1)  # [batch_size]
+
+        def _init_weights(self) -> None:
+            for m in self.modules():
+                if isinstance(m, nn.Linear):
+                    nn.init.kaiming_normal_(m.weight, a=0.1, nonlinearity="leaky_relu")
+                    if m.bias is not None:
+                        nn.init.zeros_(m.bias)
 
