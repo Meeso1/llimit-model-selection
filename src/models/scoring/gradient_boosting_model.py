@@ -23,6 +23,7 @@ from src.utils.data_split import ValidationSplit, split_gradient_boosting_prepro
 from src.models.model_outputs_cache import ModelOutputsCache
 from src.models import model_loading
 from src.utils.best_model_tracker import BestModelTracker
+from src.utils.ranking_loss import PairwiseRankingLossType
 import warnings
 
 
@@ -107,6 +108,61 @@ def margin_ranking_objective(preds: np.ndarray, dtrain: xgb.DMatrix) -> tuple[np
     return grad, hess
 
 
+def bradley_terry_objective(preds: np.ndarray, dtrain: xgb.DMatrix) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Bradley-Terry (sigmoid cross-entropy) objective for pairwise comparisons.
+
+    Same data structure as margin_ranking_objective: pairs [a_1, b_1, a_2, b_2, ...],
+    labels 1.0/0.0 for winner. Models P(a wins) = sigmoid(pred_a - pred_b).
+
+    Args:
+        preds: Current predictions [n_samples]
+        dtrain: Training data with labels and optional weights
+
+    Returns:
+        grad: Gradient vector [n_samples]
+        hess: Hessian vector [n_samples]
+    """
+    labels = dtrain.get_label()  # [n_samples]
+    weights = dtrain.get_weight()  # [n_samples] or empty array if no weights
+
+    if len(preds) % 2 != 0:
+        raise ValueError(f"Must have even number of samples (pairs), got {len(preds)}")
+
+    preds_pairs = preds.reshape(-1, 2)  # [n_pairs, 2]
+    labels_pairs = labels.reshape(-1, 2)  # [n_pairs, 2]
+
+    pred_a = preds_pairs[:, 0]  # [n_pairs]
+    pred_b = preds_pairs[:, 1]  # [n_pairs]
+    target = labels_pairs[:, 0]  # [n_pairs], 1.0 if a wins else 0.0
+
+    diff = pred_a - pred_b  # [n_pairs]
+    # p = sigmoid(diff) = P(a wins)
+    p = 1.0 / (1.0 + np.exp(-np.clip(diff, -500, 500)))  # [n_pairs]
+
+    # BCE gradient: d/d(pred_a) = p - target, d/d(pred_b) = target - p
+    grad_a = p - target  # [n_pairs]
+    grad_b = target - p  # [n_pairs]
+
+    # Hessian for BCE with logits: p * (1 - p)
+    hess_val = np.maximum(p * (1.0 - p), 1e-4)  # [n_pairs], clamp for stability
+    hess_a = hess_val
+    hess_b = hess_val
+
+    grad = np.empty(len(preds), dtype=float)
+    hess = np.empty(len(preds), dtype=float)
+    grad[0::2] = grad_a
+    grad[1::2] = grad_b
+    hess[0::2] = hess_a
+    hess[1::2] = hess_b
+
+    if len(weights) > 0:
+        grad = grad * weights
+        hess = hess * weights
+
+    return grad, hess
+
+
 def pairwise_accuracy_metric(preds: np.ndarray, dtrain: xgb.DMatrix) -> tuple[str, float]:
     """
     Custom evaluation metric: accuracy of pairwise comparisons.
@@ -157,6 +213,7 @@ class GradientBoostingModel(ScoringModelBase):
         run_name: str | None = None,
         print_every: int | None = None,
         seed: int = 42,
+        ranking_loss_type: PairwiseRankingLossType = "margin_ranking",
     ) -> None:
         super().__init__(run_name)
 
@@ -168,6 +225,7 @@ class GradientBoostingModel(ScoringModelBase):
         self.colsample_bytree = colsample_bytree
         self.reg_alpha = reg_alpha
         self.reg_lambda = reg_lambda
+        self.ranking_loss_type = ranking_loss_type
         
         self.input_features = list(set(input_features))
         
@@ -536,6 +594,7 @@ class GradientBoostingModel(ScoringModelBase):
             
             "base_model_name": self._base_model_name,
             "base_model_state_dict": self._model_outputs_cache.model.get_state_dict() if self._model_outputs_cache is not None else None,
+            "ranking_loss_type": self.ranking_loss_type,
         }
 
     @classmethod
@@ -575,6 +634,7 @@ class GradientBoostingModel(ScoringModelBase):
                 print_every=state_dict["print_every"],
                 seed=state_dict["seed"],
                 input_features=state_dict.get("input_features", ["prompt_features", "model_embedding", "prompt_embedding"]),
+                ranking_loss_type=state_dict.get("ranking_loss_type", "margin_ranking"),
             )
         
         model.embedding_model = EmbeddingModelBase.load_from_state_dict(state_dict["embedding_model_state_dict"])
@@ -722,35 +782,35 @@ class GradientBoostingModel(ScoringModelBase):
         
         return sample_weights
 
-    def _compute_margin_loss(self, preds: np.ndarray, dmatrix: xgb.DMatrix) -> float:
+    def _compute_ranking_loss(self, preds: np.ndarray, dmatrix: xgb.DMatrix) -> float:
         """
-        Compute margin ranking loss for logging.
-        
+        Compute ranking loss for logging (margin_ranking or bradley_terry).
+
         Args:
             preds: Predictions [n_samples]
             dmatrix: Data matrix with labels
-            
+
         Returns:
-            Average margin ranking loss
+            Average loss
         """
         labels = dmatrix.get_label()  # [n_samples]
-        margin = 0.1
-        
-        # Reshape to pairs
         preds_pairs = preds.reshape(-1, 2)  # [n_pairs, 2]
         labels_pairs = labels.reshape(-1, 2)  # [n_pairs, 2]
-        
         pred_a = preds_pairs[:, 0]  # [n_pairs]
         pred_b = preds_pairs[:, 1]  # [n_pairs]
         label_a = labels_pairs[:, 0]  # [n_pairs]
-        
-        # Compute direction: 1 if a wins, -1 if b wins
-        direction = np.where(label_a == 1.0, 1.0, -1.0)  # [n_pairs]
-        
-        # Margin ranking loss: max(0, -direction * (pred_a - pred_b) + margin)
-        diff = pred_a - pred_b  # [n_pairs]
-        loss = np.maximum(0, -direction * diff + margin)  # [n_pairs]
-        
+
+        if self.ranking_loss_type == "margin_ranking":
+            margin = 0.1
+            direction = np.where(label_a == 1.0, 1.0, -1.0)  # [n_pairs]
+            diff = pred_a - pred_b  # [n_pairs]
+            loss = np.maximum(0, -direction * diff + margin)  # [n_pairs]
+        else:
+            # Bradley-Terry: -log(sigmoid((2*label_a - 1) * (pred_a - pred_b)))
+            diff = pred_a - pred_b  # [n_pairs]
+            target = label_a  # 1 if a wins, 0 if b wins
+            p = 1.0 / (1.0 + np.exp(-np.clip(diff, -500, 500)))
+            loss = -target * np.log(p + 1e-12) - (1.0 - target) * np.log(1.0 - p + 1e-12)  # [n_pairs]
         return float(loss.mean())
 
     def _train_epoch(
@@ -781,12 +841,13 @@ class GradientBoostingModel(ScoringModelBase):
             if dval is not None:
                 evals.append((dval, 'val'))
             
+            obj_fn = margin_ranking_objective if self.ranking_loss_type == "margin_ranking" else bradley_terry_objective
             self._xgb_model = xgb.train(
                 params,
                 dtrain,
                 num_boost_round=1,  # Add just one tree
                 xgb_model=self._xgb_model,  # Continue from previous model
-                obj=margin_ranking_objective,  # Custom objective
+                obj=obj_fn,  # Custom objective
                 custom_metric=pairwise_accuracy_metric,  # Custom metric
                 evals=evals,
                 evals_result=evals_result,
@@ -796,18 +857,17 @@ class GradientBoostingModel(ScoringModelBase):
             # Get accuracy from custom metric
             train_accuracy = evals_result['train']['pairwise_acc'][0]
             
-            # Compute margin ranking loss manually for logging
-            # Note: XGBoost predictions already include base margins
+            # Compute ranking loss manually for logging
             train_pred = self._xgb_model.predict(dtrain)  # [n_train_samples]
-            train_loss = self._compute_margin_loss(train_pred, dtrain)
-            
+            train_loss = self._compute_ranking_loss(train_pred, dtrain)
+
             # Validation metrics
             val_loss = None
             val_accuracy = None
             if dval is not None:
                 val_accuracy = evals_result['val']['pairwise_acc'][0]
                 val_pred = self._xgb_model.predict(dval)  # [n_val_samples]
-                val_loss = self._compute_margin_loss(val_pred, dval)
+                val_loss = self._compute_ranking_loss(val_pred, dval)
             
             entry = TrainingHistoryEntry(
                 epoch=epoch,

@@ -49,7 +49,8 @@
       "load_embedding_model_from": null,
       "min_model_comparisons": 50,
       "embedding_model_epochs": 3,
-      "seed": 42
+      "seed": 42,
+      "ranking_loss_type": "margin_ranking"
     }
   },
   "log": {

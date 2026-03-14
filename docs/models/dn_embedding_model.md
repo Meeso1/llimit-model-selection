@@ -57,6 +57,7 @@ Training applies `clip_grad_norm_(max_norm=1.0)` after each backward pass to pre
 | `min_model_comparisons` | `int` | `20` | Min comparisons required to include a model |
 | `embedding_model_epochs` | `int` | `10` | Epochs to train the embedding model |
 | `seed` | `int` | `42` | Random seed |
+| `ranking_loss_type` | `"margin_ranking"` \| `"bradley_terry"` | `"margin_ranking"` | Pairwise ranking loss: margin hinge or Bradley-Terry (sigmoid cross-entropy) |
 
 ### JSON Spec Fields (`dn_embedding`)
 
@@ -74,7 +75,12 @@ Training applies `clip_grad_norm_(max_norm=1.0)` after each backward pass to pre
 
 ## Training Objective
 
-Trained with `MarginRankingLoss(margin=0.1)`. Each training sample is a `(prompt, model_a, model_b, winner)` comparison. The network scores both `(prompt, model_a)` and `(prompt, model_b)`, and the loss encourages `score(winner) > score(loser) + margin`.
+The pairwise ranking loss is configurable via `ranking_loss_type`:
+
+- **`margin_ranking`** (default): `MarginRankingLoss(margin=0.1)` — encourages `score(winner) > score(loser) + margin`.
+- **`bradley_terry`**: Bradley-Terry (sigmoid cross-entropy) on the score difference — models P(winner) = sigmoid(score_winner - score_loser), never saturates so gradients keep flowing.
+
+Each training sample is a `(prompt, model_a, model_b, winner)` comparison. The network scores both `(prompt, model_a)` and `(prompt, model_b)`; the chosen loss compares the two scores.
 
 ## Embedding Model
 

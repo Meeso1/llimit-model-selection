@@ -5,6 +5,7 @@ from src.models.optimizers.optimizer_spec_union import OptimizerSpec
 from src.models.embedding_specs.embedding_spec_union import EmbeddingSpec
 from src.models.finetuning_specs.finetuning_spec_union import FineTuningSpec
 from src.models.model_loading import ModelType
+from src.utils.ranking_loss import PairwiseRankingLossType
 
 
 class ModelSpecBase(BaseModel):
@@ -30,6 +31,7 @@ class DnEmbeddingSpecification(ModelSpecBase):
     embedding_model_epochs: int = 10
     use_skip_connections: bool = False
     input_proj_dim: int = 64
+    ranking_loss_type: PairwiseRankingLossType = "margin_ranking"
 
 
 class SimpleScoringSpecification(ModelSpecBase):
@@ -86,6 +88,7 @@ class GradientBoostingSpecification(ModelSpecBase):
     embedding_model_epochs: int = 10
     base_model: str | None = None
     seed: int = 42
+    ranking_loss_type: PairwiseRankingLossType = "margin_ranking"
 
 
 class TransformerEmbeddingSpecification(ModelSpecBase):
@@ -104,6 +107,7 @@ class TransformerEmbeddingSpecification(ModelSpecBase):
     scoring_head_lr_multiplier: float = 1.0
     base_model: str | None = None
     seed: int = 42
+    ranking_loss_type: PairwiseRankingLossType = "margin_ranking"
 
 
 class ResponsePredictiveSpecification(ModelSpecBase):
@@ -126,6 +130,7 @@ class ResponsePredictiveSpecification(ModelSpecBase):
     min_model_comparisons: int = 20
     embedding_model_epochs: int = 10
     seed: int = 42
+    ranking_loss_type: PairwiseRankingLossType = "margin_ranking"
 
 
 class DnEmbeddingLengthPredictionSpecification(ModelSpecBase):

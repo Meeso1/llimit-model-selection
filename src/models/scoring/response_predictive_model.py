@@ -30,6 +30,7 @@ from src.utils.data_split import ValidationSplit, split_response_predictive_prep
 from src.models.optimizers.optimizer_spec import OptimizerSpecification
 from src.models import model_loading
 from src.utils.best_model_tracker import BestModelTracker
+from src.utils.ranking_loss import PairwiseRankingLossType, compute_pairwise_ranking_loss
 
 
 _DataLoaderType = DataLoader[tuple[
@@ -87,9 +88,11 @@ class ResponsePredictiveModel(ScoringModelBase):
         run_name: str | None = None,
         print_every: int | None = None,
         seed: int = 42,
+        ranking_loss_type: PairwiseRankingLossType = "margin_ranking",
     ) -> None:
         super().__init__(run_name)
 
+        self.ranking_loss_type = ranking_loss_type
         self.response_repr_dim = response_repr_dim
         self.encoder_hidden_dims = encoder_hidden_dims if encoder_hidden_dims is not None else [256]
         self.prediction_loss_weight = prediction_loss_weight
@@ -433,6 +436,7 @@ class ResponsePredictiveModel(ScoringModelBase):
             "embedding_model_epochs": self.embedding_model_epochs,
             "embedding_model_state_dict": self.embedding_model.get_state_dict(),
             "seed": self.seed,
+            "ranking_loss_type": self.ranking_loss_type,
         }
 
     @classmethod
@@ -485,6 +489,7 @@ class ResponsePredictiveModel(ScoringModelBase):
                 embedding_model_epochs=state_dict["embedding_model_epochs"],
                 print_every=state_dict["print_every"],
                 seed=state_dict["seed"],
+                ranking_loss_type=state_dict.get("ranking_loss_type", "margin_ranking"),
             )
 
         model.embedding_model = EmbeddingModelBase.load_from_state_dict(state_dict["embedding_model_state_dict"])
@@ -737,7 +742,9 @@ class ResponsePredictiveModel(ScoringModelBase):
                     batch_prompt_feat_b,
                     repr_b,
                 )  # [batch]
-                scoring_loss: torch.Tensor = F.margin_ranking_loss(score_a, score_b, batch_labels, margin=0.1)
+                scoring_loss: torch.Tensor = compute_pairwise_ranking_loss(
+                    self.ranking_loss_type, score_a, score_b, batch_labels, margin=0.1
+                )
 
                 # 7. Total loss
                 total_batch_loss = (
@@ -940,7 +947,9 @@ class ResponsePredictiveModel(ScoringModelBase):
                     batch_prompt_feat_b,
                     repr_b,
                 )  # [batch]
-                scoring_loss = F.margin_ranking_loss(score_a, score_b, batch_labels, margin=0.1)
+                scoring_loss = compute_pairwise_ranking_loss(
+                    self.ranking_loss_type, score_a, score_b, batch_labels, margin=0.1
+                )
 
                 # Total loss
                 batch_loss = (

@@ -37,6 +37,7 @@ from src.models.finetuning_specs.finetuning_spec import FineTuningSpecification
 from src.utils.transformer_pooling_utils import detect_pooling_method, pool_embeddings, PoolingMethod
 from src.models.model_outputs_cache import ModelOutputsCache
 from src.models import model_loading
+from src.utils.ranking_loss import PairwiseRankingLossType, compute_pairwise_ranking_loss
 
 
 class TransformerEmbeddingModel(ScoringModelBase):
@@ -60,9 +61,11 @@ class TransformerEmbeddingModel(ScoringModelBase):
         save_every: int | None = None,
         checkpoint_name: str | None = None,
         seed: int = 42,
+        ranking_loss_type: PairwiseRankingLossType = "margin_ranking",
     ) -> None:
         super().__init__(run_name)
 
+        self.ranking_loss_type = ranking_loss_type
         self.transformer_model_name = transformer_model_name
         self.finetuning_spec = finetuning_spec if finetuning_spec is not None else LoraSpec(rank=16, alpha=32, dropout=0.05)
         self.hidden_dims = hidden_dims if hidden_dims is not None else [256, 128]
@@ -167,6 +170,7 @@ class TransformerEmbeddingModel(ScoringModelBase):
             "embedding_model_epochs": self.embedding_model_epochs,
             "scoring_head_lr_multiplier": self.scoring_head_lr_multiplier,
             "base_model": self._base_model_name,
+            "ranking_loss_type": self.ranking_loss_type,
         }
 
     def train(
@@ -258,15 +262,10 @@ class TransformerEmbeddingModel(ScoringModelBase):
                 val_dataloader = self._prepare_dataloader(preprocessed_val, batch_size, use_balancing=False) if preprocessed_val is not None else None
             
             optimizer, scheduler = self._create_optimizer_and_scheduler()
-            
-            # MarginRankingLoss: loss = max(0, -label * (score_a - score_b) + margin)
-            # When label=1, we want score_a > score_b
-            # When label=-1, we want score_b > score_a
-            criterion = nn.MarginRankingLoss(margin=0.1)
-            
+
             with Timer("epochs", verbosity="start+end", parent=train_timer) as epochs_timer:
                 for epoch in range(self._epochs_completed + 1, self._epochs_completed + epochs + 1):
-                    result = self._train_epoch(epoch, dataloader, val_dataloader, optimizer, criterion, epochs_timer)
+                    result = self._train_epoch(epoch, dataloader, val_dataloader, optimizer, epochs_timer)
                     
                     self._log_epoch_result(result)
                     
@@ -440,6 +439,7 @@ class TransformerEmbeddingModel(ScoringModelBase):
 
             "base_model_name": self._base_model_name,
             "base_model_state_dict": self._model_outputs_cache.model.get_state_dict() if self._model_outputs_cache is not None else None,
+            "ranking_loss_type": self.ranking_loss_type,
         }
 
     @classmethod
@@ -491,6 +491,7 @@ class TransformerEmbeddingModel(ScoringModelBase):
                 save_every=state_dict.get("save_every", None),
                 checkpoint_name=state_dict.get("checkpoint_name", None),
                 seed=state_dict["seed"],
+                ranking_loss_type=state_dict.get("ranking_loss_type", "margin_ranking"),
             )
         
         model.embedding_model = EmbeddingModelBase.load_from_state_dict(state_dict["embedding_model_state_dict"])
@@ -651,7 +652,6 @@ class TransformerEmbeddingModel(ScoringModelBase):
         dataloader: DataLoader[dict[str, torch.Tensor]],
         val_dataloader: DataLoader[dict[str, torch.Tensor]] | None,
         optimizer: optim.Optimizer,
-        criterion: nn.Module,
         epochs_timer: Timer,
     ) -> "TransformerEmbeddingModel.EpochResult":
         with Timer(f"epoch_{epoch}", verbosity="start+end", parent=epochs_timer) as timer:
@@ -683,8 +683,10 @@ class TransformerEmbeddingModel(ScoringModelBase):
                 )  # [batch_size]
                 
                 scores_a, scores_b = self._augment_with_base_scores(scores_a, scores_b, batch["original_indices"])
-                
-                loss: torch.Tensor = criterion(scores_a, scores_b, labels)
+
+                loss: torch.Tensor = compute_pairwise_ranking_loss(
+                    self.ranking_loss_type, scores_a, scores_b, labels, margin=0.1
+                )
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=1.0)
                 optimizer.step()
@@ -701,7 +703,7 @@ class TransformerEmbeddingModel(ScoringModelBase):
             avg_accuracy = total_accuracy / n_batches
             
             with Timer("perform_validation", verbosity="start+end", parent=timer):
-                val_loss, val_accuracy = self._perform_validation(val_dataloader, criterion, timer) if val_dataloader is not None else (None, None)
+                val_loss, val_accuracy = self._perform_validation(val_dataloader, timer) if val_dataloader is not None else (None, None)
             
             entry = TrainingHistoryEntry(
                 epoch=epoch,
@@ -726,7 +728,6 @@ class TransformerEmbeddingModel(ScoringModelBase):
     def _perform_validation(
         self,
         val_dataloader: DataLoader[dict[str, torch.Tensor]],
-        criterion: nn.Module,
         timer: Timer,
     ) -> tuple[float, float]:
         self.network.eval()
@@ -757,8 +758,10 @@ class TransformerEmbeddingModel(ScoringModelBase):
                 )  # [batch_size]
                 
                 scores_a, scores_b = self._augment_with_base_scores(scores_a, scores_b, batch["original_indices"])
-                
-                loss: torch.Tensor = criterion(scores_a, scores_b, labels)
+
+                loss: torch.Tensor = compute_pairwise_ranking_loss(
+                    self.ranking_loss_type, scores_a, scores_b, labels, margin=0.1
+                )
                 batch_accuracy = compute_pairwise_accuracy(scores_a, scores_b, labels)
                 
                 total_loss += loss.item()

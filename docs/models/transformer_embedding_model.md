@@ -64,10 +64,9 @@ Training happens in two phases:
 
 ### Phase 2: Transformer + Scoring Head Training
 - Fine-tunes the transformer (if specified) and trains the scoring head
-- Uses **margin ranking loss** for pairwise comparison:
-  ```
-  loss = max(0, -label * (score_a - score_b) + margin)
-  ```
+- Uses a **configurable pairwise ranking loss** (`ranking_loss_type`):
+  - **`margin_ranking`** (default): `loss = max(0, -label * (score_a - score_b) + margin)`
+  - **`bradley_terry`**: Bradley-Terry (sigmoid cross-entropy) on the score difference
   where `label = 1` means model A should win, `-1` means model B should win
 - If a base model is used, the final scores used for loss calculation are:
   ```
@@ -190,6 +189,7 @@ The model supports weighted sampling to handle imbalanced model representation:
 
 ### Training
 - `balance_model_samples`: Whether to use weighted sampling (default: true)
+- `ranking_loss_type`: Pairwise ranking loss — `"margin_ranking"` (default) or `"bradley_terry"`
 - `seed`: Random seed for reproducibility
 - `base_model`: Optional base model to build upon (format: `"type/name"`, e.g., `"transformer_embedding/my-base-model"` or `"gradient_boosting/baseline"`)
   - The base model can be **any model type** (TransformerEmbeddingModel, GradientBoostingModel, DnEmbeddingModel, etc.)

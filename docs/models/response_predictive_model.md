@@ -291,6 +291,7 @@ The response representation must be both predictable and informative. These goal
 | `predictability_loss_weight` | 0.2 | 0.0-1.0 | Weight for encoder→predictor nudge (beta); 0 = encoder shaped only by scoring |
 | `repr_kl_loss_weight` | 0.01 | 0.0-0.1 | Weight for KL divergence loss preventing representation collapse (gamma) |
 | `prediction_loss_type` | `"mse"` | `"mse"`, `"cosine"`, `"huber"` | Loss function for prediction/predictability terms. MSE matches direction and magnitude (recommended with KL). Cosine is direction-only. Huber (SmoothL1) is MSE near zero, L1 for large errors. |
+| `ranking_loss_type` | `"margin_ranking"` | `"margin_ranking"`, `"bradley_terry"` | Pairwise ranking loss for the scoring term: margin hinge or Bradley-Terry (sigmoid cross-entropy). |
 | `encoder_hidden_dims` | [256] | [128]-[256, 128] | Encoder capacity |
 | `predictor_hidden_dims` | [512, 256] | [256, 128]-[512, 384, 256] | Larger for harder prediction |
 | `scorer_hidden_dims` | [256, 128] | [128, 64]-[256, 128] | Similar to existing scoring heads |
@@ -325,7 +326,7 @@ The model uses an embedding model to learn model representations (same as `DnEmb
   3. Compute prediction loss (cosine embedding)
   4. Mix real and predicted representations (using seeded randomness)
   5. Score mixed representations
-  6. Compute scoring loss (margin ranking)
+  6. Compute scoring loss (configurable: margin ranking or Bradley-Terry via `ranking_loss_type`)
   7. Backpropagate combined loss
 
 ### Why Joint Over Sequential?

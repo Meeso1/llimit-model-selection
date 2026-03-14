@@ -43,12 +43,10 @@ For each comparison pair (model A vs model B), we create two training samples:
 Samples are ordered as pairs: `[a_1, b_1, a_2, b_2, ...]` so the custom objective function can process them together.
 
 ### Custom Objective Function
-Instead of standard binary classification, we use a **custom margin ranking objective** similar to PyTorch's `MarginRankingLoss`. This ensures the model learns relative scores between models rather than absolute probabilities.
+The pairwise ranking objective is configurable via `ranking_loss_type`:
 
-The loss encourages the winner's predicted score to be higher than the loser's score by at least a margin:
-```
-loss = max(0, -direction * (score_a - score_b) + margin)
-```
+- **`margin_ranking`** (default): Custom objective similar to PyTorch's `MarginRankingLoss`. Loss: `max(0, -direction * (score_a - score_b) + margin)`.
+- **`bradley_terry`**: Bradley-Terry (sigmoid cross-entropy) on the score difference; models P(a wins) = sigmoid(score_a - score_b).
 
 This approach allows:
 - **Pairwise training**: Models are trained on comparisons

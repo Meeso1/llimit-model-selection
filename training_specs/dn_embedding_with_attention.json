@@ -41,7 +41,8 @@
         }
       },
       "min_model_comparisons": 1000,
-      "embedding_model_epochs": 150
+      "embedding_model_epochs": 150,
+      "ranking_loss_type": "margin_ranking"
     }
   },
   "log": {
