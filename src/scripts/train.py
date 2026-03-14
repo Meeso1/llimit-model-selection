@@ -131,8 +131,9 @@ def _create_starting_dense_network(training_spec: TrainingSpecification) -> Dens
         model_id_embedding_dim=model_spec.model_id_embedding_dim,
         optimizer_spec=model_spec.optimizer,
         balance_model_samples=True,
-        wandb_details=training_spec.wandb.to_wandb_details() if training_spec.wandb is not None else None,
+        run_name=training_spec.log.run_name,
         print_every=training_spec.log.print_every,
+        seed=training_spec.data.seed,
     )
 
 
@@ -146,17 +147,20 @@ def _create_starting_dn_embedding(training_spec: TrainingSpecification) -> DnEmb
     model_spec = training_spec.model.spec
     return DnEmbeddingModel(
         hidden_dims=model_spec.hidden_dims,
+        dropout=model_spec.dropout,
+        use_skip_connections=model_spec.use_skip_connections,
+        input_proj_dim=model_spec.input_proj_dim,
         optimizer_spec=model_spec.optimizer,
         balance_model_samples=model_spec.balance_model_samples,
         embedding_model_name=model_spec.embedding_model_name,
         embedding_spec=model_spec.embedding_spec,
+        load_embedding_model_from=model_spec.load_embedding_model_from,
         min_model_comparisons=model_spec.min_model_comparisons,
         embedding_model_epochs=model_spec.embedding_model_epochs,
-        use_skip_connections=model_spec.use_skip_connections,
-        input_proj_dim=model_spec.input_proj_dim,
-        ranking_loss_type=model_spec.ranking_loss_type,
-        wandb_details=training_spec.wandb.to_wandb_details() if training_spec.wandb is not None else None,
+        run_name=training_spec.log.run_name,
         print_every=training_spec.log.print_every,
+        seed=training_spec.data.seed,
+        ranking_loss_type=model_spec.ranking_loss_type,
     )
 
 
@@ -174,7 +178,7 @@ def _create_starting_simple_scoring(training_spec: TrainingSpecification) -> Sim
         tie_both_bad_epsilon=model_spec.tie_both_bad_epsilon,
         non_ranking_loss_coeff=model_spec.non_ranking_loss_coeff,
         min_model_occurrences=model_spec.min_model_occurrences,
-        wandb_details=training_spec.wandb.to_wandb_details() if training_spec.wandb is not None else None,
+        run_name=training_spec.log.run_name,
         print_every=training_spec.log.print_every,
     )
 
@@ -194,7 +198,7 @@ def _create_starting_elo_scoring(training_spec: TrainingSpecification) -> EloSco
         tie_both_bad_epsilon=model_spec.tie_both_bad_epsilon,
         non_ranking_loss_coeff=model_spec.non_ranking_loss_coeff,
         min_model_occurrences=model_spec.min_model_occurrences,
-        wandb_details=training_spec.wandb.to_wandb_details() if training_spec.wandb is not None else None,
+        run_name=training_spec.log.run_name,
         print_every=training_spec.log.print_every,
     )
 
@@ -211,7 +215,7 @@ def _create_starting_greedy_ranking(training_spec: TrainingSpecification) -> Gre
         min_model_occurrences=model_spec.min_model_occurrences,
         score_normalization=model_spec.score_normalization,
         print_summary=model_spec.print_summary,
-        wandb_details=training_spec.wandb.to_wandb_details() if training_spec.wandb is not None else None,
+        run_name=training_spec.log.run_name,
     )
 
 
@@ -226,7 +230,7 @@ def _create_starting_mcmf_scoring(training_spec: TrainingSpecification) -> McmfS
     return McmfScoringModel(
         min_model_occurrences=model_spec.min_model_occurrences,
         print_summary=model_spec.print_summary,
-        wandb_details=training_spec.wandb.to_wandb_details() if training_spec.wandb is not None else None,
+        run_name=training_spec.log.run_name,
     )
 
 
@@ -241,7 +245,7 @@ def _create_starting_least_squares_scoring(training_spec: TrainingSpecification)
     return LeastSquaresScoringModel(
         min_model_occurrences=model_spec.min_model_occurrences,
         print_summary=model_spec.print_summary,
-        wandb_details=training_spec.wandb.to_wandb_details() if training_spec.wandb is not None else None,
+        run_name=training_spec.log.run_name,
     )
 
 
@@ -268,9 +272,9 @@ def _create_starting_gradient_boosting(training_spec: TrainingSpecification) -> 
         embedding_model_epochs=model_spec.embedding_model_epochs,
         base_model_name=model_spec.base_model,
         ranking_loss_type=model_spec.ranking_loss_type,
-        wandb_details=training_spec.wandb.to_wandb_details() if training_spec.wandb is not None else None,
+        run_name=training_spec.log.run_name,
         print_every=training_spec.log.print_every,
-        seed=model_spec.seed,
+        seed=training_spec.data.seed,
     )
 
 
@@ -297,9 +301,8 @@ def _create_starting_transformer_embedding(training_spec: TrainingSpecification)
         scoring_head_lr_multiplier=model_spec.scoring_head_lr_multiplier,
         base_model_name=model_spec.base_model,
         ranking_loss_type=model_spec.ranking_loss_type,
-        wandb_details=training_spec.wandb.to_wandb_details() if training_spec.wandb is not None else None,
         print_every=training_spec.log.print_every,
-        seed=model_spec.seed,
+        seed=training_spec.data.seed,
     )
 
 
@@ -330,9 +333,8 @@ def _create_starting_response_predictive(training_spec: TrainingSpecification) -
         min_model_comparisons=model_spec.min_model_comparisons,
         embedding_model_epochs=model_spec.embedding_model_epochs,
         ranking_loss_type=model_spec.ranking_loss_type,
-        wandb_details=training_spec.wandb.to_wandb_details() if training_spec.wandb is not None else None,
         print_every=training_spec.log.print_every,
-        seed=model_spec.seed,
+        seed=training_spec.data.seed,
     )
 
 
@@ -352,9 +354,8 @@ def _create_starting_dn_embedding_length_prediction(training_spec: TrainingSpeci
         load_embedding_model_from=model_spec.load_embedding_model_from,
         min_model_comparisons=model_spec.min_model_comparisons,
         embedding_model_epochs=model_spec.embedding_model_epochs,
-        wandb_details=training_spec.wandb.to_wandb_details() if training_spec.wandb is not None else None,
         print_every=training_spec.log.print_every,
-        seed=model_spec.seed,
+        seed=training_spec.data.seed,
     )
 
 
@@ -379,9 +380,8 @@ def _create_starting_gb_length_prediction(training_spec: TrainingSpecification) 
         load_embedding_model_from=model_spec.load_embedding_model_from,
         min_model_comparisons=model_spec.min_model_comparisons,
         embedding_model_epochs=model_spec.embedding_model_epochs,
-        wandb_details=training_spec.wandb.to_wandb_details() if training_spec.wandb is not None else None,
         print_every=training_spec.log.print_every,
-        seed=model_spec.seed,
+        seed=training_spec.data.seed,
     )
 
 

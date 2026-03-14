@@ -23,10 +23,12 @@ class DenseNetworkSpecification(ModelSpecBase):
 class DnEmbeddingSpecification(ModelSpecBase):
     model_type: Literal["dn_embedding"] = "dn_embedding"
     hidden_dims: list[int]
+    dropout: float = 0.2
     optimizer: OptimizerSpec
     balance_model_samples: bool = True
     embedding_model_name: str = "all-MiniLM-L6-v2"
     embedding_spec: EmbeddingSpec
+    load_embedding_model_from: str | None = None
     min_model_comparisons: int = 20
     embedding_model_epochs: int = 10
     use_skip_connections: bool = False
@@ -87,7 +89,6 @@ class GradientBoostingSpecification(ModelSpecBase):
     min_model_comparisons: int = 20
     embedding_model_epochs: int = 10
     base_model: str | None = None
-    seed: int = 42
     ranking_loss_type: PairwiseRankingLossType = "margin_ranking"
 
 
@@ -106,7 +107,6 @@ class TransformerEmbeddingSpecification(ModelSpecBase):
     embedding_model_epochs: int = 10
     scoring_head_lr_multiplier: float = 1.0
     base_model: str | None = None
-    seed: int = 42
     ranking_loss_type: PairwiseRankingLossType = "margin_ranking"
 
 
@@ -129,7 +129,6 @@ class ResponsePredictiveSpecification(ModelSpecBase):
     load_embedding_model_from: str | None = None
     min_model_comparisons: int = 20
     embedding_model_epochs: int = 10
-    seed: int = 42
     ranking_loss_type: PairwiseRankingLossType = "margin_ranking"
 
 
@@ -142,7 +141,6 @@ class DnEmbeddingLengthPredictionSpecification(ModelSpecBase):
     load_embedding_model_from: str | None = None
     min_model_comparisons: int = 20
     embedding_model_epochs: int = 10
-    seed: int = 42
 
 
 class GbLengthPredictionSpecification(ModelSpecBase):
@@ -159,7 +157,6 @@ class GbLengthPredictionSpecification(ModelSpecBase):
     load_embedding_model_from: str | None = None
     min_model_comparisons: int = 20
     embedding_model_epochs: int = 10
-    seed: int = 42
 
 
 ModelSpec = Annotated[

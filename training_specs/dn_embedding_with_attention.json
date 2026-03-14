@@ -4,18 +4,18 @@
     "validation_split": 0.2,
     "seed": 42
   },
-  "epochs": 500,
+  "epochs": 250,
   "batch_size": 512,
   "model": {
-    "name": "dn-embedding-with-attention",
+    "name": "dn-embedding-loss-changes",
     "spec": {
       "model_type": "dn_embedding",
-      "hidden_dims": [512, 256, 128, 64],
+      "hidden_dims": [1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 512, 512, 512, 512],
       "use_skip_connections": true,
-      "input_proj_dim": 128,
+      "input_proj_dim": 32,
       "optimizer": {
         "optimizer_type": "adamw",
-        "learning_rate": 5e-5,
+        "learning_rate": 1e-5,
         "weight_decay": 0.99
       },
       "balance_model_samples": true,
@@ -23,30 +23,30 @@
       "embedding_spec": {
         "embedding_type": "attention",
         "encoder_model_name": "all-MiniLM-L6-v2",
-        "h_emb": 128,
-        "h_scalar": 32,
-        "h_pair": 128,
-        "d_out": 64,
+        "h_emb": 256,
+        "h_scalar": 64,
+        "h_pair": 256,
+        "d_out": 128,
         "pair_mlp_layers": 8,
-        "num_attention_heads": 8,
+        "num_attention_heads": 4,
         "dropout": 0.1,
         "temperature": 0.07,
-        "pairs_per_model": 64,
+        "pairs_per_model": 128,
         "models_per_batch": 8,
         "embeddings_per_model": 4,
         "optimizer": {
           "optimizer_type": "adamw",
-          "learning_rate": 5e-5,
+          "learning_rate": 2e-5,
           "weight_decay": 0.995
         }
       },
       "min_model_comparisons": 1000,
-      "embedding_model_epochs": 150,
-      "ranking_loss_type": "margin_ranking"
+      "embedding_model_epochs": 250,
+      "ranking_loss_type": "bradley_terry"
     }
   },
   "log": {
-    "run_name": "dn-embedding-with-attention-default",
+    "run_name": "dn-embedding-loss-changes",
     "print_every": 1
   }
 }

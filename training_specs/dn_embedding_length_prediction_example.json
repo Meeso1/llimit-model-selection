@@ -27,8 +27,7 @@
         }
       },
       "min_model_comparisons": 20,
-      "embedding_model_epochs": 10,
-      "seed": 42
+      "embedding_model_epochs": 10
     }
   },
   "data": {

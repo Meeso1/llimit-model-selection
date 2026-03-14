@@ -164,6 +164,8 @@ class DnEmbeddingModel(ScoringModelBase):
                     else:
                         raise RuntimeError("No embedding model available and no way to create one")
             
+            self.init_logger_if_needed()
+            
             with Timer("train_embedding_model", verbosity="start+end", parent=train_timer):
                 if not self.embedding_model.is_initialized:
                     self.embedding_model.train(
@@ -178,7 +180,7 @@ class DnEmbeddingModel(ScoringModelBase):
             with Timer("encode_prompts", verbosity="start+end", parent=train_timer):
                 encoded_prompts = self.preprocessor.preprocess(data)
 
-            self._prompt_features_scaler = encoded_prompts.scaler
+            self._prompt_features_scaler = SimpleScaler.from_state_dict(encoded_prompts.scaler_state)
             if self._network is None:
                 self._initialize_network(
                     prompt_embedding_dim=encoded_prompts.embedding_dim,
