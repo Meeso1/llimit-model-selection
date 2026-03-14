@@ -41,10 +41,12 @@ class DenseNetworkModel(ScoringModelBase):
         embedding_model_name: str = "all-MiniLM-L6-v2",
         hidden_dims: list[int] | None = None,
         model_id_embedding_dim: int = 32,
+        dropout: float = 0.2,
         optimizer_spec: OptimizerSpecification | None = None,
         balance_model_samples: bool = True,
         run_name: str | None = None,
         print_every: int | None = None,
+        seed: int | None = None,
     ) -> None:
         """
         Initialize the dense network model.
@@ -53,18 +55,21 @@ class DenseNetworkModel(ScoringModelBase):
             embedding_model_name: Name of the sentence transformer model for embeddings
             hidden_dims: List of hidden layer dimensions (default: [256, 128, 64])
             model_id_embedding_dim: Dimension for learned model ID embeddings (default: 32)
+            dropout: Dropout probability used in hidden layers
             optimizer_spec: Optimizer specification (default: AdamW with LR 0.001)
             balance_model_samples: Whether to balance samples by model frequency
-            wandb_details: Weights & Biases configuration
+            seed: Random seed for reproducibility (None = no seeding)
         """
         super().__init__(run_name)
         
         self.embedding_model_name = embedding_model_name
         self.hidden_dims = hidden_dims if hidden_dims is not None else [256, 128, 64]
         self.model_id_embedding_dim = model_id_embedding_dim
+        self.dropout = dropout
         self.optimizer_spec = optimizer_spec if optimizer_spec is not None else AdamWSpec(learning_rate=0.001)
         self.balance_model_samples = balance_model_samples
         self.print_every = print_every
+        self.seed = seed
         
         self.preprocessor = PromptEmbeddingPreprocessor(
             embedding_model_name=embedding_model_name,
@@ -76,6 +81,9 @@ class DenseNetworkModel(ScoringModelBase):
         self._model_encoder: StringEncoder | None = None
         self._prompt_features_scaler: SimpleScaler | None = None
         self._best_model_tracker = BestModelTracker()
+        self._optimizer_state: dict[str, Any] | None = None
+        self._scheduler_state: dict[str, Any] | None = None
+        self._epochs_completed: int = 0
         
         self._history_entries: list[TrainingHistoryEntry] = []
         
@@ -119,6 +127,7 @@ class DenseNetworkModel(ScoringModelBase):
             num_models=num_models,
             model_id_embedding_dim=self.model_id_embedding_dim,
             hidden_dims=self.hidden_dims,
+            dropout=self.dropout,
         ).to(self.device)
 
     def get_config_for_logging(self) -> dict[str, Any]:
@@ -128,6 +137,7 @@ class DenseNetworkModel(ScoringModelBase):
             "embedding_model_name": self.embedding_model_name,
             "hidden_dims": self.hidden_dims,
             "model_id_embedding_dim": self.model_id_embedding_dim,
+            "dropout": self.dropout,
             "optimizer_type": self.optimizer_spec.optimizer_type,
             "optimizer_params": self.optimizer_spec.to_dict(),
             "balance_model_samples": self.balance_model_samples,
@@ -153,6 +163,9 @@ class DenseNetworkModel(ScoringModelBase):
             epochs: Number of training epochs
             batch_size: Batch size for training
         """
+        if self.seed is not None:
+            torch.manual_seed(self.seed)
+
         with Timer("train", verbosity="start+end") as train_timer:
             self.last_timer = train_timer
             with Timer("initialize_and_preprocess", verbosity="start+end", parent=train_timer):
@@ -168,17 +181,16 @@ class DenseNetworkModel(ScoringModelBase):
             with Timer("prepare_dataloaders", verbosity="start+end", parent=train_timer):
                 dataloader = self._prepare_dataloader(preprocessed_train, batch_size, use_balancing=True)
                 val_dataloader = self._prepare_dataloader(preprocessed_val, batch_size, use_balancing=False) if preprocessed_val is not None else None
-                
-            optimizer = self.optimizer_spec.create_optimizer(self.network)
-            scheduler = self.optimizer_spec.create_scheduler(optimizer)
-            
+
+            optimizer, scheduler = self._create_optimizer_and_scheduler()
+
             # MarginRankingLoss: loss = max(0, -label * (score_a - score_b) + margin)
             # When label=1, we want score_a > score_b
             # When label=-1, we want score_b > score_a
             criterion = nn.MarginRankingLoss(margin=0.1)
             
             with Timer("epochs", verbosity="start+end", parent=train_timer) as epochs_timer:
-                for epoch in range(1, epochs + 1):
+                for epoch in range(self._epochs_completed + 1, self._epochs_completed + epochs + 1):
                     result = self._train_epoch(epoch, dataloader, val_dataloader, optimizer, criterion, epochs_timer)
                     
                     self._log_epoch_result(result)
@@ -191,16 +203,21 @@ class DenseNetworkModel(ScoringModelBase):
                     
                     if scheduler is not None:
                         scheduler.step()
+
+                    self._epochs_completed = epoch
             
             # Revert to best model parameters if available
             if self._best_model_tracker.has_best_state:
                 print(f"\nReverting to best model parameters from epoch {self._best_model_tracker.best_epoch} (accuracy={self._best_model_tracker.best_accuracy:.4f})")
                 self.load_state_dict(self._best_model_tracker.best_state_dict, instance=self)
-            
+
+            self._optimizer_state = optimizer.state_dict()
+            self._scheduler_state = scheduler.state_dict() if scheduler is not None else None
+
             final_metrics = {
                 "best_epoch": self._best_model_tracker.best_epoch,
                 "best_accuracy": self._best_model_tracker.best_accuracy,
-                "total_epochs": epochs,
+                "total_epochs": self._epochs_completed,
             }
 
         self.finish_logger_if_needed(
@@ -295,14 +312,19 @@ class DenseNetworkModel(ScoringModelBase):
             "embedding_model_name": self.embedding_model_name,
             "hidden_dims": self.hidden_dims,
             "model_id_embedding_dim": self.model_id_embedding_dim,
+            "dropout": self.dropout,
             "optimizer_type": self.optimizer_spec.optimizer_type,
             "optimizer_params": self.optimizer_spec.to_dict(),
+            "optimizer_state": self._optimizer_state,
+            "scheduler_state": self._scheduler_state,
             "balance_model_samples": self.balance_model_samples,
             "print_every": self.print_every,
+            "seed": self.seed,
             "preprocessor_version": self.preprocessor.version,
             "embedding_dim": self._embedding_dim,
             "prompt_features_dim": self._prompt_features_dim,
             "network_state_dict": state_dict_to_cpu(self.network.state_dict()),
+            "epochs_completed": self._epochs_completed,
             "model_encoder": self._model_encoder.get_state_dict(),
             "prompt_features_scaler_state": self._prompt_features_scaler.get_state_dict(),
         }
@@ -333,9 +355,11 @@ class DenseNetworkModel(ScoringModelBase):
                 embedding_model_name=state_dict["embedding_model_name"],
                 hidden_dims=state_dict["hidden_dims"],
                 model_id_embedding_dim=state_dict["model_id_embedding_dim"],
+                dropout=state_dict.get("dropout", 0.2),
                 optimizer_spec=optimizer_spec,
                 balance_model_samples=state_dict["balance_model_samples"],
                 print_every=state_dict["print_every"],
+                seed=state_dict.get("seed"),
             )
         
         model._model_encoder = StringEncoder.load_state_dict(state_dict["model_encoder"])
@@ -348,8 +372,27 @@ class DenseNetworkModel(ScoringModelBase):
             )
         model.network.load_state_dict(state_dict["network_state_dict"])
         model.network.to(model.device)
-        
+
+        model._optimizer_state = state_dict.get("optimizer_state")
+        model._scheduler_state = state_dict.get("scheduler_state")
+        model._epochs_completed = state_dict.get("epochs_completed", 0)
+
         return model
+
+    def _create_optimizer_and_scheduler(self) -> tuple[optim.Optimizer, optim.lr_scheduler._LRScheduler | None]:
+        optimizer = self.optimizer_spec.create_optimizer(self.network)
+        if self._optimizer_state is not None:
+            optimizer.load_state_dict(self._optimizer_state)
+            if self.print_every is not None:
+                print("Restored optimizer state from checkpoint")
+
+        scheduler = self.optimizer_spec.create_scheduler(optimizer)
+        if scheduler is not None and self._scheduler_state is not None:
+            scheduler.load_state_dict(self._scheduler_state)
+            if self.print_every is not None:
+                print("Restored scheduler state from checkpoint")
+
+        return optimizer, scheduler
 
     def _initialize_and_preprocess(
         self,
@@ -557,7 +600,7 @@ class DenseNetworkModel(ScoringModelBase):
             avg_accuracy = total_accuracy / n_batches
             
             with Timer("perform_validation", verbosity="start+end", parent=timer):
-                val_loss, val_accuracy = self._perform_validation(val_dataloader, criterion, timer) if val_dataloader is not None else (None, None)
+                val_loss, val_accuracy = self._perform_validation(val_dataloader, criterion) if val_dataloader is not None else (None, None)
             
             entry = TrainingHistoryEntry(
                 epoch=epoch,
@@ -583,45 +626,40 @@ class DenseNetworkModel(ScoringModelBase):
         self,
         val_dataloader: _DataLoaderType,
         criterion: nn.Module,
-        timer: Timer,
     ) -> tuple[float, float]:
         self.network.eval()
         total_loss = 0.0
         total_accuracy = 0.0
         n_batches = 0
-        total_samples = 0
-        
+
         for batch_emb_a, batch_features_a, batch_id_a, batch_emb_b, batch_features_b, batch_id_b, batch_labels in val_dataloader:
-            with Timer(f"batch_{n_batches}", verbosity="start+end", parent=timer):
-                batch_emb_a: torch.Tensor = batch_emb_a.to(self.device)  # [batch_size, embedding_dim]
-                batch_features_a: torch.Tensor = batch_features_a.to(self.device)  # [batch_size, prompt_features_dim]
-                batch_id_a: torch.Tensor = batch_id_a.to(self.device)  # [batch_size]
-                batch_emb_b: torch.Tensor = batch_emb_b.to(self.device)  # [batch_size, embedding_dim]
-                batch_features_b: torch.Tensor = batch_features_b.to(self.device)  # [batch_size, prompt_features_dim]
-                batch_id_b: torch.Tensor = batch_id_b.to(self.device)  # [batch_size]
-                batch_labels: torch.Tensor = batch_labels.to(self.device)  # [batch_size]
-                
-                total_samples += len(batch_emb_a)
-                
-                with torch.no_grad():
-                    scores_a = self.network(
-                        batch_emb_a,
-                        batch_features_a,
-                        batch_id_a,
-                    )  # [batch_size]
-                    scores_b = self.network(
-                        batch_emb_b,
-                        batch_features_b,
-                        batch_id_b,
-                    )  # [batch_size]
-                    
-                    loss: torch.Tensor = criterion(scores_a, scores_b, batch_labels) # [batch_size]
-                    batch_accuracy = compute_pairwise_accuracy(scores_a, scores_b, batch_labels)
-                    
-                    total_loss += loss.mean().item()
-                    total_accuracy += batch_accuracy
-                    n_batches += 1
-        
+            batch_emb_a: torch.Tensor = batch_emb_a.to(self.device)  # [batch_size, embedding_dim]
+            batch_features_a: torch.Tensor = batch_features_a.to(self.device)  # [batch_size, prompt_features_dim]
+            batch_id_a: torch.Tensor = batch_id_a.to(self.device)  # [batch_size]
+            batch_emb_b: torch.Tensor = batch_emb_b.to(self.device)  # [batch_size, embedding_dim]
+            batch_features_b: torch.Tensor = batch_features_b.to(self.device)  # [batch_size, prompt_features_dim]
+            batch_id_b: torch.Tensor = batch_id_b.to(self.device)  # [batch_size]
+            batch_labels: torch.Tensor = batch_labels.to(self.device)  # [batch_size]
+
+            with torch.no_grad():
+                scores_a = self.network(
+                    batch_emb_a,
+                    batch_features_a,
+                    batch_id_a,
+                )  # [batch_size]
+                scores_b = self.network(
+                    batch_emb_b,
+                    batch_features_b,
+                    batch_id_b,
+                )  # [batch_size]
+
+                loss: torch.Tensor = criterion(scores_a, scores_b, batch_labels)  # [batch_size]
+                batch_accuracy = compute_pairwise_accuracy(scores_a, scores_b, batch_labels)
+
+                total_loss += loss.mean().item()
+                total_accuracy += batch_accuracy
+                n_batches += 1
+
         avg_loss = total_loss / n_batches
         avg_accuracy = total_accuracy / n_batches
         return avg_loss, avg_accuracy
@@ -654,7 +692,7 @@ class DenseNetworkModel(ScoringModelBase):
         Architecture:
         - Model ID embedding layer
         - Concatenation of prompt embedding and model ID embedding
-        - Hidden layers with ReLU activation and dropout
+        - Hidden layers with LeakyReLU activation and dropout
         - Output layer with single neuron (score)
         - Tanh applied during prediction to constrain to [-1, 1]
         """
@@ -666,6 +704,7 @@ class DenseNetworkModel(ScoringModelBase):
             num_models: int,
             model_id_embedding_dim: int,
             hidden_dims: list[int],
+            dropout: float = 0.2,
         ) -> None:
             """
             Initialize the network.
@@ -676,6 +715,7 @@ class DenseNetworkModel(ScoringModelBase):
                 num_models: Number of unique models (for embedding layer)
                 model_id_embedding_dim: Dimension of model ID embeddings
                 hidden_dims: List of hidden layer dimensions
+                dropout: Dropout probability
             """
             super().__init__()
             
@@ -689,8 +729,8 @@ class DenseNetworkModel(ScoringModelBase):
             
             for hidden_dim in hidden_dims:
                 layers.append(nn.Linear(prev_dim, hidden_dim))
-                layers.append(nn.ReLU())
-                layers.append(nn.Dropout(0.2))
+                layers.append(nn.LeakyReLU(0.1))
+                layers.append(nn.Dropout(dropout))
                 prev_dim = hidden_dim
             
             layers.append(nn.Linear(prev_dim, 1))

@@ -14,7 +14,7 @@ The `DenseNetworkModel` is a feedforward neural network designed for prompt rout
   - Model ID (integer, embedded into learned vector)
 - **Model ID Embedding**: Learned embeddings for each model (default: 32-dimensional)
 - **Concatenation**: Prompt embedding + Prompt features + Model ID embedding
-- **Hidden Layers**: Configurable dense layers with ReLU activation and dropout (default: [256, 128, 64])
+- **Hidden Layers**: Configurable dense layers with LeakyReLU(0.1) activation and dropout (default: [256, 128, 64])
 - **Output**: Single score value constrained to [-1, 1] using tanh activation
 
 ### Training Objective
@@ -233,10 +233,12 @@ Unlike pairwise comparison models, this model produces absolute scores for each 
 - `embedding_model_name`: Sentence transformer model name (default: "all-MiniLM-L6-v2")
 - `hidden_dims`: List of hidden layer sizes (default: [256, 128, 64])
 - `model_id_embedding_dim`: Dimension of learned model ID embeddings (default: 32)
+- `dropout`: Dropout probability in hidden layers (default: 0.2)
 - `optimizer_spec`: Optimizer specification (default: AdamW with LR 0.001)
   - See `docs/optimizers.md` for details on configuring optimizers and LR decay
 - `balance_model_samples`: Whether to balance model representation (default: True)
   - See `docs/sample_balancing.md` for details
+- `seed`: Random seed for reproducibility (default: None — no seeding)
 
 ### Training Parameters
 
@@ -244,9 +246,13 @@ Unlike pairwise comparison models, this model produces absolute scores for each 
 - `batch_size`: Batch size for training (default: 32)
 - `margin`: Margin for ranking loss (fixed at 0.1)
 
+### Resume Training
+
+Optimizer and scheduler states are saved in the model's state dict (`optimizer_state`, `scheduler_state`, `epochs_completed`). When loaded and retrained, the optimizer and scheduler resume from where they left off.
+
 ### Dropout
 
-Fixed at 0.2 in hidden layers to prevent overfitting.
+Configurable via the `dropout` constructor parameter (default: 0.2). Applied in all hidden layers.
 
 ## Implementation Details
 
@@ -286,7 +292,7 @@ The actual PyTorch module is implemented as `_DenseNetwork`, an inner class at t
 
 1. **Model Embedding Layer**: `nn.Embedding(num_models, model_id_embedding_dim)` - learns representations for each model
 2. **Concatenation**: Combines prompt embedding, prompt features, and model ID embedding
-3. **Dense Layers**: Standard feedforward layers with ReLU and dropout
+3. **Dense Layers**: Standard feedforward layers with LeakyReLU(0.1) and dropout
 4. **Output**: Single score per (prompt, model) pair
 
 ### Preprocessing Cache Location

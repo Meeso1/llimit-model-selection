@@ -310,19 +310,13 @@ class TripletFinetunableEncoderModel(TripletModelBase[TrainingTriplet]):
             avg_loss = total_loss / n_batches
             triplet_accuracy = correct_triplets / total_samples
             
-            model_embeddings = None
-            
-            # TODO: Make this a parameter
-            compute_embeddings_every_k_epochs = 5
-            if (epoch % compute_embeddings_every_k_epochs == 0) or (model_embeddings is None):
-                train_anchor_embeddings_tensor = torch.cat(train_anchor_embeddings, dim=0)
-                with Timer(f"compute_model_embeddings_{epoch}", verbosity="start+end", parent=timer):
-                    model_embeddings = self._compute_model_embeddings_from_stored(
-                        train_anchor_embeddings_tensor, train_anchor_model_ids
-                    )
-            
-            # Compute universal accuracy for training data
             train_anchor_embeddings_tensor = torch.cat(train_anchor_embeddings, dim=0)
+            with Timer(f"compute_model_embeddings_{epoch}", verbosity="start+end", parent=timer):
+                model_embeddings = self._compute_model_embeddings_from_stored(
+                    train_anchor_embeddings_tensor, train_anchor_model_ids
+                )
+
+            # Compute universal accuracy for training data
             train_universal_accuracy = compute_embedding_accuracy(
                 sample_embeddings=train_anchor_embeddings_tensor.detach().cpu().numpy(),
                 sample_model_names=train_anchor_model_ids,

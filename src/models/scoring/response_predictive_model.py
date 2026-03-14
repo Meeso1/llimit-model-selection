@@ -84,8 +84,6 @@ class ResponsePredictiveModel(ScoringModelBase):
         # Standard params
         run_name: str | None = None,
         print_every: int | None = None,
-        save_every: int | None = None,
-        checkpoint_name: str | None = None,
         seed: int = 42,
     ) -> None:
         super().__init__(run_name)
@@ -106,8 +104,6 @@ class ResponsePredictiveModel(ScoringModelBase):
         self.balance_model_samples = balance_model_samples
         self.embedding_model_name = embedding_model_name
         self.print_every = print_every
-        self.save_every = save_every
-        self.checkpoint_name = checkpoint_name
         self.min_model_comparisons = min_model_comparisons
         self.embedding_model_epochs = embedding_model_epochs
         self.seed = seed
@@ -412,8 +408,6 @@ class ResponsePredictiveModel(ScoringModelBase):
             "balance_model_samples": self.balance_model_samples,
             "embedding_model_name": self.embedding_model_name,
             "print_every": self.print_every,
-            "save_every": self.save_every,
-            "checkpoint_name": self.checkpoint_name,
             "preprocessor_version": self.preprocessor.version,
             "prompt_embedding_dim": self._prompt_embedding_dim,
             "prompt_features_dim": self._prompt_features_dim,
@@ -478,8 +472,6 @@ class ResponsePredictiveModel(ScoringModelBase):
                 min_model_comparisons=state_dict["min_model_comparisons"],
                 embedding_model_epochs=state_dict["embedding_model_epochs"],
                 print_every=state_dict["print_every"],
-                save_every=state_dict["save_every"],
-                checkpoint_name=state_dict["checkpoint_name"],
                 seed=state_dict["seed"],
             )
 

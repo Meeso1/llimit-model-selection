@@ -25,7 +25,6 @@ from src.utils.torch_utils import state_dict_to_cpu
 from src.utils.accuracy import compute_pairwise_accuracy
 from src.utils.data_split import ValidationSplit, split_dn_embedding_preprocessed_data
 from src.models.optimizers.optimizer_spec import OptimizerSpecification
-from src.models.optimizers.adamw_spec import AdamWSpec
 from src.models import model_loading
 from src.utils.best_model_tracker import BestModelTracker
 
@@ -37,6 +36,7 @@ class DnEmbeddingModel(ScoringModelBase):
     def __init__(
         self,
         hidden_dims: list[int] | None = None,
+        dropout: float = 0.2,
         optimizer_spec: OptimizerSpecification | None = None,
         balance_model_samples: bool = True,
         embedding_model_name: str = "all-MiniLM-L6-v2",
@@ -51,6 +51,7 @@ class DnEmbeddingModel(ScoringModelBase):
         super().__init__(run_name)
 
         self.hidden_dims = hidden_dims if hidden_dims is not None else [256, 128, 64]
+        self.dropout = dropout
         self.optimizer_spec = optimizer_spec if optimizer_spec is not None else AdamWSpec(learning_rate=0.001)
         self.balance_model_samples = balance_model_samples
         self.embedding_model_name = embedding_model_name
@@ -108,6 +109,7 @@ class DnEmbeddingModel(ScoringModelBase):
             prompt_features_dim=prompt_features_dim,
             model_embedding_dim=self.embedding_model.embedding_dim,
             hidden_dims=self.hidden_dims,
+            dropout=self.dropout,
         ).to(self.device)
 
     def get_config_for_logging(self) -> dict[str, Any]:
@@ -115,6 +117,7 @@ class DnEmbeddingModel(ScoringModelBase):
         return {
             "model_type": "dn_embedding",
             "hidden_dims": self.hidden_dims,
+            "dropout": self.dropout,
             "optimizer_type": self.optimizer_spec.optimizer_type,
             "optimizer_params": self.optimizer_spec.to_dict(),
             "balance_model_samples": self.balance_model_samples,
@@ -126,7 +129,6 @@ class DnEmbeddingModel(ScoringModelBase):
             "embedding_model_epochs": self.embedding_model_epochs,
         }
 
-    # TODO: Track best state
     def train(
         self,
         data: TrainingData,
@@ -273,8 +275,8 @@ class DnEmbeddingModel(ScoringModelBase):
             
             prompt_embeddings = torch.from_numpy(encoded_prompts.prompt_embeddings).to(self.device)  # [n_prompts, embedding_dim]
             prompt_features = torch.from_numpy(encoded_prompts.prompt_features).to(self.device)  # [n_prompts, prompt_features_dim]
-            model_ids = torch.from_numpy(np.array([
-                self.model_embeddings[model_name] if model_name in self.model_embeddings else self.model_embeddings["default"] 
+            model_embeddings = torch.from_numpy(np.array([
+                self.model_embeddings[model_name] if model_name in self.model_embeddings else self.model_embeddings["default"]
                 for model_name in X.model_names
             ])).to(self.device) # [n_models, model_embedding_dim]
             
@@ -282,25 +284,21 @@ class DnEmbeddingModel(ScoringModelBase):
             scores_dict: dict[str, np.ndarray] = {}
             
             with torch.no_grad():
-                for model_id, model_name in zip(model_ids, X.model_names):
+                for model_idx, model_name in enumerate(X.model_names):
+                    model_emb = model_embeddings[model_idx]  # [model_embedding_dim]
                     model_scores = []
                     
                     for i in range(0, len(prompt_embeddings), batch_size):
                         batch_embeddings = prompt_embeddings[i:i + batch_size]  # [batch_size, embedding_dim]
                         batch_features = prompt_features[i:i + batch_size]  # [batch_size, prompt_features_dim]
                         batch_size_actual = len(batch_embeddings)
-                        
-                        batch_model_ids = torch.full(
-                            (batch_size_actual,),
-                            model_id,
-                            dtype=torch.long,
-                            device=self.device,
-                        )  # [batch_size]
-                        
+
+                        batch_model_embs = model_emb.unsqueeze(0).expand(batch_size_actual, -1)  # [batch_size, model_embedding_dim]
+
                         batch_scores = self.network(
                             batch_embeddings,
                             batch_features,
-                            batch_model_ids,
+                            batch_model_embs,
                         )  # [batch_size]
                         
                         # Apply tanh to constrain to [-1, 1]
@@ -335,6 +333,7 @@ class DnEmbeddingModel(ScoringModelBase):
             "optimizer_state": self._optimizer_state,
             "scheduler_state": self._scheduler_state,
             "hidden_dims": self.hidden_dims,
+            "dropout": self.dropout,
             "balance_model_samples": self.balance_model_samples,
             "embedding_model_name": self.embedding_model_name,
             "print_every": self.print_every,
@@ -382,6 +381,7 @@ class DnEmbeddingModel(ScoringModelBase):
             
             model = cls(
                 hidden_dims=state_dict["hidden_dims"],
+                dropout=state_dict.get("dropout", 0.2),
                 optimizer_spec=optimizer_spec,
                 balance_model_samples=state_dict["balance_model_samples"],
                 embedding_model_name=state_dict["embedding_model_name"],
@@ -599,7 +599,7 @@ class DnEmbeddingModel(ScoringModelBase):
             avg_accuracy = total_accuracy / n_batches
             
             with Timer("perform_validation", verbosity="start+end", parent=timer):
-                val_loss, val_accuracy = self._perform_validation(val_dataloader, criterion, timer) if val_dataloader is not None else (None, None)
+                val_loss, val_accuracy = self._perform_validation(val_dataloader, criterion) if val_dataloader is not None else (None, None)
             
             entry = TrainingHistoryEntry(
                 epoch=epoch,
@@ -625,45 +625,40 @@ class DnEmbeddingModel(ScoringModelBase):
         self,
         val_dataloader: _DataLoaderType,
         criterion: nn.Module,
-        timer: Timer,
     ) -> tuple[float, float]:
         self.network.eval()
         total_loss = 0.0
         total_accuracy = 0.0
         n_batches = 0
-        total_samples = 0
-        
+
         for batch_emb_a, batch_features_a, batch_model_emb_a, batch_emb_b, batch_features_b, batch_model_emb_b, batch_labels in val_dataloader:
-            with Timer(f"batch_{n_batches}", verbosity="start+end", parent=timer):
-                batch_emb_a: torch.Tensor = batch_emb_a.to(self.device)  # [batch_size, embedding_dim]
-                batch_features_a: torch.Tensor = batch_features_a.to(self.device)  # [batch_size, prompt_features_dim]
-                batch_model_emb_a: torch.Tensor = batch_model_emb_a.to(self.device)  # [batch_size, model_embedding_dim]
-                batch_emb_b: torch.Tensor = batch_emb_b.to(self.device)  # [batch_size, prompt_embedding_dim]
-                batch_features_b: torch.Tensor = batch_features_b.to(self.device)  # [batch_size, prompt_features_dim]
-                batch_model_emb_b: torch.Tensor = batch_model_emb_b.to(self.device)  # [batch_size, model_embedding_dim]
-                batch_labels: torch.Tensor = batch_labels.to(self.device)  # [batch_size]
-                
-                total_samples += len(batch_emb_a)
-                
-                with torch.no_grad():
-                    scores_a = self.network(
-                        batch_emb_a,
-                        batch_features_a,
-                        batch_model_emb_a,
-                    )  # [batch_size]
-                    scores_b = self.network(
-                        batch_emb_b,
-                        batch_features_b,
-                        batch_model_emb_b,
-                    )  # [batch_size]
-                    
-                    loss: torch.Tensor = criterion(scores_a, scores_b, batch_labels) # [batch_size]
-                    batch_accuracy = compute_pairwise_accuracy(scores_a, scores_b, batch_labels)
-                    
-                    total_loss += loss.mean().item()
-                    total_accuracy += batch_accuracy
-                    n_batches += 1
-        
+            batch_emb_a: torch.Tensor = batch_emb_a.to(self.device)  # [batch_size, embedding_dim]
+            batch_features_a: torch.Tensor = batch_features_a.to(self.device)  # [batch_size, prompt_features_dim]
+            batch_model_emb_a: torch.Tensor = batch_model_emb_a.to(self.device)  # [batch_size, model_embedding_dim]
+            batch_emb_b: torch.Tensor = batch_emb_b.to(self.device)  # [batch_size, prompt_embedding_dim]
+            batch_features_b: torch.Tensor = batch_features_b.to(self.device)  # [batch_size, prompt_features_dim]
+            batch_model_emb_b: torch.Tensor = batch_model_emb_b.to(self.device)  # [batch_size, model_embedding_dim]
+            batch_labels: torch.Tensor = batch_labels.to(self.device)  # [batch_size]
+
+            with torch.no_grad():
+                scores_a = self.network(
+                    batch_emb_a,
+                    batch_features_a,
+                    batch_model_emb_a,
+                )  # [batch_size]
+                scores_b = self.network(
+                    batch_emb_b,
+                    batch_features_b,
+                    batch_model_emb_b,
+                )  # [batch_size]
+
+                loss: torch.Tensor = criterion(scores_a, scores_b, batch_labels)  # [batch_size]
+                batch_accuracy = compute_pairwise_accuracy(scores_a, scores_b, batch_labels)
+
+                total_loss += loss.mean().item()
+                total_accuracy += batch_accuracy
+                n_batches += 1
+
         avg_loss = total_loss / n_batches
         avg_accuracy = total_accuracy / n_batches
         return avg_loss, avg_accuracy
@@ -696,20 +691,21 @@ class DnEmbeddingModel(ScoringModelBase):
             prompt_features_dim: int,
             model_embedding_dim: int,
             hidden_dims: list[int],
+            dropout: float = 0.2,
         ) -> None:
             super().__init__()
-            
+
             layers = []
             prev_dim = prompt_embedding_dim + prompt_features_dim + model_embedding_dim
-            
+
             for hidden_dim in hidden_dims:
                 layers.append(nn.Linear(prev_dim, hidden_dim))
-                layers.append(nn.ReLU())
-                layers.append(nn.Dropout(0.2))
+                layers.append(nn.LeakyReLU(0.1))
+                layers.append(nn.Dropout(dropout))
                 prev_dim = hidden_dim
-            
+
             layers.append(nn.Linear(prev_dim, 1))
-            
+
             self.dense_network = nn.Sequential(*layers)
 
         def forward(
