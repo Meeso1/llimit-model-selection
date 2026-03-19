@@ -40,6 +40,15 @@ from src.models import model_loading
 from src.utils.ranking_loss import PairwiseRankingLossType, compute_pairwise_ranking_loss
 
 
+def _grad_norm_for_params(params: list[torch.nn.Parameter]) -> float:
+    """Compute total L2 gradient norm for params (before clipping)."""
+    total_norm_sq = 0.0
+    for p in params:
+        if p.grad is not None:
+            total_norm_sq += p.grad.data.norm(2).item() ** 2
+    return total_norm_sq ** 0.5 if total_norm_sq > 0 else 0.0
+
+
 class TransformerEmbeddingModel(ScoringModelBase):
     def __init__(
         self,
@@ -62,10 +71,12 @@ class TransformerEmbeddingModel(ScoringModelBase):
         checkpoint_name: str | None = None,
         seed: int = 42,
         ranking_loss_type: PairwiseRankingLossType = "margin_ranking",
+        proj_dim: int = 64,
     ) -> None:
         super().__init__(run_name)
 
         self.ranking_loss_type = ranking_loss_type
+        self.proj_dim = proj_dim
         self.transformer_model_name = transformer_model_name
         self.finetuning_spec = finetuning_spec if finetuning_spec is not None else LoraSpec(rank=16, alpha=32, dropout=0.05)
         self.hidden_dims = hidden_dims if hidden_dims is not None else [256, 128]
@@ -147,6 +158,7 @@ class TransformerEmbeddingModel(ScoringModelBase):
             hidden_dims=self.hidden_dims,
             dropout=self.dropout,
             pooling_method=self._pooling_method,
+            proj_dim=self.proj_dim,
             quiet=self.print_every is None,
         ).to(self.device)
 
@@ -171,6 +183,7 @@ class TransformerEmbeddingModel(ScoringModelBase):
             "scoring_head_lr_multiplier": self.scoring_head_lr_multiplier,
             "base_model": self._base_model_name,
             "ranking_loss_type": self.ranking_loss_type,
+            "proj_dim": self.proj_dim,
         }
 
     def train(
@@ -440,6 +453,7 @@ class TransformerEmbeddingModel(ScoringModelBase):
             "base_model_name": self._base_model_name,
             "base_model_state_dict": self._model_outputs_cache.model.get_state_dict() if self._model_outputs_cache is not None else None,
             "ranking_loss_type": self.ranking_loss_type,
+            "proj_dim": self.proj_dim,
         }
 
     @classmethod
@@ -492,6 +506,7 @@ class TransformerEmbeddingModel(ScoringModelBase):
                 checkpoint_name=state_dict.get("checkpoint_name", None),
                 seed=state_dict["seed"],
                 ranking_loss_type=state_dict.get("ranking_loss_type", "margin_ranking"),
+                proj_dim=state_dict["proj_dim"],
             )
         
         model.embedding_model = EmbeddingModelBase.load_from_state_dict(state_dict["embedding_model_state_dict"])
@@ -647,7 +662,7 @@ class TransformerEmbeddingModel(ScoringModelBase):
         )
 
     def _train_epoch(
-        self, 
+        self,
         epoch: int,
         dataloader: DataLoader[dict[str, torch.Tensor]],
         val_dataloader: DataLoader[dict[str, torch.Tensor]] | None,
@@ -659,7 +674,9 @@ class TransformerEmbeddingModel(ScoringModelBase):
             total_loss = 0.0
             total_accuracy = 0.0
             n_batches = 0
-            
+            metrics = self._EpochMetricsAccumulator()
+            transformer_params, projection_params, scoring_head_params = self.network.get_param_groups_for_metrics()
+
             for batch in dataloader:
                 input_ids = batch["input_ids"].to(self.device)  # [batch_size, seq_len]
                 attention_mask = batch["attention_mask"].to(self.device)  # [batch_size, seq_len]
@@ -667,50 +684,52 @@ class TransformerEmbeddingModel(ScoringModelBase):
                 model_embedding_a = batch["model_embedding_a"].to(self.device)  # [batch_size, model_embedding_dim]
                 model_embedding_b = batch["model_embedding_b"].to(self.device)  # [batch_size, model_embedding_dim]
                 labels = batch["labels"].to(self.device)  # [batch_size]
-                
+
                 optimizer.zero_grad()
-                scores_a = self.network(
-                    input_ids,
-                    attention_mask,
+                prompt_embedding = self.network.forward_encode(input_ids, attention_mask)  # [batch_size, transformer_hidden_size]
+                scores_a = self.network.forward_score(
+                    prompt_embedding,
                     prompt_features,
                     model_embedding_a,
                 )  # [batch_size]
-                scores_b = self.network(
-                    input_ids,
-                    attention_mask,
+                scores_b = self.network.forward_score(
+                    prompt_embedding,
                     prompt_features,
                     model_embedding_b,
                 )  # [batch_size]
-                
+
                 scores_a, scores_b = self._augment_with_base_scores(scores_a, scores_b, batch["original_indices"])
+
+                self._add_projection_norms_to_accumulator(metrics, prompt_embedding, prompt_features, model_embedding_a)
 
                 loss: torch.Tensor = compute_pairwise_ranking_loss(
                     self.ranking_loss_type, scores_a, scores_b, labels, margin=0.1
                 )
                 loss.backward()
+                self._add_gradient_norms_to_accumulator(metrics, transformer_params, projection_params, scoring_head_params)
+
                 torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=1.0)
                 optimizer.step()
-                
+
                 total_loss += loss.item()
-                
                 with torch.no_grad():
-                    batch_accuracy = compute_pairwise_accuracy(scores_a, scores_b, labels)
-                    total_accuracy += batch_accuracy
-                
+                    total_accuracy += compute_pairwise_accuracy(scores_a, scores_b, labels)
                 n_batches += 1
-            
+
             avg_loss = total_loss / n_batches
             avg_accuracy = total_accuracy / n_batches
-            
+            additional_metrics = metrics.to_dict(n_batches)
+
             with Timer("perform_validation", verbosity="start+end", parent=timer):
                 val_loss, val_accuracy = self._perform_validation(val_dataloader, timer) if val_dataloader is not None else (None, None)
-            
+
             entry = TrainingHistoryEntry(
                 epoch=epoch,
                 total_loss=avg_loss,
                 val_loss=val_loss,
                 train_accuracy=avg_accuracy,
                 val_accuracy=val_accuracy,
+                additional_metrics=additional_metrics,
             )
             self._history_entries.append(entry)
             
@@ -744,19 +763,18 @@ class TransformerEmbeddingModel(ScoringModelBase):
                 model_embedding_b = batch["model_embedding_b"].to(self.device)  # [batch_size, model_embedding_dim]
                 labels = batch["labels"].to(self.device)  # [batch_size]
                 
-                scores_a = self.network(
-                    input_ids,
-                    attention_mask,
+                prompt_embedding = self.network.forward_encode(input_ids, attention_mask)  # [batch_size, transformer_hidden_size]
+                scores_a = self.network.forward_score(
+                    prompt_embedding,
                     prompt_features,
                     model_embedding_a,
                 )  # [batch_size]
-                scores_b = self.network(
-                    input_ids,
-                    attention_mask,
+                scores_b = self.network.forward_score(
+                    prompt_embedding,
                     prompt_features,
                     model_embedding_b,
                 )  # [batch_size]
-                
+
                 scores_a, scores_b = self._augment_with_base_scores(scores_a, scores_b, batch["original_indices"])
 
                 loss: torch.Tensor = compute_pairwise_ranking_loss(
@@ -811,6 +829,34 @@ class TransformerEmbeddingModel(ScoringModelBase):
         if self.print_every is not None:
             print(f"Base model loaded")
 
+    def _add_projection_norms_to_accumulator(
+        self,
+        accumulator: "TransformerEmbeddingModel._EpochMetricsAccumulator",
+        prompt_embedding: torch.Tensor,
+        prompt_features: torch.Tensor,
+        model_embedding_a: torch.Tensor,
+    ) -> None:
+        with torch.no_grad():
+            prompt_repr = self.network.prompt_emb_proj(prompt_embedding)
+            feat_repr = self.network.feat_proj(prompt_features)
+            model_repr = self.network.model_proj(model_embedding_a)
+            prompt_combined = torch.cat([prompt_repr, feat_repr], dim=1)
+            interaction = prompt_combined * model_repr
+        accumulator.add_projection_norms(prompt_repr, feat_repr, model_repr, interaction)
+
+    def _add_gradient_norms_to_accumulator(
+        self,
+        accumulator: "TransformerEmbeddingModel._EpochMetricsAccumulator",
+        transformer_params: list[torch.nn.Parameter],
+        projection_params: list[torch.nn.Parameter],
+        scoring_head_params: list[torch.nn.Parameter],
+    ) -> None:
+        accumulator.add_gradient_norms(
+            _grad_norm_for_params(transformer_params),
+            _grad_norm_for_params(projection_params),
+            _grad_norm_for_params(scoring_head_params),
+        )
+
     def _log_epoch_result(self, result: "TransformerEmbeddingModel.EpochResult") -> None:
         if self.print_every is None:
             return
@@ -822,6 +868,52 @@ class TransformerEmbeddingModel(ScoringModelBase):
             print(f"Epoch {result.epoch:>4}: loss = {result.total_loss:.4f}, accuracy = {(result.train_accuracy*100):.4f}% - {result.duration:.2f}s")
         else:
             print(f"Epoch {result.epoch:>4}: loss = {result.total_loss:.4f}/{result.val_loss:.4f}, accuracy = {(result.train_accuracy*100):.4f}%/{(result.val_accuracy*100):.4f}% - {result.duration:.2f}s")
+
+    @dataclass
+    class _EpochMetricsAccumulator:
+        """Accumulates projection and gradient norms over an epoch for diagnostic metrics."""
+
+        prompt_emb_proj_norm: float = 0.0
+        feat_proj_norm: float = 0.0
+        model_proj_norm: float = 0.0
+        interaction_norm: float = 0.0
+        transformer_grad_norm: float = 0.0
+        projection_grad_norm: float = 0.0
+        scoring_head_grad_norm: float = 0.0
+
+        def add_projection_norms(
+            self,
+            prompt_repr: torch.Tensor,
+            feat_repr: torch.Tensor,
+            model_repr: torch.Tensor,
+            interaction: torch.Tensor,
+        ) -> None:
+            self.prompt_emb_proj_norm += prompt_repr.norm(dim=1).mean().item()
+            self.feat_proj_norm += feat_repr.norm(dim=1).mean().item()
+            self.model_proj_norm += model_repr.norm(dim=1).mean().item()
+            self.interaction_norm += interaction.norm(dim=1).mean().item()
+
+        def add_gradient_norms(
+            self,
+            transformer_norm: float,
+            projection_norm: float,
+            scoring_head_norm: float,
+        ) -> None:
+            self.transformer_grad_norm += transformer_norm
+            self.projection_grad_norm += projection_norm
+            self.scoring_head_grad_norm += scoring_head_norm
+
+        def to_dict(self, n_batches: int) -> dict[str, float]:
+            scale = 1.0 / n_batches
+            return {
+                "prompt_emb_proj_norm": self.prompt_emb_proj_norm * scale,
+                "feat_proj_norm": self.feat_proj_norm * scale,
+                "model_proj_norm": self.model_proj_norm * scale,
+                "interaction_norm": self.interaction_norm * scale,
+                "transformer_grad_norm": self.transformer_grad_norm * scale,
+                "projection_grad_norm": self.projection_grad_norm * scale,
+                "scoring_head_grad_norm": self.scoring_head_grad_norm * scale,
+            }
 
     @dataclass
     class EpochResult:
@@ -865,8 +957,8 @@ class TransformerEmbeddingModel(ScoringModelBase):
             }
 
     class _TransformerNetwork(nn.Module):
-        """Transformer-based network with configurable fine-tuning."""
-        
+        """Transformer-based network with two-tower interaction architecture."""
+
         def __init__(
             self,
             transformer_model_name: str,
@@ -876,12 +968,14 @@ class TransformerEmbeddingModel(ScoringModelBase):
             hidden_dims: list[int],
             dropout: float,
             pooling_method: PoolingMethod,
+            proj_dim: int = 64,
             quiet: bool = False,
         ) -> None:
             super().__init__()
-            
+
             self.pooling_method = pooling_method
-            
+            self.proj_dim = proj_dim
+
             quantization_config = finetuning_spec.get_quantization_config()
             if quantization_config is not None:
                 self.transformer = AutoModel.from_pretrained(
@@ -891,25 +985,71 @@ class TransformerEmbeddingModel(ScoringModelBase):
                 )
             else:
                 self.transformer = AutoModel.from_pretrained(transformer_model_name)
-            
+
             transformer_hidden_size: int = self.transformer.config.hidden_size
-            
+
             self.transformer = finetuning_spec.apply_to_model(self.transformer, quiet=quiet)
-            
-            # Build configurable scoring head
+
+            self.prompt_emb_proj = nn.Sequential(
+                nn.Linear(transformer_hidden_size, 2 * proj_dim),
+                nn.LeakyReLU(0.1),
+            )
+            self.feat_proj = nn.Sequential(
+                nn.Linear(prompt_features_dim, proj_dim),
+                nn.LeakyReLU(0.1),
+            )
+            self.model_proj = nn.Sequential(
+                nn.Linear(model_embedding_dim, 3 * proj_dim),
+                nn.LeakyReLU(0.1),
+            )
+            scoring_head_input_dim = 3 * proj_dim
+
             layers = []
-            prev_dim = transformer_hidden_size + prompt_features_dim + model_embedding_dim
-            
+            prev_dim = scoring_head_input_dim
+
             for hidden_dim in hidden_dims:
                 layers.append(nn.Linear(prev_dim, hidden_dim))
                 layers.append(nn.LeakyReLU(0.1))
                 layers.append(nn.Dropout(dropout))
                 prev_dim = hidden_dim
-            
+
             layers.append(nn.Linear(prev_dim, 1))
-            
+
             self.scoring_head = nn.Sequential(*layers)
-        
+
+        def forward_encode(
+            self,
+            input_ids: torch.Tensor,  # [batch_size, seq_len]
+            attention_mask: torch.Tensor,  # [batch_size, seq_len]
+        ) -> torch.Tensor:
+            outputs: BaseModelOutputWithPast = self.transformer(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+            )
+
+            return pool_embeddings(
+                outputs.last_hidden_state,  # [batch_size, seq_len, transformer_hidden_size]
+                attention_mask,  # [batch_size, seq_len]
+                self.pooling_method,
+            )  # [batch_size, transformer_hidden_size]
+
+        def forward_score(
+            self,
+            prompt_embedding: torch.Tensor,  # [batch_size, transformer_hidden_size]
+            prompt_features: torch.Tensor,  # [batch_size, prompt_features_dim]
+            model_embedding: torch.Tensor,  # [batch_size, model_embedding_dim]
+        ) -> torch.Tensor:
+            prompt_repr = self.prompt_emb_proj(prompt_embedding)  # [batch_size, 2 * proj_dim]
+            feat_repr = self.feat_proj(prompt_features)  # [batch_size, proj_dim]
+            model_repr = self.model_proj(model_embedding)  # [batch_size, 3 * proj_dim]
+
+            prompt_combined = torch.cat([prompt_repr, feat_repr], dim=1)  # [batch_size, 3 * proj_dim]
+            interaction = prompt_combined * model_repr  # [batch_size, 3 * proj_dim]
+
+            output: torch.Tensor = self.scoring_head(interaction)  # [batch_size, 1]
+
+            return output.squeeze(-1)  # [batch_size]
+
         def forward(
             self,
             input_ids: torch.Tensor,  # [batch_size, seq_len]
@@ -917,18 +1057,25 @@ class TransformerEmbeddingModel(ScoringModelBase):
             prompt_features: torch.Tensor,  # [batch_size, prompt_features_dim]
             model_embedding: torch.Tensor,  # [batch_size, model_embedding_dim]
         ) -> torch.Tensor:
-            outputs: BaseModelOutputWithPast = self.transformer(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-            )
-            
-            prompt_embedding = pool_embeddings(
-                outputs.last_hidden_state,  # [batch_size, seq_len, transformer_hidden_size]
-                attention_mask,  # [batch_size, seq_len]
-                self.pooling_method,
-            )  # [batch_size, transformer_hidden_size]
-            
-            combined = torch.cat([prompt_embedding, prompt_features, model_embedding], dim=1)  # [batch_size, combined_dim]
-            output: torch.Tensor = self.scoring_head(combined)  # [batch_size, 1]
-            
-            return output.squeeze(-1)  # [batch_size]
+            prompt_embedding = self.forward_encode(input_ids, attention_mask)
+            return self.forward_score(prompt_embedding, prompt_features, model_embedding)
+
+        def get_param_groups_for_metrics(
+            self,
+        ) -> tuple[list[torch.nn.Parameter], list[torch.nn.Parameter], list[torch.nn.Parameter]]:
+            """Return (transformer_params, projection_params, scoring_head_params) for gradient norm metrics."""
+            transformer_params = []
+            projection_params = []
+            scoring_head_params = []
+
+            for name, param in self.named_parameters():
+                if not param.requires_grad:
+                    continue
+                if "transformer" in name:
+                    transformer_params.append(param)
+                elif "scoring_head" in name:
+                    scoring_head_params.append(param)
+                elif "prompt_emb_proj" in name or "feat_proj" in name or "model_proj" in name:
+                    projection_params.append(param)
+
+            return transformer_params, projection_params, scoring_head_params

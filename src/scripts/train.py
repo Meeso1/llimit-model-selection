@@ -301,6 +301,7 @@ def _create_starting_transformer_embedding(training_spec: TrainingSpecification)
         scoring_head_lr_multiplier=model_spec.scoring_head_lr_multiplier,
         base_model_name=model_spec.base_model,
         ranking_loss_type=model_spec.ranking_loss_type,
+        proj_dim=model_spec.proj_dim,
         print_every=training_spec.log.print_every,
         seed=training_spec.data.seed,
     )

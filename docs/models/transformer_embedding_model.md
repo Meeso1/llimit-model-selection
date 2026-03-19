@@ -34,11 +34,16 @@ The model consists of three main components:
   - **BitFit**: Fine-tune only bias terms
   - **Full**: Fine-tune all parameters
 
-#### 3. Scoring Head
-- Configurable multi-layer perceptron (MLP)
-- Input: concatenation of `[prompt_embedding, prompt_features, model_embedding]`
-- Applies LeakyReLU activation and dropout between layers
-- Output: Single scalar score for the prompt-model pair
+#### 3. Two-Tower Interaction and Scoring Head
+
+The model uses a two-tower interaction architecture that ensures the prompt representation directly modulates the score difference in pairwise training:
+
+- **Projection layers**: Each modality is projected to a common space:
+  - `prompt_embedding` → `2 * proj_dim`
+  - `prompt_features` → `proj_dim`
+  - `model_embedding` → `3 * proj_dim`
+- **Element-wise interaction**: The model embedding has no direct path to the output. Instead, `score = f(prompt_combined * model_repr)` where `prompt_combined` is the concatenation of projected prompt embedding and features. This ensures the score difference `score_a - score_b` is directly modulated by the prompt, giving the transformer strong gradient signal.
+- **Scoring head**: Shallow MLP on the interaction vector only. Applies LeakyReLU and dropout between layers. Output: single scalar score.
 
 ## Training Process
 
@@ -104,11 +109,9 @@ For each prompt, the model processes two models (A and B) that were compared:
 
 ### Inference
 For each prompt and list of models:
-- Tokenizes the prompt
+- Tokenizes the prompt and encodes it with the transformer (once per prompt batch)
 - Extracts prompt features
-- For each model:
-  - Concatenates `[prompt_embedding, prompt_features, model_embedding]`
-  - Passes through the network to get a score
+- For each model: runs `forward_score(prompt_embedding, prompt_features, model_embedding)` to get a score
 - Returns a dictionary mapping model names to scores
 
 ## Fine-tuning Methods
@@ -164,6 +167,7 @@ The model supports weighted sampling to handle imbalanced model representation:
 - `hidden_dims`: List of hidden layer sizes for scoring head (e.g., `[256, 128]`)
 - `dropout`: Dropout rate for scoring head (default: 0.2)
 - `max_length`: Maximum sequence length for tokenization (default: 256)
+- `proj_dim`: Projection dimension for the two-tower interaction (default: 64). Required when loading from state dict.
 
 ### Fine-tuning
 - `finetuning_spec`: Specification for transformer fine-tuning (see above)
@@ -231,6 +235,7 @@ model = TransformerEmbeddingModel(
     min_model_comparisons=1000,
     embedding_model_epochs=10,
     scoring_head_lr_multiplier=5.0,
+    proj_dim=64,
     seed=42,
 )
 
@@ -311,11 +316,20 @@ This ensures optimal performance across different transformer architectures.
 
 ## Validation
 
-The model tracks both training and validation metrics:
+The model tracks training and validation metrics:
 - **Loss**: Margin ranking loss
 - **Accuracy**: Pairwise accuracy (how often the model correctly predicts the winner)
 
+Additional diagnostic metrics are logged:
+- **Modality projected norms** (`prompt_emb_proj_norm`, `feat_proj_norm`, `model_proj_norm`): L2 norms of each projected modality — useful for detecting imbalance
+- **Interaction norm**: L2 norm of the element-wise product — collapse toward zero indicates orthogonal representations
+- **Gradient norms** (`transformer_grad_norm`, `projection_grad_norm`, `scoring_head_grad_norm`): Per-component gradient magnitudes — useful for diagnosing relative learning rates
+
 Validation is performed after each epoch without sample balancing.
+
+### Training Efficiency
+
+During pairwise training, the transformer encodes each prompt once per batch; the same `prompt_embedding` is reused for both model A and model B scores. This halves transformer compute compared to running the full forward pass twice.
 
 ## Output
 

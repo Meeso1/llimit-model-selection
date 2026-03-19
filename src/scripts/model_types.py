@@ -108,6 +108,7 @@ class TransformerEmbeddingSpecification(ModelSpecBase):
     scoring_head_lr_multiplier: float = 1.0
     base_model: str | None = None
     ranking_loss_type: PairwiseRankingLossType = "margin_ranking"
+    proj_dim: int = 64
 
 
 class ResponsePredictiveSpecification(ModelSpecBase):
