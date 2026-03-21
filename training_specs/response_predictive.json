@@ -29,9 +29,9 @@
       "dropout": 0.2,
       "predictor_input_proj_dim": 64,
       "scorer_input_proj_dim": 64,
-      "real_repr_ratio": 0.8,
-      "real_repr_decay_per_epoch": 0.04,
-      "min_real_repr_ratio": 0.1,
+      "warmup_epochs": 3,
+      "score_consistency_loss_weight": 0.1,
+      "repr_dist_kl_loss_weight": 0.01,
       "optimizer": {
         "optimizer_type": "adamw",
         "learning_rate": 0.001,

@@ -23,9 +23,9 @@ def _weighted_metric(
 def plot_metrics(log: TrainingLog) -> plt.Figure:
     """Create a figure with all metrics for the response predictive model.
 
-    Layout: 6 rows × 2 columns.
+    Layout: 7 rows × 2 columns.
     """
-    fig, axes = plt.subplots(6, 2, figsize=(14, 30))
+    fig, axes = plt.subplots(7, 2, figsize=(14, 35))
 
     plot_total_loss(axes[0, 0], log)
     plot_accuracy(axes[0, 1], log)
@@ -34,11 +34,13 @@ def plot_metrics(log: TrainingLog) -> plt.Figure:
     plot_repr_mean_variance(axes[2, 0], log)
     plot_predictability_loss(axes[2, 1], log)
     plot_repr_kl_loss(axes[3, 0], log)
-    plot_scoring_loss(axes[3, 1], log)
+    plot_scoring_loss_breakdown(axes[3, 1], log)
     plot_prediction_loss(axes[4, 0], log)
-    plot_real_repr_ratio(axes[4, 1], log)
-    plot_component_losses_weighted(axes[5, 0], log)
-    plot_component_losses_normalized(axes[5, 1], log)
+    plot_pred_scoring_weight(axes[4, 1], log)
+    plot_score_consistency_loss(axes[5, 0], log)
+    plot_repr_dist_kl_loss(axes[5, 1], log)
+    plot_component_losses_weighted(axes[6, 0], log)
+    plot_component_losses_normalized(axes[6, 1], log)
 
     fig.tight_layout()
     return fig
@@ -58,7 +60,7 @@ def plot_accuracy(axes: plt.Axes, log: TrainingLog) -> None:
         axes,
         _get_metric(log, 'train_accuracy'),
         _get_metric(log, 'val_accuracy'),
-        'Accuracy',
+        'Accuracy (Predicted Representations)',
     )
 
 
@@ -106,14 +108,26 @@ def plot_repr_kl_loss(axes: plt.Axes, log: TrainingLog) -> None:
         axes,
         _get_metric(log, 'repr_kl_loss'),
         _get_metric(log, 'val_repr_kl_loss'),
-        'Representation KL Loss',
+        'Representation KL Loss (Encoder → N(0,1))',
         mark_best_val=False,
     )
 
 
-def plot_scoring_loss(axes: plt.Axes, log: TrainingLog) -> None:
-    """Training-only metric."""
-    _plot_loss(axes, _get_metric(log, 'scoring_loss'), 'Scoring Loss (Training)')
+def plot_scoring_loss_breakdown(axes: plt.Axes, log: TrainingLog) -> None:
+    """Real-repr vs predicted-repr ranking losses (training only).
+
+    Shows whether the two scoring paths are balanced and whether the predictor
+    is closing the gap with real representations over training.
+    """
+    _plot_loss_components(
+        axes,
+        {
+            'Real-repr scoring': _get_metric(log, 'real_scoring_loss'),
+            'Pred-repr scoring': _get_metric(log, 'pred_scoring_loss'),
+        },
+        'Scoring Loss Breakdown (Training)',
+        normalize=False,
+    )
 
 
 def plot_prediction_loss(axes: plt.Axes, log: TrainingLog) -> None:
@@ -121,16 +135,37 @@ def plot_prediction_loss(axes: plt.Axes, log: TrainingLog) -> None:
     _plot_loss(axes, _get_metric(log, 'prediction_loss'), 'Prediction Loss (Training)')
 
 
-def plot_real_repr_ratio(axes: plt.Axes, log: TrainingLog) -> None:
-    """Curriculum schedule - fraction of real representations used during training."""
-    idx, vals = _filter_nones(_get_metric(log, 'current_real_repr_ratio'))
+def plot_pred_scoring_weight(axes: plt.Axes, log: TrainingLog) -> None:
+    """Warmup weight for the predicted-repr scoring path (0 → 1 over warmup_epochs)."""
+    idx, vals = _filter_nones(_get_metric(log, 'pred_scoring_weight'))
     if len(vals) == 0:
         axes.set_visible(False)
         return
     axes.plot(idx, vals)
-    axes.set_ylim(0, 1)
-    axes.set_ylabel("Ratio")
-    axes.set_title("Real Representation Ratio (curriculum)")
+    axes.set_ylim(0, 1.05)
+    axes.set_ylabel("Weight")
+    axes.set_title("Predicted-Repr Scoring Weight (warmup)")
+
+
+def plot_score_consistency_loss(axes: plt.Axes, log: TrainingLog) -> None:
+    """MSE between predicted-repr scores and real-repr scores (functional alignment)."""
+    _plot_combined_loss(
+        axes,
+        _get_metric(log, 'score_consistency_loss'),
+        _get_metric(log, 'val_score_consistency_loss'),
+        'Score Consistency Loss',
+    )
+
+
+def plot_repr_dist_kl_loss(axes: plt.Axes, log: TrainingLog) -> None:
+    """Symmetric KL between pred and real representation distributions."""
+    _plot_combined_loss(
+        axes,
+        _get_metric(log, 'repr_dist_kl_loss'),
+        _get_metric(log, 'val_repr_dist_kl_loss'),
+        'Representation Distribution KL Loss',
+        mark_best_val=False,
+    )
 
 
 def plot_component_losses_weighted(axes: plt.Axes, log: TrainingLog) -> None:
@@ -143,14 +178,18 @@ def plot_component_losses_weighted(axes: plt.Axes, log: TrainingLog) -> None:
     pw = float(log.config.get('prediction_loss_weight', 1.0))
     plw = float(log.config.get('predictability_loss_weight', 0.2))
     kw = float(log.config.get('repr_kl_loss_weight', 0.01))
+    scw = float(log.config.get('score_consistency_loss_weight', 0.1))
+    dkw = float(log.config.get('repr_dist_kl_loss_weight', 0.01))
 
     _plot_loss_components(
         axes,
         {
-            f'Scoring (×1)': _get_metric(log, 'scoring_loss'),
+            'Scoring (×1)': _get_metric(log, 'scoring_loss'),
             f'Prediction (×{pw:g})': _weighted_metric(_get_metric(log, 'prediction_loss'), pw),
             f'Predictability (×{plw:g})': _weighted_metric(_get_metric(log, 'predictability_loss'), plw),
-            f'KL (×{kw:g})': _weighted_metric(_get_metric(log, 'repr_kl_loss'), kw),
+            f'Repr KL (×{kw:g})': _weighted_metric(_get_metric(log, 'repr_kl_loss'), kw),
+            f'Score Consistency (×{scw:g})': _weighted_metric(_get_metric(log, 'score_consistency_loss'), scw),
+            f'Dist KL (×{dkw:g})': _weighted_metric(_get_metric(log, 'repr_dist_kl_loss'), dkw),
         },
         'Weighted Component Losses (Training)',
         normalize=False,
@@ -166,14 +205,18 @@ def plot_component_losses_normalized(axes: plt.Axes, log: TrainingLog) -> None:
     pw = float(log.config.get('prediction_loss_weight', 1.0))
     plw = float(log.config.get('predictability_loss_weight', 0.2))
     kw = float(log.config.get('repr_kl_loss_weight', 0.01))
+    scw = float(log.config.get('score_consistency_loss_weight', 0.1))
+    dkw = float(log.config.get('repr_dist_kl_loss_weight', 0.01))
 
     _plot_loss_components(
         axes,
         {
-            f'Scoring (×1)': _get_metric(log, 'scoring_loss'),
+            'Scoring (×1)': _get_metric(log, 'scoring_loss'),
             f'Prediction (×{pw:g})': _weighted_metric(_get_metric(log, 'prediction_loss'), pw),
             f'Predictability (×{plw:g})': _weighted_metric(_get_metric(log, 'predictability_loss'), plw),
-            f'KL (×{kw:g})': _weighted_metric(_get_metric(log, 'repr_kl_loss'), kw),
+            f'Repr KL (×{kw:g})': _weighted_metric(_get_metric(log, 'repr_kl_loss'), kw),
+            f'Score Consistency (×{scw:g})': _weighted_metric(_get_metric(log, 'score_consistency_loss'), scw),
+            f'Dist KL (×{dkw:g})': _weighted_metric(_get_metric(log, 'repr_dist_kl_loss'), dkw),
         },
         'Weighted Component Losses Normalized (Training)',
         normalize=True,

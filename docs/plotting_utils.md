@@ -98,22 +98,24 @@ with the desired values extracted from the log.
 
 ### `response_predictive.py`
 
-`plot_metrics` produces a 6 × 2 grid.
+`plot_metrics` produces a 7 × 2 grid.
 
 | Function | Metric keys | Notes |
 |---|---|---|
 | `plot_total_loss` | `train_loss` / `val_loss` | |
-| `plot_accuracy` | `train_accuracy` / `val_accuracy` | |
-| `plot_scorer_real_repr_accuracy` | `scorer_real_repr_accuracy` / val | |
+| `plot_accuracy` | `train_accuracy` / `val_accuracy` | Accuracy uses predicted representations (matches inference) |
+| `plot_scorer_real_repr_accuracy` | `scorer_real_repr_accuracy` / val | Upper-bound diagnostic |
 | `plot_prediction_quality` | `prediction_quality` / val | No best-val line |
 | `plot_repr_mean_variance` | `repr_mean_variance` / val | |
 | `plot_predictability_loss` | `predictability_loss` / val | |
 | `plot_repr_kl_loss` | `repr_kl_loss` / val | No best-val line |
-| `plot_scoring_loss` | `scoring_loss` (training only) | |
+| `plot_scoring_loss_breakdown` | `real_scoring_loss` / `pred_scoring_loss` (training) | Shows balance between two scoring paths |
 | `plot_prediction_loss` | `prediction_loss` (training only) | |
-| `plot_real_repr_ratio` | `current_real_repr_ratio` (curriculum schedule) | |
-| `plot_component_losses` | scoring, prediction, predictability (training) | Unnormalized — shows which dominates |
-| `plot_component_losses_normalized` | same three (training) | Each normalized to start at 1 — shows improvement rate |
+| `plot_pred_scoring_weight` | `pred_scoring_weight` (warmup schedule) | Linear ramp 0→1 over `warmup_epochs` |
+| `plot_score_consistency_loss` | `score_consistency_loss` / val | MSE between pred-repr and real-repr scores |
+| `plot_repr_dist_kl_loss` | `repr_dist_kl_loss` / val | Symmetric KL between pred/real repr distributions; no best-val line |
+| `plot_component_losses_weighted` | scoring, prediction, predictability, repr KL, score consistency, dist KL (training) | Weighted — shows which dominates |
+| `plot_component_losses_normalized` | same six (training) | Each normalized to start at 1 — shows improvement rate |
 
 ### `simple_scoring.py`
 

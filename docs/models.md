@@ -43,7 +43,7 @@ This directory contains documentation for different model implementations.
 - **Type**: Three-component model with explicit response prediction (experimental)
 - **Input**: Prompt embeddings + 45 prompt features + Model embeddings + (during training) Response embeddings + 32 response features
 - **Output**: Scores in [-1, 1] for each (prompt, model) combination
-- **Training**: Joint training with prediction loss + scoring loss, mixed-representation schedule
+- **Training**: Joint training with dual-path scoring (real + predicted representations), prediction losses, and distribution-matching regularisation
 - **Inference**: Uses predicted response representations (no actual responses needed)
 - **Key Innovation**: Dense response-level supervision instead of just binary comparison labels
 

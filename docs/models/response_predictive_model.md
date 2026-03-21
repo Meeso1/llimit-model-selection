@@ -34,11 +34,11 @@ layers:
 
 **Output:** `response_repr` of shape `[response_repr_dim]`
 
-**Why trainable?** A frozen target (e.g., raw sentence transformer embedding) is arbitrary. A trainable encoder learns a representation constrained by two objectives:
-1. **Predictability**: Must be predictable from (prompt, model_embedding)
-2. **Usefulness for scoring**: Must contain information useful for quality assessment
+**Why trainable?** A frozen target (e.g., raw sentence transformer embedding) is arbitrary. A trainable encoder learns a representation shaped by two competing objectives:
+1. **Usefulness for scoring**: Must contain information the scorer can use to rank responses correctly
+2. **Predictability**: Should be reproducible from (prompt, model_embedding) alone
 
-These constraints together define an optimal representation space for this task.
+The ideal representation is the **middle ground** — rich enough to be useful for scoring, but constrained to what the predictor can actually produce from prompt and model information. Features that are useful but unforeseeable from the prompt (e.g. one-off hallucinations) should be discarded; features that are easy to predict but irrelevant for scoring should also be discarded. Both constraints are applied simultaneously during training.
 
 ### Component 2: ResponsePredictor (MLP)
 
@@ -90,56 +90,57 @@ layers:
 
 ### Joint Training
 
-All three components (ResponseEncoder, ResponsePredictor, ResponseScorer) train simultaneously with three loss functions:
+All three components (ResponseEncoder, ResponsePredictor, ResponseScorer) train simultaneously with six loss terms:
 
 ```
-total_loss = scoring_loss + alpha * prediction_loss + beta * predictability_loss + gamma * repr_kl_loss
+total_loss = (real_scoring_loss + pred_scoring_weight * pred_scoring_loss)
+           + alpha * prediction_loss
+           + beta  * predictability_loss
+           + gamma * repr_kl_loss
+           + delta * score_consistency_loss
+           + zeta  * repr_dist_kl_loss
 ```
 
 Where:
-- `scoring_loss`: Margin ranking loss on pairwise model comparisons
-- `prediction_loss`: Trains the **predictor** to match the encoder's output — encoder is treated as a fixed target (its output is detached)
-- `predictability_loss`: Trains the **encoder** to produce representations the predictor can currently match — predictor output is detached
-- `repr_kl_loss`: KL divergence of the batch representation distribution from N(0, 1), applied to encoder outputs only — prevents representation collapse
-- Both `prediction_loss` and `predictability_loss` use the same `prediction_loss_type` function (MSE, cosine, or Huber). MSE is the natural pairing with the KL regularisation since the KL loss normalises the representation space, making all dimensions roughly equally scaled and MSE gradients well-balanced.
-- `alpha`: `prediction_loss_weight` hyperparameter (default: 1.0)
-- `beta`: `predictability_loss_weight` hyperparameter (default: 0.2)
-- `gamma`: `repr_kl_loss_weight` hyperparameter (default: 0.01)
+- `real_scoring_loss`: Ranking loss when scorer is fed **real** (encoder-produced) representations. Prevents representation collapse to model-identity-only: forces the scorer and encoder to learn features that actually reflect response quality.
+- `pred_scoring_loss`: Ranking loss when scorer is fed **predicted** representations. Ensures the scorer works with the distribution it sees at inference, and tells the predictor which representation dimensions matter for ranking. Weighted by `pred_scoring_weight` (see warmup below).
+- `prediction_loss`: Trains the **predictor** to match the encoder's output per sample — encoder output is detached.
+- `predictability_loss`: Trains the **encoder** to produce representations the predictor can currently match — predictor output is detached.
+- `repr_kl_loss`: KL(N(μ_batch, σ²_batch) ∥ N(0,1)) on encoder outputs — anchors the representation space and prevents collapse.
+- `score_consistency_loss`: MSE between `score(pred_repr)` and `score(real_repr).detach()` — directly optimises that predicted representations produce the same scores as real ones (functional alignment, not just structural similarity).
+- `repr_dist_kl_loss`: Symmetric KL (Jeffrey's divergence) between per-dimension Gaussian distributions of predicted vs real representations within the batch — ensures the predictor's output distribution statistically matches the encoder's, complementing per-sample prediction loss.
+- `alpha`: `prediction_loss_weight` (default: 1.0)
+- `beta`: `predictability_loss_weight` (default: 0.2)
+- `gamma`: `repr_kl_loss_weight` (default: 0.01)
+- `delta`: `score_consistency_loss_weight` (default: 0.1)
+- `zeta`: `repr_dist_kl_loss_weight` (default: 0.01)
 
-**Why two separate losses instead of one?** A single symmetric cosine loss `cosine(pred_repr, real_repr)` creates a bidirectional gradient coupling that causes representation collapse: the encoder learns to ignore response content and simply match whatever the predictor produces, since that minimises the loss even without meaningful representations. By splitting into two asymmetric losses with stop-gradients, each component is trained by clearly separated signals:
+**Why dual scoring paths instead of mixing?** Both paths run every batch. The real-repr path shapes the representation space to encode response quality (prevents the easy local minimum where representations encode only model identity). The pred-repr path ensures the scorer adapts to inference conditions and gives the predictor task-relevant gradient. Together they continuously enforce both constraints from the first epoch, rather than applying them sequentially via a decaying schedule.
 
-| Component | `scoring_loss` gradient | `prediction_loss` gradient | `predictability_loss` gradient |
-|-----------|-------------------------|---------------------------|-------------------------------|
-| **Encoder** | "produce representations useful for ranking" (via real reprs in mixed scorer input) | none (encoder detached) | "move toward what the predictor can currently produce" |
-| **Predictor** | "produce representations useful for ranking" (via predicted reprs in mixed scorer input) | "move toward what the encoder currently produces" | none (predictor detached) |
-| **Scorer** | "rank correctly" | none | none |
+**Gradient flow summary:**
 
-Setting `predictability_loss_weight = 0` fully disconnects the encoder from the predictor's gradients (encoder is shaped only by the scoring objective).
+| Component | `real_scoring_loss` | `pred_scoring_loss` | `prediction_loss` | `predictability_loss` | `score_consistency_loss` |
+|-----------|---------------------|---------------------|-------------------|-----------------------|--------------------------|
+| **Encoder** | "produce representations useful for ranking" | none (no encoder input) | none (encoder detached) | "move toward predictor" | none (real scores detached) |
+| **Predictor** | none (no predictor input) | "produce representations useful for ranking" | "move toward encoder" | none (predictor detached) | "produce reprs that score the same as real ones" |
+| **Scorer** | "rank correctly with real reprs" | "rank correctly with predicted reprs" | none | none | "treat pred and real reprs consistently" |
 
-### Mixed-Representation Training
+Setting `predictability_loss_weight = 0` fully disconnects the encoder from the predictor's gradients.
 
-During training, the ResponseScorer sees a mix of real (encoder-produced) and predicted representations. This bridges the distribution gap between training and inference.
+### Warmup Schedule
 
-**Schedule (linear decay with floor):**
+`pred_scoring_weight` ramps linearly from 0 to 1 over the first `warmup_epochs` epochs:
+
 ```python
-current_ratio = max(min_real_repr_ratio, real_repr_ratio - real_repr_decay_per_epoch * (epoch - 1))
+pred_scoring_weight = min(1.0, epoch / max(warmup_epochs, 1))
 ```
 
-With defaults `real_repr_ratio=0.8`, `real_repr_decay_per_epoch=0.04`, and `min_real_repr_ratio=0.1`, the ratio decays from 0.8 toward 0.1 (floor). The floor ensures the encoder always receives some scoring gradient through the real-representation branch of the mixer, preventing it from freezing entirely once the ratio would otherwise reach zero.
-
-**Per-sample mixing:**
-```python
-use_real = torch.rand(batch_size, generator=seeded_generator) < current_ratio  # [batch]
-repr_a = torch.where(use_real.unsqueeze(-1), real_repr_a, pred_repr_a)
-repr_b = torch.where(use_real.unsqueeze(-1), real_repr_b, pred_repr_b)
-```
-
-**Rationale:** Early in training, the ResponsePredictor is noisy, so using real representations helps the ResponseScorer learn a good quality function. Later, switching to predicted representations lets the scorer adapt to the distribution it'll see at inference.
+When `warmup_epochs=0` (default), `max(0, 1) = 1` so `weight = min(1.0, epoch/1) = 1.0` from epoch 1 — no warmup, no special case. A nonzero warmup gives the predictor time (via `prediction_loss`) to reach a reasonable initial state before its representations start contributing to the scoring gradient. After warmup, both scoring paths have equal weight.
 
 ### Forward Pass Per Batch
 
 ```python
-# 1. Predict response representations for both models
+# 1. Predict response representations
 pred_repr_a = network.forward_predict(prompt_emb, prompt_features, model_emb_a)
 pred_repr_b = network.forward_predict(prompt_emb, prompt_features, model_emb_b)
 
@@ -147,32 +148,38 @@ pred_repr_b = network.forward_predict(prompt_emb, prompt_features, model_emb_b)
 real_repr_a = network.forward_encode_response(response_emb_a, response_features_a)
 real_repr_b = network.forward_encode_response(response_emb_b, response_features_b)
 
-# 3. Prediction loss: train predictor to match encoder (encoder output detached)
-pred_loss = cosine_loss(pred_repr_a, real_repr_a.detach(), target_ones) \
-          + cosine_loss(pred_repr_b, real_repr_b.detach(), target_ones)
+# 3. Prediction loss: train predictor toward encoder (encoder detached)
+pred_loss = loss(pred_repr_a, real_repr_a.detach()) + loss(pred_repr_b, real_repr_b.detach())
 
-# 4. Predictability loss: nudge encoder toward what predictor can produce (predictor output detached)
-predictability_loss = cosine_loss(pred_repr_a.detach(), real_repr_a, target_ones) \
-                    + cosine_loss(pred_repr_b.detach(), real_repr_b, target_ones)
+# 4. Predictability loss: train encoder toward predictor (predictor detached)
+predictability_loss = loss(pred_repr_a.detach(), real_repr_a) + loss(pred_repr_b.detach(), real_repr_b)
 
-# 5. Mix representations based on current ratio (seeded for reproducibility)
-use_real = torch.rand(batch_size, generator=generator) < current_ratio
-repr_a = torch.where(use_real.unsqueeze(-1), real_repr_a, pred_repr_a)
-repr_b = torch.where(use_real.unsqueeze(-1), real_repr_b, pred_repr_b)
+# 5. KL loss: anchor encoder distribution to N(0,1)
+repr_kl_loss = kl_to_standard_normal(cat([real_repr_a, real_repr_b]))
 
-# 6. Score (mixed) representations
-score_a = network.forward_score(prompt_emb, prompt_features, repr_a)
-score_b = network.forward_score(prompt_emb, prompt_features, repr_b)
-scoring_loss = margin_ranking_loss(score_a, score_b, labels)
+# 6. Score real representations
+score_real_a = network.forward_score(prompt_emb, prompt_features, real_repr_a)
+score_real_b = network.forward_score(prompt_emb, prompt_features, real_repr_b)
+real_scoring_loss = ranking_loss(score_real_a, score_real_b, labels)
 
-# 7. KL-style loss to prevent representation collapse
-all_real_reprs = torch.cat([real_repr_a, real_repr_b], dim=0)  # [2*batch, d]
-mu = all_real_reprs.mean(dim=0)   # [d]
-var = all_real_reprs.var(dim=0)   # [d]
-repr_kl_loss = 0.5 * (var + mu**2 - 1 - log(var)).mean()
+# 7. Score predicted representations
+score_pred_a = network.forward_score(prompt_emb, prompt_features, pred_repr_a)
+score_pred_b = network.forward_score(prompt_emb, prompt_features, pred_repr_b)
+pred_scoring_loss = ranking_loss(score_pred_a, score_pred_b, labels)
 
-# 8. Total loss and backprop
-total_loss = scoring_loss + alpha * pred_loss + beta * predictability_loss + gamma * repr_kl_loss
+# 8. Score-consistency loss (real scores detached: trains predictor and scorer via pred path)
+score_consistency_loss = mse(score_pred_a, score_real_a.detach()) + mse(score_pred_b, score_real_b.detach())
+
+# 9. Distribution-matching KL: symmetric KL between pred and real repr distributions
+repr_dist_kl_loss = symmetric_kl(cat([pred_repr_a, pred_repr_b]), cat([real_repr_a, real_repr_b]))
+
+# 10. Warmup weight
+pred_scoring_weight = min(1.0, epoch / max(warmup_epochs, 1))
+
+# 11. Total loss and backprop
+total_loss = (real_scoring_loss + pred_scoring_weight * pred_scoring_loss
+            + alpha * pred_loss + beta * predictability_loss + gamma * repr_kl_loss
+            + delta * score_consistency_loss + zeta * repr_dist_kl_loss)
 total_loss.backward()
 optimizer.step()
 ```
@@ -219,33 +226,38 @@ All numeric features are normalized using `SimpleScaler` (separate scalers for p
 ## Metrics & Diagnostics
 
 ### Standard Metrics
-- **total_loss**: Combined loss (scoring + α × prediction)
-- **train_accuracy**: Pairwise accuracy on training data
+- **total_loss**: Combined weighted loss
+- **train_accuracy**: Pairwise accuracy on training data (using predicted representations — matches inference)
 - **val_loss** / **val_accuracy**: Validation metrics
 
 ### Additional Metrics (in `additional_metrics`)
 
 | Metric | Range | Description |
 |--------|-------|-------------|
-| `scoring_loss` | [0, ∞) | MarginRankingLoss component |
-| `prediction_loss` | [0, ∞) | CosineEmbeddingLoss for predictor (encoder detached) |
-| `predictability_loss` | [0, ∞) | CosineEmbeddingLoss for encoder predictability (predictor detached) |
+| `scoring_loss` | [0, ∞) | Weighted total scoring loss: `real_scoring_loss + pred_scoring_weight * pred_scoring_loss` |
+| `real_scoring_loss` | [0, ∞) | Ranking loss using real (encoder-produced) representations |
+| `pred_scoring_loss` | [0, ∞) | Ranking loss using predicted representations |
+| `prediction_loss` | [0, ∞) | Per-sample loss training predictor toward encoder (encoder detached) |
+| `predictability_loss` | [0, ∞) | Per-sample loss training encoder toward predictor (predictor detached) |
 | `repr_kl_loss` | [0, ∞) | KL(N(μ_batch, σ²_batch) ∥ N(0,1)) over encoder outputs; 0 = perfect N(0,1) distribution |
+| `score_consistency_loss` | [0, ∞) | MSE between predicted-repr scores and real-repr scores (functional alignment) |
+| `repr_dist_kl_loss` | [0, ∞) | Symmetric KL between per-dimension distributions of pred and real representations |
 | `prediction_quality` | [0, 1] | Mean cosine similarity between predicted and real representations, rescaled: `(1 + cos_sim) / 2`. 0.5 = random, 1.0 = perfect |
-| `scorer_real_repr_accuracy` | [0, 1] | Accuracy when using **real** representations (scorer performance in isolation) |
+| `scorer_real_repr_accuracy` | [0, 1] | Accuracy when using **real** representations (scorer upper bound) |
 | `repr_mean_variance` | [0, ∞) | Mean per-dimension variance of encoder outputs (monitors collapse, should stay > 0.01) |
-| `current_real_repr_ratio` | [0, 1] | Current mixed-representation ratio for this epoch |
+| `pred_scoring_weight` | [0, 1] | Current warmup weight for the predicted-repr scoring loss |
 
-**Validation variants:** All metrics except `current_real_repr_ratio` are also logged with `val_` prefix.
+**Validation variants:** All metrics above are also logged with `val_` prefix.
 
 ### Diagnostic Checks
 
 1. **`prediction_quality` should increase** over epochs. If it stays near 0.5, the ResponsePredictor isn't learning.
 2. **`scorer_real_repr_accuracy` > `train_accuracy`**: If the scorer can't score well even with real representations, the ResponseEncoder isn't producing useful representations.
 3. **Gap between `scorer_real_repr_accuracy` and `train_accuracy`**: Represents the "prediction quality tax" — accuracy lost due to imperfect response prediction.
-4. **`repr_mean_variance` should stay > 0.01**: If it drops toward 0, representation collapse is occurring. The `repr_kl_loss` provides an active gradient against this.
-4a. **`repr_kl_loss` as a collapse signal**: A sharply rising `repr_kl_loss` during early epochs indicates the model is briefly collapsing before recovering. The KL weight should be sufficient to keep this from happening.
-5. **Smooth transition**: As `current_real_repr_ratio` decreases, verify `train_accuracy` doesn't drop suddenly.
+4. **`repr_mean_variance` should stay > 0.01**: If it drops toward 0, representation collapse is occurring. The `repr_kl_loss` and `real_scoring_loss` together provide gradients against this.
+5. **`score_consistency_loss` should decrease**: Indicates predicted representations are producing similar scores to real ones (functionally equivalent, not just structurally close).
+6. **`repr_dist_kl_loss` should decrease**: Indicates predictor's distribution is converging toward encoder's distribution.
+7. **`pred_scoring_weight`**: Increases from 0 to 1 over `warmup_epochs`, then stays at 1.
 
 ## Why This Could Work
 
@@ -272,7 +284,7 @@ Because the ResponseEncoder is trainable, the representation space is shaped by 
 Predicting any representation of a response from (prompt, model embedding) is extremely hard. Responses have high variance. If the ResponsePredictor is too noisy, the ResponseScorer can't extract useful signal.
 
 ### Error Propagation
-The ResponseScorer never sees real response representations at inference. If predicted representations differ significantly from real ones (distribution shift), the scorer may perform poorly. Mixed-representation training mitigates this.
+The ResponseScorer never sees real response representations at inference. If predicted representations differ significantly from real ones (distribution shift), the scorer may perform poorly. Dual-path scoring with score-consistency and distribution-matching losses mitigate this by ensuring the scorer treats both representation types equivalently during training.
 
 ### Representation Collapse
 Degenerate solution: encoder maps all responses to the same point, predictor trivially predicts that point. This is prevented by the scoring loss (identical representations can't differentiate quality) and monitored via `repr_mean_variance`.
@@ -289,16 +301,16 @@ The response representation must be both predictable and informative. These goal
 | `response_repr_dim` | 128 | 32-256 | Lower = easier to predict, higher = more expressive |
 | `prediction_loss_weight` | 1.0 | 0.1-2.0 | Weight for predictor→encoder loss (alpha); trains predictor |
 | `predictability_loss_weight` | 0.2 | 0.0-1.0 | Weight for encoder→predictor nudge (beta); 0 = encoder shaped only by scoring |
-| `repr_kl_loss_weight` | 0.01 | 0.0-0.1 | Weight for KL divergence loss preventing representation collapse (gamma) |
+| `repr_kl_loss_weight` | 0.01 | 0.0-0.1 | Weight for KL(encoder ∥ N(0,1)) preventing representation collapse (gamma) |
+| `score_consistency_loss_weight` | 0.1 | 0.0-0.5 | Weight for MSE between pred and real scores (delta); trains predictor toward functional alignment |
+| `repr_dist_kl_loss_weight` | 0.01 | 0.0-0.05 | Weight for symmetric KL between pred/real repr distributions (zeta) |
+| `warmup_epochs` | 0 | 0-10 | Epochs over which pred_scoring_weight ramps from 0 to 1. 0 = no warmup (weight=1 from epoch 1) |
 | `prediction_loss_type` | `"mse"` | `"mse"`, `"cosine"`, `"huber"` | Loss function for prediction/predictability terms. MSE matches direction and magnitude (recommended with KL). Cosine is direction-only. Huber (SmoothL1) is MSE near zero, L1 for large errors. |
 | `ranking_loss_type` | `"margin_ranking"` | `"margin_ranking"`, `"bradley_terry"` | Pairwise ranking loss for the scoring term: margin hinge or Bradley-Terry (sigmoid cross-entropy). |
 | `encoder_hidden_dims` | [256] | [128]-[256, 128] | Encoder capacity |
 | `predictor_hidden_dims` | [512, 256] | [256, 128]-[512, 384, 256] | Larger for harder prediction |
 | `scorer_hidden_dims` | [256, 128] | [128, 64]-[256, 128] | Similar to existing scoring heads |
 | `dropout` | 0.2 | 0.1-0.3 | Standard regularization |
-| `real_repr_ratio` | 0.8 | 0.5-1.0 | Initial probability of using real representations |
-| `real_repr_decay_per_epoch` | 0.04 | 0.02-0.08 | Linear decay speed |
-| `min_real_repr_ratio` | 0.1 | 0.0-0.3 | Floor for real representation ratio; ensures encoder always gets scoring gradient |
 
 ### Embedding Model Parameters
 
@@ -323,11 +335,13 @@ The model uses an embedding model to learn model representations (same as `DnEmb
 - Each batch:
   1. Predict response representations for both models
   2. Encode real responses (via ResponseEncoder)
-  3. Compute prediction loss (cosine embedding)
-  4. Mix real and predicted representations (using seeded randomness)
-  5. Score mixed representations
-  6. Compute scoring loss (configurable: margin ranking or Bradley-Terry via `ranking_loss_type`)
-  7. Backpropagate combined loss
+  3. Compute prediction loss (predictor toward encoder, encoder detached)
+  4. Compute predictability loss (encoder toward predictor, predictor detached)
+  5. Score **both** real and predicted representations separately
+  6. Compute real-repr and pred-repr ranking losses (configurable: margin ranking or Bradley-Terry)
+  7. Compute score-consistency loss (MSE between pred scores and real scores)
+  8. Compute distribution-matching KL between pred/real representation distributions
+  9. Backpropagate combined loss
 
 ### Why Joint Over Sequential?
 
@@ -409,9 +423,9 @@ Example spec:
       "predictor_hidden_dims": [512, 256],
       "scorer_hidden_dims": [256, 128],
       "dropout": 0.2,
-      "real_repr_ratio": 0.8,
-      "real_repr_decay_per_epoch": 0.04,
-      "min_real_repr_ratio": 0.1,
+      "warmup_epochs": 3,
+      "score_consistency_loss_weight": 0.1,
+      "repr_dist_kl_loss_weight": 0.01,
       "predictability_loss_weight": 0.2,
       "repr_kl_loss_weight": 0.01,
       "prediction_loss_type": "mse",
@@ -498,7 +512,7 @@ If the full model doesn't outperform baselines, the ResponseScorer alone (traine
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
 | Response prediction too noisy | High | High | Lower `response_repr_dim`, monitor `prediction_quality` |
-| Distribution shift (predicted vs real) | Medium | High | Mixed-representation training with linear decay |
+| Distribution shift (predicted vs real) | Medium | High | Dual-path scoring + score-consistency loss + distribution-matching KL |
 | Representation collapse | Medium | High | `repr_kl_loss` provides active gradient against collapse; monitor `repr_mean_variance` and `repr_kl_loss` |
 | Prediction loss dominates | Medium | Medium | Tune `prediction_loss_weight`, monitor both loss components |
 | Overfitting (more parameters) | Medium | Low | Dropout, validation monitoring |

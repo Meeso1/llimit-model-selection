@@ -71,10 +71,10 @@ class ResponsePredictiveModel(ScoringModelBase):
         dropout: float = 0.2,
         predictor_input_proj_dim: int = 64,
         scorer_input_proj_dim: int = 64,
-        # Mixed representation training
-        real_repr_ratio: float = 0.8,
-        real_repr_decay_per_epoch: float = 0.04,
-        min_real_repr_ratio: float = 0.1,
+        # Dual-path scoring training
+        warmup_epochs: int = 0,
+        score_consistency_loss_weight: float = 0.1,
+        repr_dist_kl_loss_weight: float = 0.01,
         # Embedding model (for model embeddings)
         embedding_model_name: str = "all-MiniLM-L6-v2",
         embedding_spec: EmbeddingSpec | None = None,
@@ -104,9 +104,9 @@ class ResponsePredictiveModel(ScoringModelBase):
         self.dropout = dropout
         self.predictor_input_proj_dim = predictor_input_proj_dim
         self.scorer_input_proj_dim = scorer_input_proj_dim
-        self.real_repr_ratio = real_repr_ratio
-        self.real_repr_decay_per_epoch = real_repr_decay_per_epoch
-        self.min_real_repr_ratio = min_real_repr_ratio
+        self.warmup_epochs = warmup_epochs
+        self.score_consistency_loss_weight = score_consistency_loss_weight
+        self.repr_dist_kl_loss_weight = repr_dist_kl_loss_weight
         self.optimizer_spec = optimizer_spec if optimizer_spec is not None else AdamWSpec(learning_rate=0.001)
         self.balance_model_samples = balance_model_samples
         self.embedding_model_name = embedding_model_name
@@ -197,9 +197,9 @@ class ResponsePredictiveModel(ScoringModelBase):
             "dropout": self.dropout,
             "predictor_input_proj_dim": self.predictor_input_proj_dim,
             "scorer_input_proj_dim": self.scorer_input_proj_dim,
-            "real_repr_ratio": self.real_repr_ratio,
-            "real_repr_decay_per_epoch": self.real_repr_decay_per_epoch,
-            "min_real_repr_ratio": self.min_real_repr_ratio,
+            "warmup_epochs": self.warmup_epochs,
+            "score_consistency_loss_weight": self.score_consistency_loss_weight,
+            "repr_dist_kl_loss_weight": self.repr_dist_kl_loss_weight,
             "optimizer_type": self.optimizer_spec.optimizer_type,
             "optimizer_params": self.optimizer_spec.to_dict(),
             "balance_model_samples": self.balance_model_samples,
@@ -415,9 +415,9 @@ class ResponsePredictiveModel(ScoringModelBase):
             "dropout": self.dropout,
             "predictor_input_proj_dim": self.predictor_input_proj_dim,
             "scorer_input_proj_dim": self.scorer_input_proj_dim,
-            "real_repr_ratio": self.real_repr_ratio,
-            "real_repr_decay_per_epoch": self.real_repr_decay_per_epoch,
-            "min_real_repr_ratio": self.min_real_repr_ratio,
+            "warmup_epochs": self.warmup_epochs,
+            "score_consistency_loss_weight": self.score_consistency_loss_weight,
+            "repr_dist_kl_loss_weight": self.repr_dist_kl_loss_weight,
             "balance_model_samples": self.balance_model_samples,
             "embedding_model_name": self.embedding_model_name,
             "print_every": self.print_every,
@@ -478,9 +478,9 @@ class ResponsePredictiveModel(ScoringModelBase):
                 dropout=state_dict["dropout"],
                 predictor_input_proj_dim=state_dict.get("predictor_input_proj_dim", 64),
                 scorer_input_proj_dim=state_dict.get("scorer_input_proj_dim", 64),
-                real_repr_ratio=state_dict["real_repr_ratio"],
-                real_repr_decay_per_epoch=state_dict["real_repr_decay_per_epoch"],
-                min_real_repr_ratio=state_dict.get("min_real_repr_ratio", 0.0),
+                warmup_epochs=state_dict.get("warmup_epochs", 0),
+                score_consistency_loss_weight=state_dict.get("score_consistency_loss_weight", 0.0),
+                repr_dist_kl_loss_weight=state_dict.get("repr_dist_kl_loss_weight", 0.0),
                 optimizer_spec=optimizer_spec,
                 balance_model_samples=state_dict["balance_model_samples"],
                 embedding_model_name=state_dict["embedding_model_name"],
@@ -640,18 +640,20 @@ class ResponsePredictiveModel(ScoringModelBase):
         with Timer(f"epoch_{epoch}", verbosity="start+end", parent=epochs_timer) as timer:
             self.network.train()
 
-            # Compute current real representation ratio
-            current_ratio = max(self.min_real_repr_ratio, self.real_repr_ratio - self.real_repr_decay_per_epoch * (epoch - 1))
-
-            # Create seeded generator for reproducible mixing
-            generator = torch.Generator(device=self.device).manual_seed(self.seed + epoch)
+            # Warmup weight for predicted-repr scoring path: ramps linearly from 0 to 1 over
+            # warmup_epochs. When warmup_epochs=0, max(0,1)=1 so weight=min(1.0,epoch/1)=1.0
+            # immediately — no special case needed.
+            pred_scoring_weight = min(1.0, epoch / max(self.warmup_epochs, 1))
 
             # Accumulators for metrics
             total_loss = 0.0
-            total_scoring_loss = 0.0
+            total_real_scoring_loss = 0.0
+            total_pred_scoring_loss = 0.0
             total_prediction_loss = 0.0
             total_predictability_loss = 0.0
             total_repr_kl_loss = 0.0
+            total_score_consistency_loss = 0.0
+            total_repr_dist_kl_loss = 0.0
             total_train_accuracy = 0.0
             total_prediction_quality = 0.0
             total_scorer_real_repr_accuracy = 0.0
@@ -685,7 +687,6 @@ class ResponsePredictiveModel(ScoringModelBase):
                 batch_response_feat_b: torch.Tensor = batch_response_feat_b.to(self.device)  # [batch, response_features_dim]
 
                 batch_labels: torch.Tensor = batch_labels.to(self.device)  # [batch]
-                batch_size = len(batch_labels)
 
                 optimizer.zero_grad()
 
@@ -711,66 +712,91 @@ class ResponsePredictiveModel(ScoringModelBase):
                     batch_response_feat_b,
                 )  # [batch, response_repr_dim]
 
-                # 3. Prediction loss: train predictor to match encoder (encoder treated as fixed target)
+                # 3. Prediction loss: train predictor toward encoder (encoder detached)
                 pred_loss_a: torch.Tensor = self._compute_prediction_loss(pred_repr_a, real_repr_a.detach())
                 pred_loss_b: torch.Tensor = self._compute_prediction_loss(pred_repr_b, real_repr_b.detach())
                 pred_loss = pred_loss_a + pred_loss_b
 
-                # 4. Predictability loss: encourage encoder to produce predictable representations (predictor treated as fixed reference)
-                # When predictability_loss_weight=0, encoder gets no gradient from the predictor at all.
+                # 4. Predictability loss: train encoder toward predictor (predictor detached)
+                # When predictability_loss_weight=0, encoder gets no gradient from predictor.
                 predictability_loss_a: torch.Tensor = self._compute_prediction_loss(pred_repr_a.detach(), real_repr_a)
                 predictability_loss_b: torch.Tensor = self._compute_prediction_loss(pred_repr_b.detach(), real_repr_b)
                 predictability_loss = predictability_loss_a + predictability_loss_b
 
-                # 4b. KL-style loss to prevent representation collapse
+                # 5. KL loss: anchor encoder representation distribution to N(0,1)
                 all_real_reprs = torch.cat([real_repr_a, real_repr_b], dim=0)  # [2*batch, response_repr_dim]
                 repr_kl_loss: torch.Tensor = self._compute_repr_kl_loss(all_real_reprs)
 
-                # 5. Mix representations based on current ratio
-                use_real = torch.rand(batch_size, device=self.device, generator=generator) < current_ratio  # [batch]
-                repr_a = torch.where(use_real.unsqueeze(-1), real_repr_a, pred_repr_a)  # [batch, response_repr_dim]
-                repr_b = torch.where(use_real.unsqueeze(-1), real_repr_b, pred_repr_b)  # [batch, response_repr_dim]
-
-                # 6. Score (mixed) representations
-                score_a = self.network.forward_score(
+                # 6. Score real representations
+                score_real_a = self.network.forward_score(
                     batch_prompt_emb_a,
                     batch_prompt_feat_a,
-                    repr_a,
+                    real_repr_a,
                 )  # [batch]
-                score_b = self.network.forward_score(
+                score_real_b = self.network.forward_score(
                     batch_prompt_emb_b,
                     batch_prompt_feat_b,
-                    repr_b,
+                    real_repr_b,
                 )  # [batch]
-                scoring_loss: torch.Tensor = compute_pairwise_ranking_loss(
-                    self.ranking_loss_type, score_a, score_b, batch_labels, margin=0.1
+                real_scoring_loss: torch.Tensor = compute_pairwise_ranking_loss(
+                    self.ranking_loss_type, score_real_a, score_real_b, batch_labels, margin=0.1
                 )
 
-                # 7. Total loss
+                # 7. Score predicted representations
+                score_pred_a = self.network.forward_score(
+                    batch_prompt_emb_a,
+                    batch_prompt_feat_a,
+                    pred_repr_a,
+                )  # [batch]
+                score_pred_b = self.network.forward_score(
+                    batch_prompt_emb_b,
+                    batch_prompt_feat_b,
+                    pred_repr_b,
+                )  # [batch]
+                pred_scoring_loss: torch.Tensor = compute_pairwise_ranking_loss(
+                    self.ranking_loss_type, score_pred_a, score_pred_b, batch_labels, margin=0.1
+                )
+
+                # 8. Score-consistency loss: predicted scores should match real scores.
+                # Real scores are detached so gradient flows only through the predicted scoring path.
+                score_consistency_loss: torch.Tensor = (
+                    F.mse_loss(score_pred_a, score_real_a.detach())
+                    + F.mse_loss(score_pred_b, score_real_b.detach())
+                ) # TODO: Does it make sense to have real scores detached?
+
+                # 9. Distribution-matching KL: symmetric KL between pred and real repr distributions
+                all_pred_reprs = torch.cat([pred_repr_a, pred_repr_b], dim=0)  # [2*batch, response_repr_dim]
+                repr_dist_kl_loss: torch.Tensor = self._compute_repr_dist_kl_loss(all_pred_reprs, all_real_reprs)
+
+                # 10. Total loss
+                scoring_loss = real_scoring_loss + pred_scoring_weight * pred_scoring_loss
                 total_batch_loss = (
                     scoring_loss
                     + self.prediction_loss_weight * pred_loss
                     + self.predictability_loss_weight * predictability_loss
                     + self.repr_kl_loss_weight * repr_kl_loss
+                    + self.score_consistency_loss_weight * score_consistency_loss
+                    + self.repr_dist_kl_loss_weight * repr_dist_kl_loss
                 )
                 total_batch_loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=1.0)
                 optimizer.step()
 
-                # Compute metrics
                 total_loss += total_batch_loss.item()
-                total_scoring_loss += scoring_loss.item()
+                total_real_scoring_loss += real_scoring_loss.item()
+                total_pred_scoring_loss += pred_scoring_loss.item()
                 total_prediction_loss += pred_loss.item()
                 total_predictability_loss += predictability_loss.item()
                 total_repr_kl_loss += repr_kl_loss.item()
+                total_score_consistency_loss += score_consistency_loss.item()
+                total_repr_dist_kl_loss += repr_dist_kl_loss.item()
 
                 with torch.no_grad():
                     metrics = self._compute_batch_metrics(
                         pred_repr_a, pred_repr_b,
                         real_repr_a, real_repr_b,
-                        score_a, score_b,
-                        batch_prompt_emb_a, batch_prompt_feat_a,
-                        batch_prompt_emb_b, batch_prompt_feat_b,
+                        score_pred_a, score_pred_b,
+                        score_real_a, score_real_b,
                         batch_labels,
                     )
                     total_train_accuracy += metrics["accuracy"]
@@ -782,10 +808,14 @@ class ResponsePredictiveModel(ScoringModelBase):
 
             # Average metrics
             avg_loss = total_loss / n_batches
-            avg_scoring_loss = total_scoring_loss / n_batches
+            avg_real_scoring_loss = total_real_scoring_loss / n_batches
+            avg_pred_scoring_loss = total_pred_scoring_loss / n_batches
+            avg_scoring_loss = avg_real_scoring_loss + pred_scoring_weight * avg_pred_scoring_loss
             avg_prediction_loss = total_prediction_loss / n_batches
             avg_predictability_loss = total_predictability_loss / n_batches
             avg_repr_kl_loss = total_repr_kl_loss / n_batches
+            avg_score_consistency_loss = total_score_consistency_loss / n_batches
+            avg_repr_dist_kl_loss = total_repr_dist_kl_loss / n_batches
             avg_train_accuracy = total_train_accuracy / n_batches
             avg_prediction_quality = total_prediction_quality / n_batches
             avg_scorer_real_repr_accuracy = total_scorer_real_repr_accuracy / n_batches
@@ -793,23 +823,22 @@ class ResponsePredictiveModel(ScoringModelBase):
 
             # Validation
             with Timer("perform_validation", verbosity="start+end", parent=timer):
-                val_metrics = self._perform_validation(
-                    val_dataloader,
-                    current_ratio,
-                    epoch,
-                    timer,
-                ) if val_dataloader is not None else None
+                val_metrics = self._perform_validation(val_dataloader) if val_dataloader is not None else None
 
             # Create training history entry
             additional_metrics = {
                 "scoring_loss": avg_scoring_loss,
+                "real_scoring_loss": avg_real_scoring_loss,
+                "pred_scoring_loss": avg_pred_scoring_loss,
                 "prediction_loss": avg_prediction_loss,
                 "predictability_loss": avg_predictability_loss,
                 "repr_kl_loss": avg_repr_kl_loss,
+                "score_consistency_loss": avg_score_consistency_loss,
+                "repr_dist_kl_loss": avg_repr_dist_kl_loss,
                 "prediction_quality": avg_prediction_quality,
                 "scorer_real_repr_accuracy": avg_scorer_real_repr_accuracy,
                 "repr_mean_variance": avg_repr_variance,
-                "current_real_repr_ratio": current_ratio,
+                "pred_scoring_weight": pred_scoring_weight,
             }
 
             if val_metrics is not None:
@@ -819,6 +848,10 @@ class ResponsePredictiveModel(ScoringModelBase):
                     "val_repr_mean_variance": val_metrics["repr_mean_variance"],
                     "val_predictability_loss": val_metrics["predictability_loss"],
                     "val_repr_kl_loss": val_metrics["repr_kl_loss"],
+                    "val_score_consistency_loss": val_metrics["score_consistency_loss"],
+                    "val_repr_dist_kl_loss": val_metrics["repr_dist_kl_loss"],
+                    "val_real_scoring_loss": val_metrics["real_scoring_loss"],
+                    "val_pred_scoring_loss": val_metrics["pred_scoring_loss"],
                 })
 
             entry = TrainingHistoryEntry(
@@ -846,15 +879,9 @@ class ResponsePredictiveModel(ScoringModelBase):
     def _perform_validation(
         self,
         val_dataloader: _DataLoaderType,
-        current_ratio: float,
-        epoch: int,
-        timer: Timer,
     ) -> dict[str, float]:
         """Perform validation."""
         self.network.eval()
-
-        # Create seeded generator for reproducible mixing (use different seed for validation)
-        generator = torch.Generator(device=self.device).manual_seed(self.seed + epoch + 10000)
 
         total_loss = 0.0
         total_accuracy = 0.0
@@ -863,6 +890,10 @@ class ResponsePredictiveModel(ScoringModelBase):
         total_repr_variance = 0.0
         total_predictability_loss = 0.0
         total_repr_kl_loss = 0.0
+        total_score_consistency_loss = 0.0
+        total_repr_dist_kl_loss = 0.0
+        total_real_scoring_loss = 0.0
+        total_pred_scoring_loss = 0.0
         n_batches = 0
 
         for (
@@ -892,7 +923,6 @@ class ResponsePredictiveModel(ScoringModelBase):
             batch_response_feat_b = batch_response_feat_b.to(self.device)  # [batch, response_features_dim]
 
             batch_labels = batch_labels.to(self.device)  # [batch]
-            batch_size = len(batch_labels)
 
             with torch.no_grad():
                 # Predict response representations
@@ -917,58 +947,81 @@ class ResponsePredictiveModel(ScoringModelBase):
                     batch_response_feat_b,
                 )  # [batch, response_repr_dim]
 
-                # Prediction loss (predictor toward encoder)
+                # Prediction loss
                 pred_loss_a = self._compute_prediction_loss(pred_repr_a, real_repr_a)
                 pred_loss_b = self._compute_prediction_loss(pred_repr_b, real_repr_b)
                 pred_loss = pred_loss_a + pred_loss_b
 
-                # Predictability loss (encoder toward predictor)
-                predictability_loss_a = self._compute_prediction_loss(pred_repr_a, real_repr_a)
-                predictability_loss_b = self._compute_prediction_loss(pred_repr_b, real_repr_b)
-                predictability_loss = predictability_loss_a + predictability_loss_b
+                # Predictability loss
+                predictability_loss = pred_loss  # symmetric in no_grad context
 
-                # KL-style loss
+                # KL loss
                 all_real_reprs = torch.cat([real_repr_a, real_repr_b], dim=0)  # [2*batch, response_repr_dim]
                 repr_kl_loss = self._compute_repr_kl_loss(all_real_reprs)
 
-                # Mix representations (same as training)
-                use_real = torch.rand(batch_size, device=self.device, generator=generator) < current_ratio  # [batch]
-                repr_a = torch.where(use_real.unsqueeze(-1), real_repr_a, pred_repr_a)  # [batch, response_repr_dim]
-                repr_b = torch.where(use_real.unsqueeze(-1), real_repr_b, pred_repr_b)  # [batch, response_repr_dim]
-
-                # Score
-                score_a = self.network.forward_score(
+                # Score real representations
+                score_real_a = self.network.forward_score(
                     batch_prompt_emb_a,
                     batch_prompt_feat_a,
-                    repr_a,
+                    real_repr_a,
                 )  # [batch]
-                score_b = self.network.forward_score(
+                score_real_b = self.network.forward_score(
                     batch_prompt_emb_b,
                     batch_prompt_feat_b,
-                    repr_b,
+                    real_repr_b,
                 )  # [batch]
-                scoring_loss = compute_pairwise_ranking_loss(
-                    self.ranking_loss_type, score_a, score_b, batch_labels, margin=0.1
+                real_scoring_loss = compute_pairwise_ranking_loss(
+                    self.ranking_loss_type, score_real_a, score_real_b, batch_labels, margin=0.1
                 )
 
-                # Total loss
+                # Score predicted representations
+                score_pred_a = self.network.forward_score(
+                    batch_prompt_emb_a,
+                    batch_prompt_feat_a,
+                    pred_repr_a,
+                )  # [batch]
+                score_pred_b = self.network.forward_score(
+                    batch_prompt_emb_b,
+                    batch_prompt_feat_b,
+                    pred_repr_b,
+                )  # [batch]
+                pred_scoring_loss = compute_pairwise_ranking_loss(
+                    self.ranking_loss_type, score_pred_a, score_pred_b, batch_labels, margin=0.1
+                )
+
+                # Score-consistency loss
+                score_consistency_loss = (
+                    F.mse_loss(score_pred_a, score_real_a)
+                    + F.mse_loss(score_pred_b, score_real_b)
+                )
+
+                # Distribution-matching KL
+                all_pred_reprs = torch.cat([pred_repr_a, pred_repr_b], dim=0)  # [2*batch, response_repr_dim]
+                repr_dist_kl_loss = self._compute_repr_dist_kl_loss(all_pred_reprs, all_real_reprs)
+
+                # Total loss (full pred_scoring_weight=1.0 for validation)
+                scoring_loss = real_scoring_loss + pred_scoring_loss
                 batch_loss = (
                     scoring_loss
                     + self.prediction_loss_weight * pred_loss
                     + self.predictability_loss_weight * predictability_loss
                     + self.repr_kl_loss_weight * repr_kl_loss
+                    + self.score_consistency_loss_weight * score_consistency_loss
+                    + self.repr_dist_kl_loss_weight * repr_dist_kl_loss
                 )
                 total_loss += batch_loss.item()
                 total_predictability_loss += predictability_loss.item()
                 total_repr_kl_loss += repr_kl_loss.item()
+                total_score_consistency_loss += score_consistency_loss.item()
+                total_repr_dist_kl_loss += repr_dist_kl_loss.item()
+                total_real_scoring_loss += real_scoring_loss.item()
+                total_pred_scoring_loss += pred_scoring_loss.item()
 
-                # Compute metrics using shared function
                 metrics = self._compute_batch_metrics(
                     pred_repr_a, pred_repr_b,
                     real_repr_a, real_repr_b,
-                    score_a, score_b,
-                    batch_prompt_emb_a, batch_prompt_feat_a,
-                    batch_prompt_emb_b, batch_prompt_feat_b,
+                    score_pred_a, score_pred_b,
+                    score_real_a, score_real_b,
                     batch_labels,
                 )
                 total_accuracy += metrics["accuracy"]
@@ -986,6 +1039,10 @@ class ResponsePredictiveModel(ScoringModelBase):
             "repr_mean_variance": total_repr_variance / n_batches,
             "predictability_loss": total_predictability_loss / n_batches,
             "repr_kl_loss": total_repr_kl_loss / n_batches,
+            "score_consistency_loss": total_score_consistency_loss / n_batches,
+            "repr_dist_kl_loss": total_repr_dist_kl_loss / n_batches,
+            "real_scoring_loss": total_real_scoring_loss / n_batches,
+            "pred_scoring_loss": total_pred_scoring_loss / n_batches,
         }
 
     def _compute_prediction_loss(
@@ -1021,38 +1078,58 @@ class ResponsePredictiveModel(ScoringModelBase):
         kl = 0.5 * (var + mu.pow(2) - 1.0 - var.log())  # [response_repr_dim]
         return kl.mean()
 
+    @staticmethod
+    def _compute_repr_dist_kl_loss(
+        pred_reprs: torch.Tensor,  # [n, response_repr_dim]
+        real_reprs: torch.Tensor,  # [n, response_repr_dim]
+    ) -> torch.Tensor:
+        """
+        Compute symmetric KL divergence between per-dimension Gaussian distributions
+        of predicted and real representations within the batch.
+
+        Encourages the predictor's output distribution to statistically match the
+        encoder's distribution, complementing the per-sample prediction loss.
+
+        Uses Jeffrey's divergence: 0.5 * (KL(pred||real) + KL(real||pred)).
+        """
+        mu_real = real_reprs.mean(dim=0)  # [response_repr_dim]
+        var_real = real_reprs.var(dim=0).clamp(min=1e-8)  # [response_repr_dim]
+        mu_pred = pred_reprs.mean(dim=0)  # [response_repr_dim]
+        var_pred = pred_reprs.var(dim=0).clamp(min=1e-8)  # [response_repr_dim]
+
+        mu_diff_sq = (mu_real - mu_pred).pow(2)  # [response_repr_dim]
+        kl_pred_real = 0.5 * (var_pred / var_real + mu_diff_sq / var_real - 1.0 + (var_real / var_pred).log())
+        kl_real_pred = 0.5 * (var_real / var_pred + mu_diff_sq / var_pred - 1.0 + (var_pred / var_real).log())
+        return ((kl_pred_real + kl_real_pred) / 2.0).mean()
+
     def _compute_batch_metrics(
         self,
         pred_repr_a: torch.Tensor,  # [batch, response_repr_dim]
         pred_repr_b: torch.Tensor,  # [batch, response_repr_dim]
         real_repr_a: torch.Tensor,  # [batch, response_repr_dim]
         real_repr_b: torch.Tensor,  # [batch, response_repr_dim]
-        score_a: torch.Tensor,  # [batch]
-        score_b: torch.Tensor,  # [batch]
-        prompt_emb_a: torch.Tensor,  # [batch, prompt_embedding_dim]
-        prompt_feat_a: torch.Tensor,  # [batch, prompt_features_dim]
-        prompt_emb_b: torch.Tensor,  # [batch, prompt_embedding_dim]
-        prompt_feat_b: torch.Tensor,  # [batch, prompt_features_dim]
+        score_pred_a: torch.Tensor,  # [batch]
+        score_pred_b: torch.Tensor,  # [batch]
+        score_real_a: torch.Tensor,  # [batch]
+        score_real_b: torch.Tensor,  # [batch]
         labels: torch.Tensor,  # [batch]
     ) -> dict[str, float]:
         """
         Compute batch metrics for training/validation.
-        
+
         Returns:
             Dictionary with accuracy, prediction_quality, scorer_real_repr_accuracy, repr_variance
         """
-        # Accuracy (using mixed/predicted representations)
-        accuracy = compute_pairwise_accuracy(score_a, score_b, labels)
+        # Accuracy based on predicted representations (matches inference behaviour)
+        accuracy = compute_pairwise_accuracy(score_pred_a, score_pred_b, labels)
 
         # Prediction quality (cosine similarity between predicted and real)
         cos_sim_a = F.cosine_similarity(pred_repr_a, real_repr_a, dim=1)  # [batch]
         cos_sim_b = F.cosine_similarity(pred_repr_b, real_repr_b, dim=1)  # [batch]
         prediction_quality = ((cos_sim_a.mean() + cos_sim_b.mean()) / 2 + 1) / 2  # rescale to [0, 1]
 
-        # Scorer real representation accuracy
-        real_score_a = self.network.forward_score(prompt_emb_a, prompt_feat_a, real_repr_a)  # [batch]
-        real_score_b = self.network.forward_score(prompt_emb_b, prompt_feat_b, real_repr_b)  # [batch]
-        scorer_real_repr_accuracy = compute_pairwise_accuracy(real_score_a, real_score_b, labels)
+        # Scorer accuracy when fed real representations (upper-bound diagnostic)
+        scorer_real_repr_accuracy = compute_pairwise_accuracy(score_real_a, score_real_b, labels)
 
         # Representation variance
         all_reprs = torch.cat([real_repr_a, real_repr_b], dim=0)  # [2*batch, response_repr_dim]
@@ -1078,14 +1155,14 @@ class ResponsePredictiveModel(ScoringModelBase):
         pred_quality = metrics.get("prediction_quality", 0.0)
         scorer_real_acc = metrics.get("scorer_real_repr_accuracy", 0.0)
         repr_var = metrics.get("repr_mean_variance", 0.0)
-        current_ratio = metrics.get("current_real_repr_ratio", 0.0)
+        pred_w = metrics.get("pred_scoring_weight", 0.0)
 
         if result.val_loss is None or result.val_accuracy is None:
             print(
                 f"Epoch {result.epoch:>4}: loss = {result.total_loss:.4f}, "
                 f"acc = {(result.train_accuracy*100):.2f}%, "
                 f"pred_q = {pred_quality:.3f}, scorer_real_acc = {(scorer_real_acc*100):.2f}%, "
-                f"repr_var = {repr_var:.4f}, ratio = {current_ratio:.2f} - {result.duration:.2f}s"
+                f"repr_var = {repr_var:.4f}, pred_w = {pred_w:.2f} - {result.duration:.2f}s"
             )
         else:
             val_pred_quality = metrics.get("val_prediction_quality", 0.0)
@@ -1095,7 +1172,7 @@ class ResponsePredictiveModel(ScoringModelBase):
                 f"acc = {(result.train_accuracy*100):.2f}%/{(result.val_accuracy*100):.2f}%, "
                 f"pred_q = {pred_quality:.3f}/{val_pred_quality:.3f}, "
                 f"scorer_real_acc = {(scorer_real_acc*100):.2f}%/{(val_scorer_real_acc*100):.2f}%, "
-                f"repr_var = {repr_var:.4f}, ratio = {current_ratio:.2f} - {result.duration:.2f}s"
+                f"repr_var = {repr_var:.4f}, pred_w = {pred_w:.2f} - {result.duration:.2f}s"
             )
 
     @dataclass
