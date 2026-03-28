@@ -38,15 +38,8 @@ from src.utils.transformer_pooling_utils import detect_pooling_method, pool_embe
 from src.models.model_outputs_cache import ModelOutputsCache
 from src.models import model_loading
 from src.utils.ranking_loss import PairwiseRankingLossType, compute_pairwise_ranking_loss
-
-
-def _grad_norm_for_params(params: list[torch.nn.Parameter]) -> float:
-    """Compute total L2 gradient norm for params (before clipping)."""
-    total_norm_sq = 0.0
-    for p in params:
-        if p.grad is not None:
-            total_norm_sq += p.grad.data.norm(2).item() ** 2
-    return total_norm_sq ** 0.5 if total_norm_sq > 0 else 0.0
+from src.analysis.training_diagnostics import EpochDiagnosticsAccumulator, split_tensor_with_grad
+from src.preprocessing.scoring_feature_extraction import get_feature_descriptions
 
 
 class TransformerEmbeddingModel(ScoringModelBase):
@@ -593,6 +586,8 @@ class TransformerEmbeddingModel(ScoringModelBase):
             "model_embedding_b": torch.stack([item["model_embedding_b"] for item in batch]),  # [batch_size, model_embedding_dim]
             "labels": torch.stack([item["label"] for item in batch]),  # [batch_size]
             "original_indices": torch.tensor([item["original_index"] for item in batch], dtype=torch.long),  # [batch_size]
+            "model_ids_a": torch.tensor([item["model_id_a"] for item in batch], dtype=torch.long),  # [batch_size]
+            "model_ids_b": torch.tensor([item["model_id_b"] for item in batch], dtype=torch.long),  # [batch_size]
         }
         
     def _create_optimizer_and_scheduler(self) -> tuple[optim.Optimizer, optim.lr_scheduler._LRScheduler | None]:
@@ -674,19 +669,24 @@ class TransformerEmbeddingModel(ScoringModelBase):
             total_loss = 0.0
             total_accuracy = 0.0
             n_batches = 0
-            metrics = self._EpochMetricsAccumulator()
+            diag = EpochDiagnosticsAccumulator()
             transformer_params, projection_params, scoring_head_params = self.network.get_param_groups_for_metrics()
+            numeric_descs, bool_descs = get_feature_descriptions()
+            prompt_feature_names = [d.name for d in numeric_descs] + [d.name for d in bool_descs]
 
             for batch in dataloader:
                 input_ids = batch["input_ids"].to(self.device)  # [batch_size, seq_len]
                 attention_mask = batch["attention_mask"].to(self.device)  # [batch_size, seq_len]
-                prompt_features = batch["prompt_features"].to(self.device)  # [batch_size, prompt_features_dim]
-                model_embedding_a = batch["model_embedding_a"].to(self.device)  # [batch_size, model_embedding_dim]
+                prompt_features = batch["prompt_features"].to(self.device).requires_grad_(True)  # [batch_size, prompt_features_dim]
+                model_embedding_a = batch["model_embedding_a"].to(self.device).requires_grad_(True)  # [batch_size, model_embedding_dim]
                 model_embedding_b = batch["model_embedding_b"].to(self.device)  # [batch_size, model_embedding_dim]
                 labels = batch["labels"].to(self.device)  # [batch_size]
+                model_ids_a = batch["model_ids_a"].to(self.device)  # [batch_size]
+                model_ids_b = batch["model_ids_b"].to(self.device)  # [batch_size]
 
                 optimizer.zero_grad()
                 prompt_embedding = self.network.forward_encode(input_ids, attention_mask)  # [batch_size, transformer_hidden_size]
+                prompt_embedding.retain_grad() # Needed to retain gradient in non-leaf tensor after backward pass
                 scores_a = self.network.forward_score(
                     prompt_embedding,
                     prompt_features,
@@ -700,13 +700,37 @@ class TransformerEmbeddingModel(ScoringModelBase):
 
                 scores_a, scores_b = self._augment_with_base_scores(scores_a, scores_b, batch["original_indices"])
 
-                self._add_projection_norms_to_accumulator(metrics, prompt_embedding, prompt_features, model_embedding_a)
+                with torch.no_grad():
+                    prompt_repr = self.network.prompt_emb_proj(prompt_embedding)   # [batch_size, 2 * proj_dim]
+                    feat_repr = self.network.feat_proj(prompt_features)            # [batch_size, proj_dim]
+                    model_repr = self.network.model_proj(model_embedding_a)        # [batch_size, 3 * proj_dim]
+                    interaction = torch.cat([prompt_repr, feat_repr], dim=1) * model_repr  # [batch_size, 3 * proj_dim]
+                diag.update_representation_stats({
+                    "prompt_emb_proj": prompt_repr,
+                    "feat_proj": feat_repr,
+                    "model_proj": model_repr,
+                    "interaction": interaction,
+                })
 
                 loss: torch.Tensor = compute_pairwise_ranking_loss(
                     self.ranking_loss_type, scores_a, scores_b, labels, margin=0.1
                 )
                 loss.backward()
-                self._add_gradient_norms_to_accumulator(metrics, transformer_params, projection_params, scoring_head_params)
+
+                diag.update_grad_norms({
+                    "transformer": transformer_params,
+                    "projection": projection_params,
+                    "scoring_head": scoring_head_params,
+                })
+                diag.update_gradient_attribution({
+                    **split_tensor_with_grad(prompt_features, prompt_feature_names),
+                    "prompt_embedding": prompt_embedding,
+                    "model_embedding": model_embedding_a,
+                })
+                diag.update_score_variance(
+                    torch.cat([scores_a.detach(), scores_b.detach()]),  # [2 * batch_size]
+                    torch.cat([model_ids_a, model_ids_b]),              # [2 * batch_size]
+                )
 
                 torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=1.0)
                 optimizer.step()
@@ -718,7 +742,7 @@ class TransformerEmbeddingModel(ScoringModelBase):
 
             avg_loss = total_loss / n_batches
             avg_accuracy = total_accuracy / n_batches
-            additional_metrics = metrics.to_dict(n_batches)
+            additional_metrics = diag.to_dict()
 
             with Timer("perform_validation", verbosity="start+end", parent=timer):
                 val_loss, val_accuracy = self._perform_validation(val_dataloader, timer) if val_dataloader is not None else (None, None)
@@ -829,34 +853,6 @@ class TransformerEmbeddingModel(ScoringModelBase):
         if self.print_every is not None:
             print(f"Base model loaded")
 
-    def _add_projection_norms_to_accumulator(
-        self,
-        accumulator: "TransformerEmbeddingModel._EpochMetricsAccumulator",
-        prompt_embedding: torch.Tensor,
-        prompt_features: torch.Tensor,
-        model_embedding_a: torch.Tensor,
-    ) -> None:
-        with torch.no_grad():
-            prompt_repr = self.network.prompt_emb_proj(prompt_embedding)
-            feat_repr = self.network.feat_proj(prompt_features)
-            model_repr = self.network.model_proj(model_embedding_a)
-            prompt_combined = torch.cat([prompt_repr, feat_repr], dim=1)
-            interaction = prompt_combined * model_repr
-        accumulator.add_projection_norms(prompt_repr, feat_repr, model_repr, interaction)
-
-    def _add_gradient_norms_to_accumulator(
-        self,
-        accumulator: "TransformerEmbeddingModel._EpochMetricsAccumulator",
-        transformer_params: list[torch.nn.Parameter],
-        projection_params: list[torch.nn.Parameter],
-        scoring_head_params: list[torch.nn.Parameter],
-    ) -> None:
-        accumulator.add_gradient_norms(
-            _grad_norm_for_params(transformer_params),
-            _grad_norm_for_params(projection_params),
-            _grad_norm_for_params(scoring_head_params),
-        )
-
     def _log_epoch_result(self, result: "TransformerEmbeddingModel.EpochResult") -> None:
         if self.print_every is None:
             return
@@ -868,52 +864,6 @@ class TransformerEmbeddingModel(ScoringModelBase):
             print(f"Epoch {result.epoch:>4}: loss = {result.total_loss:.4f}, accuracy = {(result.train_accuracy*100):.4f}% - {result.duration:.2f}s")
         else:
             print(f"Epoch {result.epoch:>4}: loss = {result.total_loss:.4f}/{result.val_loss:.4f}, accuracy = {(result.train_accuracy*100):.4f}%/{(result.val_accuracy*100):.4f}% - {result.duration:.2f}s")
-
-    @dataclass
-    class _EpochMetricsAccumulator:
-        """Accumulates projection and gradient norms over an epoch for diagnostic metrics."""
-
-        prompt_emb_proj_norm: float = 0.0
-        feat_proj_norm: float = 0.0
-        model_proj_norm: float = 0.0
-        interaction_norm: float = 0.0
-        transformer_grad_norm: float = 0.0
-        projection_grad_norm: float = 0.0
-        scoring_head_grad_norm: float = 0.0
-
-        def add_projection_norms(
-            self,
-            prompt_repr: torch.Tensor,
-            feat_repr: torch.Tensor,
-            model_repr: torch.Tensor,
-            interaction: torch.Tensor,
-        ) -> None:
-            self.prompt_emb_proj_norm += prompt_repr.norm(dim=1).mean().item()
-            self.feat_proj_norm += feat_repr.norm(dim=1).mean().item()
-            self.model_proj_norm += model_repr.norm(dim=1).mean().item()
-            self.interaction_norm += interaction.norm(dim=1).mean().item()
-
-        def add_gradient_norms(
-            self,
-            transformer_norm: float,
-            projection_norm: float,
-            scoring_head_norm: float,
-        ) -> None:
-            self.transformer_grad_norm += transformer_norm
-            self.projection_grad_norm += projection_norm
-            self.scoring_head_grad_norm += scoring_head_norm
-
-        def to_dict(self, n_batches: int) -> dict[str, float]:
-            scale = 1.0 / n_batches
-            return {
-                "prompt_emb_proj_norm": self.prompt_emb_proj_norm * scale,
-                "feat_proj_norm": self.feat_proj_norm * scale,
-                "model_proj_norm": self.model_proj_norm * scale,
-                "interaction_norm": self.interaction_norm * scale,
-                "transformer_grad_norm": self.transformer_grad_norm * scale,
-                "projection_grad_norm": self.projection_grad_norm * scale,
-                "scoring_head_grad_norm": self.scoring_head_grad_norm * scale,
-            }
 
     @dataclass
     class EpochResult:
@@ -954,6 +904,8 @@ class TransformerEmbeddingModel(ScoringModelBase):
                 "model_embedding_b": torch.from_numpy(pair.model_embedding_b),
                 "label": torch.tensor(1.0 if pair.winner_label == 0 else -1.0, dtype=torch.float32),
                 "original_index": original_index,
+                "model_id_a": pair.model_id_a,
+                "model_id_b": pair.model_id_b,
             }
 
     class _TransformerNetwork(nn.Module):
