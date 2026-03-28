@@ -12,6 +12,7 @@ from src.data_models.response_predictive_types import (
     ResponsePredictiveInferenceData,
 )
 from src.preprocessing.simple_scaler import SimpleScaler
+from src.preprocessing.switchable_preprocessor import SwitchablePreprocessor
 from src.utils.jars import Jars
 from src.utils.string_encoder import StringEncoder
 from src.utils.timer import Timer
@@ -26,7 +27,7 @@ from src.preprocessing.scoring_feature_extraction import extract_and_transform_a
 from src.preprocessing.model_embedding_feature_extraction import extract_response_features_for_many
 
 
-class ResponsePredictivePreprocessor:
+class ResponsePredictivePreprocessor(SwitchablePreprocessor):
     """
     Preprocessor that embeds prompts and responses using sentence transformers.
     
@@ -49,6 +50,7 @@ class ResponsePredictivePreprocessor:
             embedding_model_name: Name of the sentence transformer model to use
             min_model_comparisons: Minimum number of comparisons for a model to be included
         """
+        super().__init__()
         self.embedding_model_name = embedding_model_name
         self.min_model_comparisons = min_model_comparisons
         self.version = "v1"
@@ -204,13 +206,16 @@ class ResponsePredictivePreprocessor:
     ) -> ResponsePredictiveInferenceData:
         """
         Preprocess prompts and model names for inference.
-        
+
+        Active SwitchablePreprocessor context managers are applied after
+        normal preprocessing via _apply_prompt_switches().
+
         Args:
             prompts: List of prompts to embed
             model_names: List of model names to score
             prompt_scaler: Fitted prompt feature scaler from training
             model_embeddings: Dictionary mapping model names to embeddings
-            
+
         Returns:
             ResponsePredictiveInferenceData with embeddings and features
         """
@@ -220,16 +225,19 @@ class ResponsePredictivePreprocessor:
             prompt_scaler,
         )
         prompt_embeddings = self._embed_texts(prompts).cpu()  # [n_prompts, embedding_dim]
-        
-        # Get model embeddings
+
         model_embs = np.stack([
             model_embeddings[name] if name in model_embeddings else model_embeddings.get("default", np.zeros(len(next(iter(model_embeddings.values())))))
             for name in model_names
         ])  # [n_models, model_embedding_dim]
-        
+
+        emb = prompt_embeddings.numpy()  # [n_prompts, embedding_dim]
+        feat = np.stack(prompt_features_list)  # [n_prompts, prompt_features_dim]
+        emb, feat = self._apply_prompt_switches(emb, feat)
+
         return ResponsePredictiveInferenceData(
-            prompt_embeddings=prompt_embeddings.numpy(),  # [n_prompts, embedding_dim]
-            prompt_features=np.stack(prompt_features_list),  # [n_prompts, prompt_features_dim]
+            prompt_embeddings=emb,  # [n_prompts, embedding_dim]
+            prompt_features=feat,  # [n_prompts, prompt_features_dim]
             model_embeddings=model_embs,  # [n_models, model_embedding_dim]
         )
 

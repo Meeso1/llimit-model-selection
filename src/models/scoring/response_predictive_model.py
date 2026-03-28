@@ -211,6 +211,9 @@ class ResponsePredictiveModel(ScoringModelBase):
             "embedding_model_epochs": self.embedding_model_epochs,
         }
 
+    def get_preprocessor(self) -> Any:
+        return self.preprocessor
+
     def train(
         self,
         data: TrainingData,

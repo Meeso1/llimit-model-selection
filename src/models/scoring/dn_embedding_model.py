@@ -141,6 +141,9 @@ class DnEmbeddingModel(ScoringModelBase):
             "ranking_loss_type": self.ranking_loss_type,
         }
 
+    def get_preprocessor(self) -> Any:
+        return self.preprocessor
+
     def train(
         self,
         data: TrainingData,

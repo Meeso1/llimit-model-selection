@@ -179,6 +179,9 @@ class TransformerEmbeddingModel(ScoringModelBase):
             "proj_dim": self.proj_dim,
         }
 
+    def get_preprocessor(self) -> Any:
+        return self.preprocessor
+
     def train(
         self,
         data: TrainingData,

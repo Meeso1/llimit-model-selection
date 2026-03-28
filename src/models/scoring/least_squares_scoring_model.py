@@ -57,6 +57,9 @@ class LeastSquaresScoringModel(ScoringModelBase):
             raise RuntimeError("Scores not computed yet")
         return self._scores
 
+    def get_preprocessor(self) -> Any:
+        raise NotImplementedError(f"{type(self).__name__} does not expose a preprocessor")
+
     def train(
         self,
         data: TrainingData,

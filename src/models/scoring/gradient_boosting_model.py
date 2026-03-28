@@ -298,6 +298,9 @@ class GradientBoostingModel(ScoringModelBase):
             "base_model": self._base_model_name,
         }
 
+    def get_preprocessor(self) -> Any:
+        return self.preprocessor
+
     # TODO: Track best state
     def train(
         self,

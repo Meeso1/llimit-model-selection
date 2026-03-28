@@ -147,6 +147,9 @@ class DenseNetworkModel(ScoringModelBase):
             "num_models": self._model_encoder.size if self._model_encoder else None,
         }
 
+    def get_preprocessor(self) -> Any:
+        return self.preprocessor
+
     def train(
         self,
         data: TrainingData,

@@ -77,6 +77,9 @@ class SimpleScoringModel(ScoringModelBase):
             raise RuntimeError("Network not initialized")
         return self._network
 
+    def get_preprocessor(self) -> Any:
+        return self.preprocessor
+
     def train(
         self,
         data: TrainingData,

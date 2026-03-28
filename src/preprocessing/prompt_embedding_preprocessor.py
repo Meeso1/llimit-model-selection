@@ -12,6 +12,7 @@ from src.data_models.dense_network_types import (
     PreprocessedTrainingData,
 )
 from src.preprocessing.simple_scaler import SimpleScaler
+from src.preprocessing.switchable_preprocessor import SwitchablePreprocessor
 from src.utils.jars import Jars
 from src.utils.string_encoder import StringEncoder
 from src.utils.timer import Timer
@@ -19,7 +20,7 @@ from src.preprocessing.utils import filter_out_ties, filter_out_both_bad, filter
 from src.preprocessing.scoring_feature_extraction import extract_and_transform_all_prompt_features
 
 
-class PromptEmbeddingPreprocessor:
+class PromptEmbeddingPreprocessor(SwitchablePreprocessor):
     """
     Preprocessor that embeds prompts using sentence transformers.
     
@@ -41,6 +42,7 @@ class PromptEmbeddingPreprocessor:
             embedding_model_name: Name of the sentence transformer model to use
             min_model_comparisons: Minimum number of comparisons for a model to be included
         """
+        super().__init__()
         self.embedding_model_name = embedding_model_name
         self.min_model_comparisons = min_model_comparisons
         self.version = "v4"
@@ -167,24 +169,31 @@ class PromptEmbeddingPreprocessor:
     ) -> PreprocessedInferenceInput:
         """
         Preprocess prompts and model names for inference.
-        
+
+        Active SwitchablePreprocessor context managers are applied after
+        normal preprocessing via _apply_prompt_switches().
+
         Args:
             prompts: List of prompts to embed
             model_names: List of model names to score
             model_encoder: Fitted model encoder from training
-            
+            scaler: Fitted prompt feature scaler from training
+
         Returns:
             PreprocessedInferenceInput with embeddings, features, and model IDs
         """
-        
         prompt_features_list, _ = extract_and_transform_all_prompt_features(prompts, [[] for _ in prompts], scaler)
         prompt_embeddings = self._embed_prompts(prompts).cpu()  # [n_prompts, embedding_dim]
         model_ids = model_encoder.encode(model_names)
-        
+
+        emb = prompt_embeddings.numpy()  # [n_prompts, embedding_dim]
+        feat = np.stack(prompt_features_list)  # [n_prompts, prompt_features_dim]
+        emb, feat = self._apply_prompt_switches(emb, feat)
+
         return PreprocessedInferenceInput(
-            prompt_embeddings=prompt_embeddings.numpy(), # [n_prompts, embedding_dim]
-            prompt_features=np.stack(prompt_features_list),  # [n_prompts, prompt_features_dim]
-            model_ids=model_ids, # [n_models]
+            prompt_embeddings=emb,  # [n_prompts, embedding_dim]
+            prompt_features=feat,  # [n_prompts, prompt_features_dim]
+            model_ids=model_ids,  # [n_models]
         )
 
     def _embed_prompts(self, prompts: list[str]) -> torch.Tensor:

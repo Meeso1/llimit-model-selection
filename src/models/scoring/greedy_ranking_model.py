@@ -76,6 +76,9 @@ class GreedyRankingModel(ScoringModelBase):
             raise RuntimeError("Scores not computed yet")
         return self._scores
 
+    def get_preprocessor(self) -> Any:
+        return self.preprocessor
+
     def train(
         self,
         data: TrainingData,

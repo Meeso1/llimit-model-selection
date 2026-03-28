@@ -85,6 +85,9 @@ class EloScoringModel(ScoringModelBase):
             raise RuntimeError("Ratings not initialized")
         return self._ratings
 
+    def get_preprocessor(self) -> Any:
+        return self.preprocessor
+
     def train(
         self,
         data: TrainingData,
