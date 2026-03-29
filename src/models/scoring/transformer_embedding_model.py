@@ -1,12 +1,12 @@
 """Transformer embedding model for prompt routing with LoRA fine-tuning."""
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, TensorDataset
 from collections import Counter
 from transformers import AutoModel, AutoTokenizer
 from pydantic import TypeAdapter
@@ -298,11 +298,20 @@ class TransformerEmbeddingModel(ScoringModelBase):
             
             self._optimizer_state = optimizer.state_dict()
             self._scheduler_state = scheduler.state_dict() if scheduler is not None else None
-            
+
+            with Timer("sensitivity_analysis", verbosity="start+end", parent=train_timer):
+                sensitivity_metrics = TransformerEmbeddingModel._SensitivityAnalysis.compute(
+                    self.network,
+                    train_dataloader=dataloader,
+                    val_dataloader=val_dataloader,
+                    seed=self.seed,
+                )
+
             final_metrics = {
                 "best_epoch": self._best_model_tracker.best_epoch,
                 "best_accuracy": self._best_model_tracker.best_accuracy,
                 "total_epochs": self._epochs_completed,
+                **sensitivity_metrics,
             }
 
         self.finish_logger_if_needed(
@@ -1031,3 +1040,220 @@ class TransformerEmbeddingModel(ScoringModelBase):
                     projection_params.append(param)
 
             return transformer_params, projection_params, scoring_head_params
+
+    class _SensitivityAnalysis:
+        """Prompt sensitivity and feature importance metrics computed on dataloaders.
+
+        Requires a one-time encoding pass to convert raw token batches into prompt
+        embeddings.  All perturbations then operate on those pre-computed embeddings,
+        so the (expensive) transformer encoder is never called more than once.
+
+        Results are accuracy drops from baseline (positive = the modification hurts
+        accuracy, i.e. the model relies on that component).
+
+        A and B sides of each pair share the same prompt, so a single embedding is
+        stored per pair and used for both scoring calls.
+        """
+
+        # Encoded dataloader element: (prompt_emb, prompt_feat, model_emb_a, model_emb_b, labels)
+        _EncodedBatch = tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+
+        @classmethod
+        def compute(
+            cls,
+            network: "TransformerEmbeddingModel._TransformerNetwork",
+            train_dataloader: "DataLoader[dict[str, torch.Tensor]]",
+            val_dataloader: "DataLoader[dict[str, torch.Tensor]] | None",
+            seed: int = 42,
+        ) -> dict[str, float]:
+            """Compute all sensitivity metrics on available dataloaders.
+
+            Returns a flat dict of accuracy drops keyed by
+            ``sensitivity/<metric>_train`` and ``sensitivity/<metric>_val``.
+            Val entries are omitted when val_dataloader is None.
+            """
+            numeric_descs, boolean_descs = get_feature_descriptions()
+            feature_names = [d.name for d in numeric_descs] + [d.name for d in boolean_descs]
+
+            results: dict[str, float] = {}
+            for suffix, raw_dataloader in [("_train", train_dataloader), ("_val", val_dataloader)]:
+                if raw_dataloader is None:
+                    continue
+
+                encoded_dl = cls._encode_dataloader(network, raw_dataloader)
+                global_mean_emb, global_mean_feat = cls._compute_global_means(network, encoded_dl)
+                baseline = cls._compute_accuracy(network, encoded_dl)
+
+                results[f"sensitivity/prompt{suffix}"] = baseline - cls._compute_accuracy(
+                    network, encoded_dl,
+                    lambda e, f: cls._shuffle_prompts(e, f, np.random.default_rng(seed)),
+                )
+                results[f"sensitivity/prompt_embedding{suffix}"] = baseline - cls._compute_accuracy(
+                    network, encoded_dl,
+                    lambda e, f: cls._set_emb_to_mean(e, f, global_mean_emb),
+                )
+                results[f"sensitivity/prompt_features{suffix}"] = baseline - cls._compute_accuracy(
+                    network, encoded_dl,
+                    lambda e, f: cls._set_feat_to_mean(e, f, global_mean_feat),
+                )
+                for idx, name in enumerate(feature_names):
+                    results[f"sensitivity/feature/{name}{suffix}"] = baseline - cls._compute_accuracy(
+                        network, encoded_dl,
+                        lambda e, f: cls._permute_feature(e, f, idx, np.random.default_rng(seed)),
+                    )
+
+            return results
+
+        @classmethod
+        def _encode_dataloader(
+            cls,
+            network: "TransformerEmbeddingModel._TransformerNetwork",
+            raw_dataloader: "DataLoader[dict[str, torch.Tensor]]",
+        ) -> "DataLoader[TransformerEmbeddingModel._SensitivityAnalysis._EncodedBatch]":
+            """Encode all prompts in a raw dataloader into a pre-computed embedding dataloader.
+
+            Returns a new DataLoader with tensors
+            ``(prompt_emb, prompt_feat, model_emb_a, model_emb_b, labels)``
+            where ``prompt_emb`` is the transformer output (shared for both A and B).
+            """
+            device = next(network.parameters()).device
+            all_prompt_embs: list[torch.Tensor] = []
+            all_prompt_feats: list[torch.Tensor] = []
+            all_model_embs_a: list[torch.Tensor] = []
+            all_model_embs_b: list[torch.Tensor] = []
+            all_labels: list[torch.Tensor] = []
+
+            network.eval()
+            with torch.no_grad():
+                for batch in raw_dataloader:
+                    input_ids = batch["input_ids"].to(device)          # [batch, seq_len]
+                    attention_mask = batch["attention_mask"].to(device)  # [batch, seq_len]
+                    prompt_feat = batch["prompt_features"].to(device)   # [batch, prompt_feat_dim]
+                    model_emb_a = batch["model_embedding_a"].to(device)  # [batch, model_emb_dim]
+                    model_emb_b = batch["model_embedding_b"].to(device)  # [batch, model_emb_dim]
+                    labels = batch["labels"].to(device)                  # [batch]
+
+                    prompt_emb = network.forward_encode(input_ids, attention_mask)  # [batch, d_transformer]
+
+                    all_prompt_embs.append(prompt_emb.cpu())
+                    all_prompt_feats.append(prompt_feat.cpu())
+                    all_model_embs_a.append(model_emb_a.cpu())
+                    all_model_embs_b.append(model_emb_b.cpu())
+                    all_labels.append(labels.cpu())
+
+            dataset = TensorDataset(
+                torch.cat(all_prompt_embs),   # [n, d_transformer]
+                torch.cat(all_prompt_feats),  # [n, prompt_feat_dim]
+                torch.cat(all_model_embs_a),  # [n, model_emb_dim]
+                torch.cat(all_model_embs_b),  # [n, model_emb_dim]
+                torch.cat(all_labels),         # [n]
+            )
+            batch_size = raw_dataloader.batch_size or 32
+            return DataLoader(dataset, batch_size=batch_size, shuffle=False)
+
+        @classmethod
+        def _compute_accuracy(
+            cls,
+            network: "TransformerEmbeddingModel._TransformerNetwork",
+            dataloader: "DataLoader[TransformerEmbeddingModel._SensitivityAnalysis._EncodedBatch]",
+            modify_prompt: Callable[
+                [torch.Tensor, torch.Tensor],
+                tuple[torch.Tensor, torch.Tensor],
+            ] | None = None,
+        ) -> float:
+            """Compute accuracy on an encoded dataloader with an optional per-batch prompt modification."""
+            device = next(network.parameters()).device
+            network.eval()
+            total_correct = 0.0
+            total_samples = 0
+
+            with torch.no_grad():
+                for prompt_emb, prompt_feat, model_emb_a, model_emb_b, labels in dataloader:
+                    prompt_emb = prompt_emb.to(device)    # [batch, d_transformer]
+                    prompt_feat = prompt_feat.to(device)  # [batch, prompt_feat_dim]
+                    model_emb_a = model_emb_a.to(device)  # [batch, model_emb_dim]
+                    model_emb_b = model_emb_b.to(device)  # [batch, model_emb_dim]
+                    labels = labels.to(device)             # [batch]
+
+                    if modify_prompt is not None:
+                        prompt_emb, prompt_feat = modify_prompt(prompt_emb, prompt_feat)
+
+                    score_a = network.forward_score(prompt_emb, prompt_feat, model_emb_a)  # [batch]
+                    score_b = network.forward_score(prompt_emb, prompt_feat, model_emb_b)  # [batch]
+
+                    batch_size = labels.shape[0]
+                    total_correct += compute_pairwise_accuracy(score_a, score_b, labels) * batch_size
+                    total_samples += batch_size
+
+            return total_correct / total_samples if total_samples > 0 else 0.0
+
+        @classmethod
+        def _compute_global_means(
+            cls,
+            network: "TransformerEmbeddingModel._TransformerNetwork",
+            dataloader: "DataLoader[TransformerEmbeddingModel._SensitivityAnalysis._EncodedBatch]",
+        ) -> tuple[torch.Tensor, torch.Tensor]:
+            """Compute the dataset-level mean prompt embedding and features.
+
+            Returns:
+                (mean_emb, mean_feat) shaped [1, d_transformer] and [1, prompt_feat_dim]
+            """
+            device = next(network.parameters()).device
+            sum_emb: torch.Tensor | None = None
+            sum_feat: torch.Tensor | None = None
+            total = 0
+
+            with torch.no_grad():
+                for prompt_emb, prompt_feat, _, _, _ in dataloader:
+                    prompt_emb = prompt_emb.to(device)   # [batch, d_transformer]
+                    prompt_feat = prompt_feat.to(device)  # [batch, prompt_feat_dim]
+                    if sum_emb is None:
+                        sum_emb = prompt_emb.sum(dim=0)
+                        sum_feat = prompt_feat.sum(dim=0)
+                    else:
+                        sum_emb += prompt_emb.sum(dim=0)
+                        sum_feat += prompt_feat.sum(dim=0)
+                    total += prompt_emb.shape[0]
+
+            return (sum_emb / total).unsqueeze(0), (sum_feat / total).unsqueeze(0)  # [1, d_emb], [1, d_feat]
+
+        @staticmethod
+        def _shuffle_prompts(
+            emb: torch.Tensor,   # [batch, d_transformer]
+            feat: torch.Tensor,  # [batch, prompt_feat_dim]
+            rng: np.random.Generator,
+        ) -> tuple[torch.Tensor, torch.Tensor]:
+            # [batch, d_transformer], [batch, prompt_feat_dim]
+            idx = torch.from_numpy(rng.permutation(emb.shape[0])).to(emb.device)
+            return emb[idx], feat[idx]
+
+        @staticmethod
+        def _set_emb_to_mean(
+            emb: torch.Tensor,      # [batch, d_transformer]
+            feat: torch.Tensor,     # [batch, prompt_feat_dim]
+            mean_emb: torch.Tensor, # [1, d_transformer]
+        ) -> tuple[torch.Tensor, torch.Tensor]:
+            # [batch, d_transformer], [batch, prompt_feat_dim]
+            return mean_emb.expand_as(emb), feat
+
+        @staticmethod
+        def _set_feat_to_mean(
+            emb: torch.Tensor,       # [batch, d_transformer]
+            feat: torch.Tensor,      # [batch, prompt_feat_dim]
+            mean_feat: torch.Tensor, # [1, prompt_feat_dim]
+        ) -> tuple[torch.Tensor, torch.Tensor]:
+            # [batch, d_transformer], [batch, prompt_feat_dim]
+            return emb, mean_feat.expand_as(feat)
+
+        @staticmethod
+        def _permute_feature(
+            emb: torch.Tensor,   # [batch, d_transformer]
+            feat: torch.Tensor,  # [batch, prompt_feat_dim]
+            feature_idx: int,
+            rng: np.random.Generator,
+        ) -> tuple[torch.Tensor, torch.Tensor]:
+            # [batch, d_transformer], [batch, prompt_feat_dim]
+            perm = torch.from_numpy(rng.permutation(feat.shape[0])).to(feat.device)
+            feat = feat.clone()
+            feat[:, feature_idx] = feat[perm, feature_idx]
+            return emb, feat

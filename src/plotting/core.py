@@ -426,6 +426,80 @@ def plot_loss_components(
     axes.legend()
 
 
+def plot_linear_components(
+    axes: plt.Axes,
+    components: dict[str, list[float | None]],
+    title: str,
+    ylabel: str = "Value",
+) -> None:
+    """Plot multiple series on a linear scale (no log transform).
+
+    Use for bounded metrics (e.g. variance ratios in [0, 1]) where log scale is
+    inappropriate.  Skips series with no data.
+    """
+    has_data = False
+    for name, values in components.items():
+        idx, vals = _filter_nones(values)
+        if len(vals) > 0:
+            axes.plot(idx, vals, label=name, alpha=0.8)
+            has_data = True
+
+    if not has_data:
+        axes.set_title(title)
+        return
+
+    axes.set_ylabel(ylabel)
+    axes.set_title(title)
+    axes.legend()
+
+
+def plot_score_variance_decomposition(
+    axes: plt.Axes,
+    total_variance: list[float | None],
+    model_ratio: list[float | None],
+    prompt_ratio: list[float | None],
+    title: str = "Score variance decomposition (Training)",
+) -> None:
+    """Plot log(total batch score variance) and model/prompt variance-ratio lines.
+
+    Ratios are only defined when a diagnostic batch has ≥2 distinct models; missing
+    epochs appear as gaps.  Uses a twin y-axis when both total variance and ratios
+    are present.
+    """
+    idx_t, vals_t = _filter_nones(total_variance)
+    idx_m, vals_m = _filter_nones(model_ratio)
+    idx_p, vals_p = _filter_nones(prompt_ratio)
+
+    if len(vals_t) == 0 and len(vals_m) == 0 and len(vals_p) == 0:
+        axes.set_title(title)
+        return
+
+    legend_lines: list = []
+    legend_labels: list[str] = []
+
+    if len(vals_t) > 0:
+        (ln,) = axes.plot(idx_t, np.log(np.maximum(vals_t, 1e-10)), color='tab:blue', alpha=0.8)
+        legend_lines.append(ln)
+        legend_labels.append('log(total variance)')
+        axes.set_ylabel('log(total variance)')
+
+    if len(vals_m) > 0 or len(vals_p) > 0:
+        ax2 = axes.twinx() if len(vals_t) > 0 else axes
+        if len(vals_m) > 0:
+            (ln,) = ax2.plot(idx_m, vals_m, color='tab:orange', alpha=0.8)
+            legend_lines.append(ln)
+            legend_labels.append('Model var ratio')
+        if len(vals_p) > 0:
+            (ln,) = ax2.plot(idx_p, vals_p, color='tab:green', alpha=0.8)
+            legend_lines.append(ln)
+            legend_labels.append('Prompt var ratio')
+        ax2.set_ylabel('Variance ratio')
+
+    if legend_lines:
+        axes.legend(legend_lines, legend_labels, loc='best')
+    axes.set_title(title)
+
+
 def plot_accuracy_breakdown(
     axes: plt.Axes,
     metrics: dict[str, list[float | None]],

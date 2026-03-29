@@ -24,6 +24,7 @@ from src.models.model_outputs_cache import ModelOutputsCache
 from src.models import model_loading
 from src.utils.best_model_tracker import BestModelTracker
 from src.utils.ranking_loss import PairwiseRankingLossType
+from src.preprocessing.scoring_feature_extraction import get_feature_descriptions
 import warnings
 
 
@@ -447,10 +448,19 @@ class GradientBoostingModel(ScoringModelBase):
                 print(f"\nReverting to best model parameters from epoch {self._best_model_tracker.best_epoch} (accuracy={self._best_model_tracker.best_accuracy:.4f})")
                 self.load_state_dict(self._best_model_tracker.best_state_dict, instance=self)
             
+            with Timer("sensitivity_analysis", verbosity="start+end", parent=train_timer):
+                sensitivity_metrics = GradientBoostingModel._SensitivityAnalysis.compute(
+                    self,
+                    preprocessed_train=preprocessed_train,
+                    preprocessed_val=preprocessed_val,
+                    seed=self.seed,
+                )
+
             final_metrics = {
                 "best_epoch": self._best_model_tracker.best_epoch,
                 "best_accuracy": self._best_model_tracker.best_accuracy,
                 "total_epochs": epochs,
+                **sensitivity_metrics,
             }
 
         self.finish_logger_if_needed(
@@ -669,6 +679,59 @@ class GradientBoostingModel(ScoringModelBase):
         
         return model
 
+    def _input_feature_slices(self) -> dict[str, tuple[int, int]]:
+        """Byte ranges in the flat feature vector for each enabled input feature type."""
+        if (
+            self._prompt_embedding_dim is None
+            or self._prompt_features_dim is None
+            or self._model_embedding_dim is None
+            or self._prompt_categories_dim is None
+        ):
+            raise RuntimeError("Feature dimensions not initialized")
+        offset = 0
+        slices: dict[str, tuple[int, int]] = {}
+        for ft in ("prompt_features", "model_embedding", "prompt_embedding", "prompt_categories"):
+            if ft not in self.input_features:
+                continue
+            if ft == "prompt_features":
+                d = self._prompt_features_dim
+            elif ft == "model_embedding":
+                d = self._model_embedding_dim
+            elif ft == "prompt_embedding":
+                d = self._prompt_embedding_dim
+            else:
+                d = self._prompt_categories_dim
+            slices[ft] = (offset, offset + d)
+            offset += d
+        return slices
+
+    def _build_pairwise_arrays(
+        self,
+        preprocessed_data: PreprocessedTrainingData,
+        use_balancing: bool,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, list[int]]:
+        """Stack pairwise rows: ``[a_1, b_1, …]`` — same layout as ``_prepare_xgboost_data``.
+
+        Returns:
+            X [n_samples, feat_dim], y [n_samples], sample_weights or None, indexes_list (per pair, for base margins).
+        """
+        features_list: list[np.ndarray] = []
+        labels_list: list[float] = []
+        model_ids_list: list[int] = []
+        indexes_list: list[int] = []
+
+        for pair_idx, pair in zip(preprocessed_data.filtered_indexes, preprocessed_data.pairs):
+            (features_a, features_b), (label_a, label_b) = self._create_sample_pair(pair)
+            features_list.extend([features_a, features_b])
+            labels_list.extend([label_a, label_b])
+            model_ids_list.extend([pair.model_id_a, pair.model_id_b])
+            indexes_list.append(pair_idx)
+
+        X = np.array(features_list)  # [n_samples, feature_dim]
+        y = np.array(labels_list)  # [n_samples]
+        sample_weights = self._compute_sample_weights(model_ids_list) if use_balancing else None
+        return X, y, sample_weights, indexes_list
+
     def _prepare_xgboost_data(
         self, 
         preprocessed_data: PreprocessedTrainingData, 
@@ -690,25 +753,8 @@ class GradientBoostingModel(ScoringModelBase):
         Returns:
             DMatrix with features [n_samples, feature_dim], labels [n_samples], and optional weights
         """
-        features_list = []  # [n_samples, feature_dim]
-        labels_list = []  # [n_samples]
-        model_ids_list = []  # For balancing
-        indexes_list = []  # Track original indexes for each pair
-        
-        for pair_idx, pair in zip(preprocessed_data.filtered_indexes, preprocessed_data.pairs):
-            # Create feature vector for each model in the comparison
-            # Format: [prompt_embedding, prompt_features, model_embedding]
-            
-            (features_a, features_b), (label_a, label_b) = self._create_sample_pair(pair)
-            features_list.extend([features_a, features_b])
-            labels_list.extend([label_a, label_b])
-            model_ids_list.extend([pair.model_id_a, pair.model_id_b])
-            indexes_list.append(pair_idx)
-        
-        X = np.array(features_list)  # [n_samples, feature_dim]
-        y = np.array(labels_list)  # [n_samples]
-        sample_weights = self._compute_sample_weights(model_ids_list) if use_balancing else None # [n_samples]
-        
+        X, y, sample_weights, indexes_list = self._build_pairwise_arrays(preprocessed_data, use_balancing)
+
         dmatrix = xgb.DMatrix(X, label=y, weight=sample_weights) if sample_weights is not None else xgb.DMatrix(X, label=y)
         
         # Set base margins (base model scores) if available
@@ -948,6 +994,153 @@ class GradientBoostingModel(ScoringModelBase):
             print(f"Round {result.epoch:>4}: loss = {result.total_loss:.4f}, accuracy = {(result.train_accuracy*100):.2f}% - {result.duration:.2f}s")
         else:
             print(f"Round {result.epoch:>4}: loss = {result.total_loss:.4f}/{result.val_loss:.4f}, accuracy = {(result.train_accuracy*100):.2f}%/{(result.val_accuracy*100):.2f}% - {result.duration:.2f}s")
+
+    class _SensitivityAnalysis:
+        """Post-training prompt / tabular-feature sensitivity (accuracy drop vs baseline).
+
+        Rebuilds the same pairwise feature matrix as training, perturbs it in NumPy,
+        then runs ``Booster.predict``.  **Not** ported from neural diagnostics:
+        there are no gradient norms, intermediate representation stats, score-variance
+        decomposition, or gradient×input attribution — only ablations aligned with
+        the neural ``sensitivity/*`` naming where the feature tensor allows it.
+
+        When ``prompt_features`` or ``prompt_embedding`` is omitted from
+        ``input_features``, the corresponding metrics are skipped.
+        """
+
+        @classmethod
+        def compute(
+            cls,
+            model: "GradientBoostingModel",
+            preprocessed_train: PreprocessedTrainingData,
+            preprocessed_val: PreprocessedTrainingData | None,
+            seed: int = 42,
+        ) -> dict[str, float]:
+            """Keys ``sensitivity/<metric>_train`` and ``sensitivity/<metric>_val``."""
+            rng = np.random.default_rng(seed)
+            booster = model._xgb_model
+            if booster is None:
+                raise RuntimeError("XGBoost model not trained")
+
+            numeric_descs, boolean_descs = get_feature_descriptions()
+            feature_names = [d.name for d in numeric_descs] + [d.name for d in boolean_descs]
+            slices = model._input_feature_slices()
+
+            results: dict[str, float] = {}
+            for suffix, prep, use_bal in (
+                ("_train", preprocessed_train, model.balance_model_samples),
+                ("_val", preprocessed_val, False),
+            ):
+                if prep is None:
+                    continue
+
+                X, y, _, indexes_list = model._build_pairwise_arrays(prep, use_bal)
+                base_margin = (
+                    model._get_base_margins(indexes_list)
+                    if model._model_outputs_cache is not None
+                    else None
+                )
+
+                baseline = cls._pairwise_accuracy(booster, X, y, base_margin)
+
+                X_s, y_s, bm_s = cls._shuffle_pairs(X, y, base_margin, rng)
+                results[f"sensitivity/prompt{suffix}"] = baseline - cls._pairwise_accuracy(
+                    booster, X_s, y_s, bm_s
+                )
+
+                pe_sl = slices.get("prompt_embedding")
+                if pe_sl is not None:
+                    Xm = cls._set_block_to_mean(X, pe_sl[0], pe_sl[1])
+                    results[f"sensitivity/prompt_embedding{suffix}"] = baseline - cls._pairwise_accuracy(
+                        booster, Xm, y, base_margin
+                    )
+
+                pf_sl = slices.get("prompt_features")
+                if pf_sl is not None:
+                    Xm = cls._set_block_to_mean(X, pf_sl[0], pf_sl[1])
+                    results[f"sensitivity/prompt_features{suffix}"] = baseline - cls._pairwise_accuracy(
+                        booster, Xm, y, base_margin
+                    )
+
+                    p0, p1 = pf_sl
+                    n_cols = p1 - p0
+                    n_perm = min(len(feature_names), n_cols)
+                    for idx in range(n_perm):
+                        Xp = cls._permute_column_within_pairs(X, p0 + idx, rng)
+                        results[f"sensitivity/feature/{feature_names[idx]}{suffix}"] = (
+                            baseline - cls._pairwise_accuracy(booster, Xp, y, base_margin)
+                        )
+
+            return results
+
+        @staticmethod
+        def _pairwise_accuracy(
+            booster: xgb.Booster,
+            X: np.ndarray,  # [n_samples, n_features]
+            y: np.ndarray,  # [n_samples]
+            base_margin: np.ndarray | None,  # [n_samples] or None
+        ) -> float:
+            dm = (
+                xgb.DMatrix(X, base_margin=base_margin)
+                if base_margin is not None
+                else xgb.DMatrix(X)
+            )
+            preds = booster.predict(dm)  # [n_samples]
+            preds_pairs = preds.reshape(-1, 2)  # [n_pairs, 2]
+            y_pairs = y.reshape(-1, 2)  # [n_pairs, 2]
+            pred_a = preds_pairs[:, 0]  # [n_pairs]
+            pred_b = preds_pairs[:, 1]  # [n_pairs]
+            label_a = y_pairs[:, 0]  # [n_pairs]
+            correct = ((pred_a > pred_b) == (label_a == 1.0)).mean()
+            return float(correct)
+
+        @staticmethod
+        def _shuffle_pairs(
+            X: np.ndarray,  # [n_samples, n_features]
+            y: np.ndarray,  # [n_samples]
+            base_margin: np.ndarray | None,  # [n_samples]
+            rng: np.random.Generator,
+        ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+            n_pairs = X.shape[0] // 2
+            perm = rng.permutation(n_pairs)
+            X_new = np.empty_like(X)
+            y_new = np.empty_like(y)
+            bm_new: np.ndarray | None = None
+            if base_margin is not None:
+                bm_new = np.empty_like(base_margin)
+            for i, j in enumerate(perm):
+                X_new[2 * i : 2 * i + 2] = X[2 * j : 2 * j + 2]
+                y_new[2 * i : 2 * i + 2] = y[2 * j : 2 * j + 2]
+                if bm_new is not None and base_margin is not None:
+                    bm_new[2 * i : 2 * i + 2] = base_margin[2 * j : 2 * j + 2]
+            return X_new, y_new, bm_new
+
+        @staticmethod
+        def _set_block_to_mean(
+            X: np.ndarray,  # [n_samples, n_features]
+            start: int,
+            end: int,
+        ) -> np.ndarray:
+            out = X.copy()
+            mean_vec = out[:, start:end].mean(axis=0)  # [end - start]
+            out[:, start:end] = mean_vec
+            return out
+
+        @staticmethod
+        def _permute_column_within_pairs(
+            X: np.ndarray,  # [n_samples, n_features]
+            col: int,
+            rng: np.random.Generator,
+        ) -> np.ndarray:
+            """Permute one prompt-feature column across pairs (identical on a/b rows)."""
+            out = X.copy()
+            n_pairs = X.shape[0] // 2
+            vals = out[0::2, col].copy()  # [n_pairs]
+            perm = rng.permutation(n_pairs)
+            shuffled = vals[perm]
+            out[0::2, col] = shuffled
+            out[1::2, col] = shuffled
+            return out
 
     @dataclass
     class EpochResult:

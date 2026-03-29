@@ -1,7 +1,7 @@
 """Dense network model for prompt routing."""
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 import numpy as np
 import torch
 import torch.nn as nn
@@ -244,11 +244,20 @@ class DnEmbeddingModel(ScoringModelBase):
             
             self._optimizer_state = optimizer.state_dict()
             self._scheduler_state = scheduler.state_dict() if scheduler is not None else None
-            
+
+            with Timer("sensitivity_analysis", verbosity="start+end", parent=train_timer):
+                sensitivity_metrics = DnEmbeddingModel._SensitivityAnalysis.compute(
+                    self.network,
+                    train_dataloader=dataloader,
+                    val_dataloader=val_dataloader,
+                    seed=self.seed,
+                )
+
             final_metrics = {
                 "best_epoch": self._best_model_tracker.best_epoch,
                 "best_accuracy": self._best_model_tracker.best_accuracy,
                 "total_epochs": self._epochs_completed,
+                **sensitivity_metrics,
             }
 
         self.finish_logger_if_needed(
@@ -743,6 +752,186 @@ class DnEmbeddingModel(ScoringModelBase):
         val_accuracy: float | None
         duration: float
         additional_metrics: dict[str, float]
+
+    class _SensitivityAnalysis:
+        """Prompt sensitivity and feature importance metrics computed on dataloaders.
+
+        Results are accuracy drops from baseline (positive = the modification hurts
+        accuracy, i.e. the model relies on that component).
+
+        A and B sides of each pair share the same prompt, so modifications are applied
+        identically to both sides.
+        """
+
+        @classmethod
+        def compute(
+            cls,
+            network: "DnEmbeddingModel._DenseNetwork",
+            train_dataloader: "_DataLoaderType",
+            val_dataloader: "_DataLoaderType | None",
+            seed: int = 42,
+        ) -> dict[str, float]:
+            """Compute all sensitivity metrics on available dataloaders.
+
+            Returns a flat dict of accuracy drops keyed by
+            ``sensitivity/<metric>_train`` and ``sensitivity/<metric>_val``.
+            Val entries are omitted when val_dataloader is None.
+            """
+            numeric_descs, boolean_descs = get_feature_descriptions()
+            feature_names = [d.name for d in numeric_descs] + [d.name for d in boolean_descs]
+
+            results: dict[str, float] = {}
+            for suffix, dataloader in [("_train", train_dataloader), ("_val", val_dataloader)]:
+                if dataloader is None:
+                    continue
+
+                global_mean_emb, global_mean_feat = cls._compute_global_means(network, dataloader)
+                baseline = cls._compute_accuracy(network, dataloader)
+
+                results[f"sensitivity/prompt{suffix}"] = baseline - cls._compute_accuracy(
+                    network, dataloader,
+                    lambda e, f, eb, fb: cls._shuffle_prompts(e, f, eb, fb, np.random.default_rng(seed)),
+                )
+                results[f"sensitivity/prompt_embedding{suffix}"] = baseline - cls._compute_accuracy(
+                    network, dataloader,
+                    lambda e, f, eb, fb: cls._set_emb_to_mean(e, f, eb, fb, global_mean_emb),
+                )
+                results[f"sensitivity/prompt_features{suffix}"] = baseline - cls._compute_accuracy(
+                    network, dataloader,
+                    lambda e, f, eb, fb: cls._set_feat_to_mean(e, f, eb, fb, global_mean_feat),
+                )
+                for idx, name in enumerate(feature_names):
+                    results[f"sensitivity/feature/{name}{suffix}"] = baseline - cls._compute_accuracy(
+                        network, dataloader,
+                        lambda e, f, eb, fb: cls._permute_feature(e, f, eb, fb, idx, np.random.default_rng(seed)),
+                    )
+
+            return results
+
+        @classmethod
+        def _compute_accuracy(
+            cls,
+            network: "DnEmbeddingModel._DenseNetwork",
+            dataloader: "_DataLoaderType",
+            modify_prompt: Callable[
+                [torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
+                tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
+            ] | None = None,
+        ) -> float:
+            """Compute accuracy on a dataloader with an optional per-batch prompt modification."""
+            device = next(network.parameters()).device
+            network.eval()
+            total_correct = 0.0
+            total_samples = 0
+
+            with torch.no_grad():
+                for (
+                    prompt_emb_a, prompt_feat_a, model_emb_a,
+                    prompt_emb_b, prompt_feat_b, model_emb_b,
+                    labels, _, _,
+                ) in dataloader:
+                    prompt_emb_a = prompt_emb_a.to(device)   # [batch, prompt_emb_dim]
+                    prompt_feat_a = prompt_feat_a.to(device)  # [batch, prompt_feat_dim]
+                    model_emb_a = model_emb_a.to(device)      # [batch, model_emb_dim]
+                    prompt_emb_b = prompt_emb_b.to(device)   # [batch, prompt_emb_dim]
+                    prompt_feat_b = prompt_feat_b.to(device)  # [batch, prompt_feat_dim]
+                    model_emb_b = model_emb_b.to(device)      # [batch, model_emb_dim]
+                    labels = labels.to(device)                 # [batch]
+
+                    if modify_prompt is not None:
+                        prompt_emb_a, prompt_feat_a, prompt_emb_b, prompt_feat_b = modify_prompt(
+                            prompt_emb_a, prompt_feat_a, prompt_emb_b, prompt_feat_b,
+                        )
+
+                    score_a = network(prompt_emb_a, prompt_feat_a, model_emb_a)  # [batch]
+                    score_b = network(prompt_emb_b, prompt_feat_b, model_emb_b)  # [batch]
+
+                    batch_size = labels.shape[0]
+                    total_correct += compute_pairwise_accuracy(score_a, score_b, labels) * batch_size
+                    total_samples += batch_size
+
+            return total_correct / total_samples if total_samples > 0 else 0.0
+
+        @classmethod
+        def _compute_global_means(
+            cls,
+            network: "DnEmbeddingModel._DenseNetwork",
+            dataloader: "_DataLoaderType",
+        ) -> tuple[torch.Tensor, torch.Tensor]:
+            """Compute the dataset-level mean prompt embedding and features.
+
+            Returns:
+                (mean_emb, mean_feat) shaped [1, prompt_emb_dim] and [1, prompt_feat_dim]
+            """
+            device = next(network.parameters()).device
+            sum_emb: torch.Tensor | None = None
+            sum_feat: torch.Tensor | None = None
+            total = 0
+
+            with torch.no_grad():
+                for (prompt_emb_a, prompt_feat_a, _, _, _, _, _, _, _) in dataloader:
+                    prompt_emb_a = prompt_emb_a.to(device)   # [batch, prompt_emb_dim]
+                    prompt_feat_a = prompt_feat_a.to(device)  # [batch, prompt_feat_dim]
+                    if sum_emb is None:
+                        sum_emb = prompt_emb_a.sum(dim=0)
+                        sum_feat = prompt_feat_a.sum(dim=0)
+                    else:
+                        sum_emb += prompt_emb_a.sum(dim=0)
+                        sum_feat += prompt_feat_a.sum(dim=0)
+                    total += prompt_emb_a.shape[0]
+
+            return (sum_emb / total).unsqueeze(0), (sum_feat / total).unsqueeze(0)  # [1, d_emb], [1, d_feat]
+
+        @staticmethod
+        def _shuffle_prompts(
+            emb_a: torch.Tensor,   # [batch, prompt_emb_dim]
+            feat_a: torch.Tensor,  # [batch, prompt_feat_dim]
+            emb_b: torch.Tensor,   # [batch, prompt_emb_dim]
+            feat_b: torch.Tensor,  # [batch, prompt_feat_dim]
+            rng: np.random.Generator,
+        ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+            # [batch, prompt_emb_dim], [batch, prompt_feat_dim], [batch, prompt_emb_dim], [batch, prompt_feat_dim]
+            idx = torch.from_numpy(rng.permutation(emb_a.shape[0])).to(emb_a.device)
+            return emb_a[idx], feat_a[idx], emb_b[idx], feat_b[idx]
+
+        @staticmethod
+        def _set_emb_to_mean(
+            emb_a: torch.Tensor,    # [batch, prompt_emb_dim]
+            feat_a: torch.Tensor,   # [batch, prompt_feat_dim]
+            emb_b: torch.Tensor,    # [batch, prompt_emb_dim]
+            feat_b: torch.Tensor,   # [batch, prompt_feat_dim]
+            mean_emb: torch.Tensor, # [1, prompt_emb_dim]
+        ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+            # [batch, prompt_emb_dim], [batch, prompt_feat_dim], [batch, prompt_emb_dim], [batch, prompt_feat_dim]
+            return mean_emb.expand_as(emb_a), feat_a, mean_emb.expand_as(emb_b), feat_b
+
+        @staticmethod
+        def _set_feat_to_mean(
+            emb_a: torch.Tensor,     # [batch, prompt_emb_dim]
+            feat_a: torch.Tensor,    # [batch, prompt_feat_dim]
+            emb_b: torch.Tensor,     # [batch, prompt_emb_dim]
+            feat_b: torch.Tensor,    # [batch, prompt_feat_dim]
+            mean_feat: torch.Tensor, # [1, prompt_feat_dim]
+        ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+            # [batch, prompt_emb_dim], [batch, prompt_feat_dim], [batch, prompt_emb_dim], [batch, prompt_feat_dim]
+            return emb_a, mean_feat.expand_as(feat_a), emb_b, mean_feat.expand_as(feat_b)
+
+        @staticmethod
+        def _permute_feature(
+            emb_a: torch.Tensor,   # [batch, prompt_emb_dim]
+            feat_a: torch.Tensor,  # [batch, prompt_feat_dim]
+            emb_b: torch.Tensor,   # [batch, prompt_emb_dim]
+            feat_b: torch.Tensor,  # [batch, prompt_feat_dim]
+            feature_idx: int,
+            rng: np.random.Generator,
+        ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+            # [batch, prompt_emb_dim], [batch, prompt_feat_dim], [batch, prompt_emb_dim], [batch, prompt_feat_dim]
+            perm = torch.from_numpy(rng.permutation(feat_a.shape[0])).to(feat_a.device)
+            feat_a = feat_a.clone()
+            feat_b = feat_b.clone()
+            feat_a[:, feature_idx] = feat_a[perm, feature_idx]
+            feat_b[:, feature_idx] = feat_b[perm, feature_idx]
+            return emb_a, feat_a, emb_b, feat_b
 
     class _DenseNetwork(nn.Module):
 

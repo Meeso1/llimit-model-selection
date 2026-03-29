@@ -7,6 +7,7 @@ from src.plotting.core import (
     plot_combined_accuracy as _plot_combined_accuracy,
     plot_combined_log_variance as _plot_combined_log_variance,
     plot_loss_components as _plot_loss_components,
+    plot_score_variance_decomposition as _plot_score_variance_decomposition,
     _get_metric,
     _filter_nones,
 )
@@ -21,11 +22,14 @@ def _weighted_metric(
 
 
 def plot_metrics(log: TrainingLog) -> plt.Figure:
-    """Create a figure with all metrics for the response predictive model.
+    """Create a figure with all per-epoch metrics for the response predictive model.
 
-    Layout: 7 rows × 2 columns.
+    Post-training-only metrics (e.g. sensitivity ablations in ``final_metrics``) are
+    not plotted.
+
+    Layout: 10 rows × 2 columns.
     """
-    fig, axes = plt.subplots(7, 2, figsize=(14, 35))
+    fig, axes = plt.subplots(10, 2, figsize=(14, 42))
 
     plot_total_loss(axes[0, 0], log)
     plot_accuracy(axes[0, 1], log)
@@ -41,6 +45,12 @@ def plot_metrics(log: TrainingLog) -> plt.Figure:
     plot_repr_dist_kl_loss(axes[5, 1], log)
     plot_component_losses_weighted(axes[6, 0], log)
     plot_component_losses_normalized(axes[6, 1], log)
+    plot_diagnostic_grad_norms(axes[7, 0], log)
+    plot_predictor_input_proj_norms(axes[7, 1], log)
+    plot_pred_real_repr_diagnostics(axes[8, 0], log)
+    plot_score_variance_diagnostics(axes[8, 1], log)
+    plot_grad_attr_embeddings(axes[9, 0], log)
+    axes[9, 1].set_visible(False)
 
     fig.tight_layout()
     return fig
@@ -192,6 +202,72 @@ def plot_component_losses_weighted(axes: plt.Axes, log: TrainingLog) -> None:
             f'Dist KL (×{dkw:g})': _weighted_metric(_get_metric(log, 'repr_dist_kl_loss'), dkw),
         },
         'Weighted Component Losses (Training)',
+        normalize=False,
+    )
+
+
+def plot_diagnostic_grad_norms(axes: plt.Axes, log: TrainingLog) -> None:
+    """Gradient norms for encoder, predictor, and scorer (log scale, normalized)."""
+    _plot_loss_components(
+        axes,
+        {
+            'Encoder': _get_metric(log, 'encoder_grad_norm'),
+            'Predictor': _get_metric(log, 'predictor_grad_norm'),
+            'Scorer': _get_metric(log, 'scorer_grad_norm'),
+        },
+        'Gradient Norms by Subnetwork (Training)',
+        normalize=True,
+    )
+
+
+def plot_predictor_input_proj_norms(axes: plt.Axes, log: TrainingLog) -> None:
+    """L2 norms of predictor input projections (log scale)."""
+    _plot_loss_components(
+        axes,
+        {
+            'Prompt proj': _get_metric(log, 'predictor_prompt_proj_norm'),
+            'Feat proj': _get_metric(log, 'predictor_feat_proj_norm'),
+            'Model proj': _get_metric(log, 'predictor_model_proj_norm'),
+        },
+        'Predictor Input Projection Norms (Training)',
+        normalize=False,
+    )
+
+
+def plot_pred_real_repr_diagnostics(axes: plt.Axes, log: TrainingLog) -> None:
+    """Norms and mean per-dim variance for predicted vs encoded response representations."""
+    _plot_loss_components(
+        axes,
+        {
+            'Pred repr norm': _get_metric(log, 'pred_repr_norm'),
+            'Real repr norm': _get_metric(log, 'real_repr_norm'),
+            'Pred repr var': _get_metric(log, 'pred_repr_variance'),
+            'Real repr var': _get_metric(log, 'real_repr_variance'),
+        },
+        'Predicted / Real Representation Norms & Variance (Training)',
+        normalize=False,
+    )
+
+
+def plot_score_variance_diagnostics(axes: plt.Axes, log: TrainingLog) -> None:
+    """Batch score variance and model vs prompt decomposition (real-repr scores)."""
+    _plot_score_variance_decomposition(
+        axes,
+        _get_metric(log, 'score_total_variance'),
+        _get_metric(log, 'score_model_variance_ratio'),
+        _get_metric(log, 'score_prompt_variance_ratio'),
+    )
+
+
+def plot_grad_attr_embeddings(axes: plt.Axes, log: TrainingLog) -> None:
+    """Mean gradient×|input| attribution for prompt and model embeddings."""
+    _plot_loss_components(
+        axes,
+        {
+            'Prompt embedding': _get_metric(log, 'grad_attr_prompt_embedding'),
+            'Model embedding': _get_metric(log, 'grad_attr_model_embedding'),
+        },
+        'Gradient attribution — embeddings (Training)',
         normalize=False,
     )
 

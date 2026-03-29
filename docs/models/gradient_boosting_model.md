@@ -120,6 +120,17 @@ Both train and validation metrics are computed after each boosting round.
 
 The pairwise accuracy is computed by comparing predictions for both models in each pair and checking if the relative ordering is correct, regardless of the absolute score values.
 
+### Post-training sensitivity (`final_metrics`)
+
+After training (on the reverted best booster), the model runs the same style of **accuracy-drop** ablations as the neural scoring models, logged under `sensitivity/<name>_train` and `sensitivity/<name>_val` (val omitted if there is no validation split):
+
+- **`sensitivity/prompt`**: shuffle whole comparison pairs (prompt + both model rows + labels + base margins stay aligned).
+- **`sensitivity/prompt_embedding`**: replace the prompt-embedding block with its dataset mean (only if `prompt_embedding` is in `input_features`).
+- **`sensitivity/prompt_features`**: replace the prompt-features block with its column means (only if `prompt_features` is in `input_features`).
+- **`sensitivity/feature/<name>`**: permute one prompt-feature column across pairs (same as neural models’ per-feature test), for each name from `get_feature_descriptions()` up to the block width.
+
+**Not** included (no analogue in a flat XGBoost feature vector): gradient norms, representation norm/variance diagnostics, batch score-variance decomposition, or gradient×input attribution.
+
 ## Saving and Loading
 
 The model serializes:

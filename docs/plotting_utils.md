@@ -79,6 +79,8 @@ direction (e.g. KL loss, prediction quality).
 | Function | Description |
 |---|---|
 | `plot_loss_components(axes, components, title, normalize)` | Multiple loss components on log scale. `normalize=True` divides each series by its first value so improvement trajectories are comparable regardless of absolute magnitude. |
+| `plot_linear_components(axes, components, title, ylabel)` | Multiple series on a **linear** scale (no log). For bounded metrics (e.g. ratios in [0, 1]). |
+| `plot_score_variance_decomposition(axes, total_variance, model_ratio, prompt_ratio, title)` | `log(total_variance)` on the left axis and model/prompt variance ratios on a twin axis when both are present. |
 | `plot_accuracy_breakdown(axes, metrics, title)` | Multiple accuracy components on −log(1−acc) scale |
 | `plot_distribution_over_time(axes, avg, top, bottom, title, ylabel)` | Fan chart: average + top/bottom 10%; shaded band |
 
@@ -98,7 +100,9 @@ with the desired values extracted from the log.
 
 ### `response_predictive.py`
 
-`plot_metrics` produces a 7 × 2 grid.
+`plot_metrics` produces a 10 × 2 grid. Per-epoch diagnostics from
+`EpochDiagnosticsAccumulator` are included; post-training metrics (e.g.
+`sensitivity/*` in `final_metrics`) are not.
 
 | Function | Metric keys | Notes |
 |---|---|---|
@@ -116,6 +120,11 @@ with the desired values extracted from the log.
 | `plot_repr_dist_kl_loss` | `repr_dist_kl_loss` / val | Symmetric KL between pred/real repr distributions; no best-val line |
 | `plot_component_losses_weighted` | scoring, prediction, predictability, repr KL, score consistency, dist KL (training) | Weighted — shows which dominates |
 | `plot_component_losses_normalized` | same six (training) | Each normalized to start at 1 — shows improvement rate |
+| `plot_diagnostic_grad_norms` | `encoder_grad_norm`, `predictor_grad_norm`, `scorer_grad_norm` (training) | Normalized log scale |
+| `plot_predictor_input_proj_norms` | `predictor_prompt_proj_norm`, `predictor_feat_proj_norm`, `predictor_model_proj_norm` | |
+| `plot_pred_real_repr_diagnostics` | `pred_repr_norm`, `real_repr_norm`, `pred_repr_variance`, `real_repr_variance` | |
+| `plot_score_variance_diagnostics` | `score_total_variance`, `score_model_variance_ratio`, `score_prompt_variance_ratio` | Real-repr scores; twin-axis |
+| `plot_grad_attr_embeddings` | `grad_attr_prompt_embedding`, `grad_attr_model_embedding` | |
 
 ### `simple_scoring.py`
 
@@ -143,7 +152,40 @@ with the desired values extracted from the log.
 | `plot_rating_distribution` | `avg_rating`, `top_10_pct_rating`, `bottom_10_pct_rating` |
 | `plot_rating_change` | `avg_rating_change` |
 
-### `transformer_embedding.py`, `dense_network.py`, `dn_embedding.py`, `gradient_boosting.py`
+### `transformer_embedding.py`
+
+`plot_metrics` produces a 4 × 2 grid. Per-epoch diagnostics from
+`EpochDiagnosticsAccumulator` are included; post-training metrics (e.g.
+`sensitivity/*` in `final_metrics`) are not.
+
+| Function | Metric keys | Notes |
+|---|---|---|
+| `plot_loss` | `train_loss` / `val_loss` | |
+| `plot_accuracy` | `train_accuracy` / `val_accuracy` | |
+| `plot_modality_norms` | `prompt_emb_proj_norm`, `feat_proj_norm`, `model_proj_norm` | |
+| `plot_gradient_norms` | `transformer_grad_norm`, `projection_grad_norm`, `scoring_head_grad_norm` | Normalized |
+| `plot_interaction_norm` | `interaction_norm` | |
+| `plot_score_variance` | `score_total_variance`, `score_model_variance_ratio`, `score_prompt_variance_ratio` | Twin-axis |
+| `plot_modality_variances` | `prompt_emb_proj_variance`, `feat_proj_variance`, `model_proj_variance`, `interaction_variance` | |
+| `plot_grad_attr_embeddings` | `grad_attr_prompt_embedding`, `grad_attr_model_embedding` | |
+
+### `dn_embedding.py`
+
+`plot_metrics` produces a 4 × 2 grid (one panel hidden). Per-epoch diagnostics
+from `EpochDiagnosticsAccumulator` are included; post-training metrics (e.g.
+`sensitivity/*` in `final_metrics`) are not.
+
+| Function | Metric keys | Notes |
+|---|---|---|
+| `plot_loss` | `train_loss` / `val_loss` | |
+| `plot_accuracy` | `train_accuracy` / `val_accuracy` | |
+| `plot_modality_norms` | `prompt_emb_proj_norm`, `prompt_feat_proj_norm`, `model_emb_proj_norm` | |
+| `plot_modality_variances` | `*_variance` for the three input projections | |
+| `plot_gradient_norms` | `trunk_grad_norm`, `prompt_emb_proj_grad_norm`, `prompt_feat_proj_grad_norm`, `model_emb_proj_grad_norm` | Normalized |
+| `plot_score_variance` | `score_total_variance`, `score_model_variance_ratio`, `score_prompt_variance_ratio` | Twin-axis |
+| `plot_grad_attr_embeddings` | `grad_attr_prompt_embedding`, `grad_attr_model_embedding` | |
+
+### `dense_network.py`
 
 `plot_metrics` produces a 1 × 2 grid.
 
@@ -151,6 +193,12 @@ with the desired values extracted from the log.
 |---|---|
 | `plot_loss` | `train_loss` / `val_loss` |
 | `plot_accuracy` | `train_accuracy` / `val_accuracy` |
+
+### `gradient_boosting.py`
+
+`plot_metrics` produces a 1 × 2 grid (epoch-level only). After training, the model logs
+post-training **`sensitivity/*`** accuracy drops in `final_metrics` (not per-epoch);
+those are omitted from `plot_metrics` by design.
 
 ### `dn_length_prediction.py`, `gb_length_prediction.py`
 
