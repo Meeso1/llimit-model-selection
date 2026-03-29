@@ -28,9 +28,11 @@ from src.models.optimizers.optimizer_spec import OptimizerSpecification
 from src.models import model_loading
 from src.utils.best_model_tracker import BestModelTracker
 from src.utils.ranking_loss import PairwiseRankingLossType, compute_pairwise_ranking_loss
+from src.analysis.training_diagnostics import EpochDiagnosticsAccumulator, split_tensor_with_grad
+from src.preprocessing.scoring_feature_extraction import get_feature_descriptions
 
 
-_DataLoaderType = DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]
+_DataLoaderType = DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]
 
 
 class DnEmbeddingModel(ScoringModelBase):
@@ -473,6 +475,8 @@ class DnEmbeddingModel(ScoringModelBase):
         model_embeddings_a = torch.stack(model_embeddings_a_list)  # [n_pairs, model_embedding_dim]
         model_embeddings_b = torch.stack(model_embeddings_b_list)  # [n_pairs, model_embedding_dim]
         labels = torch.tensor(labels_list, dtype=torch.float32)  # [n_pairs]
+        model_ids_a = torch.tensor(model_ids_a_list, dtype=torch.long)  # [n_pairs]
+        model_ids_b = torch.tensor(model_ids_b_list, dtype=torch.long)  # [n_pairs]
         
         dataset = TensorDataset(
             prompt_embeddings_a,
@@ -482,6 +486,8 @@ class DnEmbeddingModel(ScoringModelBase):
             prompt_features_b,
             model_embeddings_b,
             labels,
+            model_ids_a,
+            model_ids_b,
         )
         
         # Apply weighted sampling if balancing is enabled
@@ -572,18 +578,34 @@ class DnEmbeddingModel(ScoringModelBase):
             total_accuracy = 0.0
             n_batches = 0
             total_samples = 0
-            
-            for batch_emb_a, batch_features_a, batch_model_emb_a, batch_emb_b, batch_features_b, batch_model_emb_b, batch_labels in dataloader:
-                batch_emb_a: torch.Tensor = batch_emb_a.to(self.device)  # [batch_size, prompt_embedding_dim]
-                batch_features_a: torch.Tensor = batch_features_a.to(self.device)  # [batch_size, prompt_features_dim]
-                batch_model_emb_a: torch.Tensor = batch_model_emb_a.to(self.device)  # [batch_size, model_embedding_dim]
+            diagnostic_accumulator = EpochDiagnosticsAccumulator()
+            trunk_params, prompt_emb_proj_params, prompt_feat_proj_params, model_emb_proj_params = self.network.get_param_groups_for_metrics()
+            numeric_descs, bool_descs = get_feature_descriptions()
+            prompt_feature_names = [d.name for d in numeric_descs] + [d.name for d in bool_descs]
+
+            for batch_emb_a, batch_features_a, batch_model_emb_a, batch_emb_b, batch_features_b, batch_model_emb_b, batch_labels, batch_model_ids_a, batch_model_ids_b in dataloader:
+                batch_emb_a: torch.Tensor = batch_emb_a.to(self.device).requires_grad_(True)  # [batch_size, prompt_embedding_dim]
+                batch_features_a: torch.Tensor = batch_features_a.to(self.device).requires_grad_(True)  # [batch_size, prompt_features_dim]
+                batch_model_emb_a: torch.Tensor = batch_model_emb_a.to(self.device).requires_grad_(True)  # [batch_size, model_embedding_dim]
                 batch_emb_b: torch.Tensor = batch_emb_b.to(self.device)  # [batch_size, prompt_embedding_dim]
                 batch_features_b: torch.Tensor = batch_features_b.to(self.device)  # [batch_size, prompt_features_dim]
                 batch_model_emb_b: torch.Tensor = batch_model_emb_b.to(self.device)  # [batch_size, model_embedding_dim]
                 batch_labels: torch.Tensor = batch_labels.to(self.device)  # [batch_size]
-                
+                batch_model_ids_a: torch.Tensor = batch_model_ids_a.to(self.device)  # [batch_size]
+                batch_model_ids_b: torch.Tensor = batch_model_ids_b.to(self.device)  # [batch_size]
+
                 total_samples += len(batch_emb_a)
-                
+
+                with torch.no_grad():
+                    pe = self.network.prompt_emb_proj(batch_emb_a)       # [batch_size, input_proj_dim]
+                    pf = self.network.prompt_feat_proj(batch_features_a)  # [batch_size, input_proj_dim]
+                    me = self.network.model_emb_proj(batch_model_emb_a)   # [batch_size, input_proj_dim]
+                diagnostic_accumulator.update_representation_stats({
+                    "prompt_emb_proj": pe,
+                    "prompt_feat_proj": pf,
+                    "model_emb_proj": me,
+                })
+
                 optimizer.zero_grad()
                 scores_a = self.network(
                     batch_emb_a,
@@ -595,11 +617,28 @@ class DnEmbeddingModel(ScoringModelBase):
                     batch_features_b,
                     batch_model_emb_b,
                 )  # [batch_size]
-                
+
                 loss: torch.Tensor = compute_pairwise_ranking_loss(
                     self.ranking_loss_type, scores_a, scores_b, batch_labels, margin=0.1
                 )
                 loss.backward()
+
+                diagnostic_accumulator.update_grad_norms({
+                    "trunk": trunk_params,
+                    "prompt_emb_proj": prompt_emb_proj_params,
+                    "prompt_feat_proj": prompt_feat_proj_params,
+                    "model_emb_proj": model_emb_proj_params,
+                })
+                diagnostic_accumulator.update_gradient_attribution({
+                    **split_tensor_with_grad(batch_features_a, prompt_feature_names),
+                    "prompt_embedding": batch_emb_a,
+                    "model_embedding": batch_model_emb_a,
+                })
+                diagnostic_accumulator.update_score_variance(
+                    torch.cat([scores_a.detach(), scores_b.detach()]),  # [2 * batch_size]
+                    torch.cat([batch_model_ids_a, batch_model_ids_b]),  # [2 * batch_size]
+                )
+
                 torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=1.0)
                 optimizer.step()
                 
@@ -613,7 +652,8 @@ class DnEmbeddingModel(ScoringModelBase):
             
             avg_loss = total_loss / n_batches
             avg_accuracy = total_accuracy / n_batches
-            
+            additional_metrics = diagnostic_accumulator.to_dict()
+
             with Timer("perform_validation", verbosity="start+end", parent=timer):
                 val_loss, val_accuracy = self._perform_validation(val_dataloader) if val_dataloader is not None else (None, None)
             
@@ -623,6 +663,7 @@ class DnEmbeddingModel(ScoringModelBase):
                 val_loss=val_loss,
                 train_accuracy=avg_accuracy,
                 val_accuracy=val_accuracy,
+                additional_metrics=additional_metrics,
             )
             self._history_entries.append(entry)
             
@@ -635,6 +676,7 @@ class DnEmbeddingModel(ScoringModelBase):
             val_loss=val_loss,
             val_accuracy=val_accuracy,
             duration=timer.elapsed_time,
+            additional_metrics=additional_metrics,
         )
 
     def _perform_validation(
@@ -646,7 +688,7 @@ class DnEmbeddingModel(ScoringModelBase):
         total_accuracy = 0.0
         n_batches = 0
 
-        for batch_emb_a, batch_features_a, batch_model_emb_a, batch_emb_b, batch_features_b, batch_model_emb_b, batch_labels in val_dataloader:
+        for batch_emb_a, batch_features_a, batch_model_emb_a, batch_emb_b, batch_features_b, batch_model_emb_b, batch_labels, _, _ in val_dataloader:
             batch_emb_a: torch.Tensor = batch_emb_a.to(self.device)  # [batch_size, embedding_dim]
             batch_features_a: torch.Tensor = batch_features_a.to(self.device)  # [batch_size, prompt_features_dim]
             batch_model_emb_a: torch.Tensor = batch_model_emb_a.to(self.device)  # [batch_size, model_embedding_dim]
@@ -700,6 +742,7 @@ class DnEmbeddingModel(ScoringModelBase):
         val_loss: float | None
         val_accuracy: float | None
         duration: float
+        additional_metrics: dict[str, float]
 
     class _DenseNetwork(nn.Module):
 
@@ -762,6 +805,16 @@ class DnEmbeddingModel(ScoringModelBase):
             pf = self.prompt_feat_proj(prompt_features)  # [batch_size, input_proj_dim]
             me = self.model_emb_proj(model_embedding)    # [batch_size, input_proj_dim]
             return self.trunk(torch.cat([pe, pf, me], dim=1)).squeeze(-1)  # [batch_size]
+
+        def get_param_groups_for_metrics(
+            self,
+        ) -> tuple[list[nn.Parameter], list[nn.Parameter], list[nn.Parameter], list[nn.Parameter]]:
+            """Return (trunk_params, prompt_emb_proj_params, prompt_feat_proj_params, model_emb_proj_params) for gradient norm metrics."""
+            trunk_params = list(self.trunk.parameters())
+            prompt_emb_proj_params = list(self.prompt_emb_proj.parameters())
+            prompt_feat_proj_params = list(self.prompt_feat_proj.parameters())
+            model_emb_proj_params = list(self.model_emb_proj.parameters())
+            return trunk_params, prompt_emb_proj_params, prompt_feat_proj_params, model_emb_proj_params
 
         def _init_weights(self) -> None:
             for m in self.modules():

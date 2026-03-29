@@ -32,6 +32,7 @@ from src.models import model_loading
 from src.utils.best_model_tracker import BestModelTracker
 from src.utils.ranking_loss import PairwiseRankingLossType, compute_pairwise_ranking_loss
 from src.preprocessing.scoring_feature_extraction import get_feature_descriptions
+from src.analysis.training_diagnostics import EpochDiagnosticsAccumulator, split_tensor_with_grad
 
 
 _DataLoaderType = DataLoader[tuple[
@@ -46,6 +47,8 @@ _DataLoaderType = DataLoader[tuple[
     torch.Tensor,  # response_embedding_b
     torch.Tensor,  # response_features_b
     torch.Tensor,  # labels
+    torch.Tensor,  # model_ids_a
+    torch.Tensor,  # model_ids_b
 ]]
 
 
@@ -574,6 +577,8 @@ class ResponsePredictiveModel(ScoringModelBase):
             torch.stack(response_embeddings_b_list),
             torch.stack(response_features_b_list),
             torch.tensor(labels_list, dtype=torch.float32),
+            torch.tensor(model_ids_a_list, dtype=torch.long),  # [n_pairs]
+            torch.tensor(model_ids_b_list, dtype=torch.long),  # [n_pairs]
         )
 
         # Apply weighted sampling if balancing is enabled
@@ -669,6 +674,11 @@ class ResponsePredictiveModel(ScoringModelBase):
             total_scorer_real_repr_accuracy = 0.0
             total_repr_variance = 0.0
             n_batches = 0
+            
+            diagnostic_accumulator = EpochDiagnosticsAccumulator()
+            encoder_params, predictor_params, scorer_params = self.network.get_param_groups_for_metrics()
+            numeric_descs, bool_descs = get_feature_descriptions()
+            prompt_feature_names = [d.name for d in numeric_descs] + [d.name for d in bool_descs]
 
             for (
                 batch_prompt_emb_a,
@@ -682,11 +692,13 @@ class ResponsePredictiveModel(ScoringModelBase):
                 batch_response_emb_b,
                 batch_response_feat_b,
                 batch_labels,
+                batch_model_ids_a,
+                batch_model_ids_b,
             ) in dataloader:
-                # Move to device
-                batch_prompt_emb_a: torch.Tensor = batch_prompt_emb_a.to(self.device)  # [batch, prompt_embedding_dim]
-                batch_prompt_feat_a: torch.Tensor = batch_prompt_feat_a.to(self.device)  # [batch, prompt_features_dim]
-                batch_model_emb_a: torch.Tensor = batch_model_emb_a.to(self.device)  # [batch, model_embedding_dim]
+                # Move to device; set requires_grad on 'a' side inputs for gradient attribution
+                batch_prompt_emb_a: torch.Tensor = batch_prompt_emb_a.to(self.device).requires_grad_(True)  # [batch, prompt_embedding_dim]
+                batch_prompt_feat_a: torch.Tensor = batch_prompt_feat_a.to(self.device).requires_grad_(True)  # [batch, prompt_features_dim]
+                batch_model_emb_a: torch.Tensor = batch_model_emb_a.to(self.device).requires_grad_(True)  # [batch, model_embedding_dim]
                 batch_response_emb_a: torch.Tensor = batch_response_emb_a.to(self.device)  # [batch, response_embedding_dim]
                 batch_response_feat_a: torch.Tensor = batch_response_feat_a.to(self.device)  # [batch, response_features_dim]
 
@@ -697,6 +709,18 @@ class ResponsePredictiveModel(ScoringModelBase):
                 batch_response_feat_b: torch.Tensor = batch_response_feat_b.to(self.device)  # [batch, response_features_dim]
 
                 batch_labels: torch.Tensor = batch_labels.to(self.device)  # [batch]
+                batch_model_ids_a: torch.Tensor = batch_model_ids_a.to(self.device)  # [batch]
+                batch_model_ids_b: torch.Tensor = batch_model_ids_b.to(self.device)  # [batch]
+
+                with torch.no_grad():
+                    pe = self.network.response_predictor.prompt_proj(batch_prompt_emb_a)  # [batch, input_proj_dim]
+                    pf = self.network.response_predictor.feat_proj(batch_prompt_feat_a)   # [batch, input_proj_dim]
+                    me = self.network.response_predictor.model_proj(batch_model_emb_a)    # [batch, input_proj_dim]
+                projection_representations = {
+                    "predictor_prompt_proj": pe,
+                    "predictor_feat_proj": pf,
+                    "predictor_model_proj": me,
+                }
 
                 optimizer.zero_grad()
 
@@ -789,6 +813,27 @@ class ResponsePredictiveModel(ScoringModelBase):
                     + self.repr_dist_kl_loss_weight * repr_dist_kl_loss
                 )
                 total_batch_loss.backward()
+
+                diagnostic_accumulator.update_grad_norms({
+                    "encoder": encoder_params,
+                    "predictor": predictor_params,
+                    "scorer": scorer_params,
+                })
+                diagnostic_accumulator.update_gradient_attribution({
+                    **split_tensor_with_grad(batch_prompt_feat_a, prompt_feature_names),
+                    "prompt_embedding": batch_prompt_emb_a,
+                    "model_embedding": batch_model_emb_a,
+                })
+                diagnostic_accumulator.update_representation_stats({
+                    **projection_representations,
+                    "pred_repr": pred_repr_a.detach(),
+                    "real_repr": real_repr_a.detach(),
+                })
+                diagnostic_accumulator.update_score_variance(
+                    torch.cat([score_real_a.detach(), score_real_b.detach()]),  # [2 * batch]
+                    torch.cat([batch_model_ids_a, batch_model_ids_b]),           # [2 * batch]
+                )
+
                 torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=1.0)
                 optimizer.step()
 
@@ -837,6 +882,7 @@ class ResponsePredictiveModel(ScoringModelBase):
 
             # Create training history entry
             additional_metrics = {
+                **diagnostic_accumulator.to_dict(),
                 "scoring_loss": avg_scoring_loss,
                 "real_scoring_loss": avg_real_scoring_loss,
                 "pred_scoring_loss": avg_pred_scoring_loss,
@@ -918,6 +964,8 @@ class ResponsePredictiveModel(ScoringModelBase):
             batch_response_emb_b,
             batch_response_feat_b,
             batch_labels,
+            _,
+            _,
         ) in val_dataloader:
             # Move to device
             batch_prompt_emb_a = batch_prompt_emb_a.to(self.device)  # [batch, prompt_embedding_dim]
@@ -1280,6 +1328,7 @@ class ResponsePredictiveModel(ScoringModelBase):
                     prompt_emb_a, prompt_feat_a, model_emb_a, _, _,
                     prompt_emb_b, prompt_feat_b, model_emb_b, _, _,
                     labels,
+                    _, _,
                 ) in dataloader:
                     prompt_emb_a = prompt_emb_a.to(device)  # [batch, prompt_emb_dim]
                     prompt_feat_a = prompt_feat_a.to(device)  # [batch, prompt_feat_dim]
@@ -1334,7 +1383,7 @@ class ResponsePredictiveModel(ScoringModelBase):
             total = 0
 
             with torch.no_grad():
-                for (prompt_emb_a, prompt_feat_a, _, _, _, _, _, _, _, _, _) in dataloader:
+                for (prompt_emb_a, prompt_feat_a, _, _, _, _, _, _, _, _, _, _, _) in dataloader:
                     prompt_emb_a = prompt_emb_a.to(device)   # [batch, prompt_emb_dim]
                     prompt_feat_a = prompt_feat_a.to(device)  # [batch, prompt_feat_dim]
                     if sum_emb is None:
@@ -1579,6 +1628,15 @@ class ResponsePredictiveModel(ScoringModelBase):
         ) -> torch.Tensor:
             predicted_repr = self.forward_predict(prompt_embedding, prompt_features, model_embedding)  # [batch, response_repr_dim]
             return self.forward_score(prompt_embedding, prompt_features, predicted_repr)  # [batch]
+
+        def get_param_groups_for_metrics(
+            self,
+        ) -> tuple[list[nn.Parameter], list[nn.Parameter], list[nn.Parameter]]:
+            """Return (encoder_params, predictor_params, scorer_params) for gradient norm metrics."""
+            encoder_params = list(self.response_encoder.parameters())
+            predictor_params = list(self.response_predictor.parameters())
+            scorer_params = list(self.response_scorer.parameters())
+            return encoder_params, predictor_params, scorer_params
 
         def _init_weights(self) -> None:
             for m in self.modules():

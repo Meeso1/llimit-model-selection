@@ -669,7 +669,7 @@ class TransformerEmbeddingModel(ScoringModelBase):
             total_loss = 0.0
             total_accuracy = 0.0
             n_batches = 0
-            diag = EpochDiagnosticsAccumulator()
+            diagnostic_accumulator = EpochDiagnosticsAccumulator()
             transformer_params, projection_params, scoring_head_params = self.network.get_param_groups_for_metrics()
             numeric_descs, bool_descs = get_feature_descriptions()
             prompt_feature_names = [d.name for d in numeric_descs] + [d.name for d in bool_descs]
@@ -705,7 +705,7 @@ class TransformerEmbeddingModel(ScoringModelBase):
                     feat_repr = self.network.feat_proj(prompt_features)            # [batch_size, proj_dim]
                     model_repr = self.network.model_proj(model_embedding_a)        # [batch_size, 3 * proj_dim]
                     interaction = torch.cat([prompt_repr, feat_repr], dim=1) * model_repr  # [batch_size, 3 * proj_dim]
-                diag.update_representation_stats({
+                diagnostic_accumulator.update_representation_stats({
                     "prompt_emb_proj": prompt_repr,
                     "feat_proj": feat_repr,
                     "model_proj": model_repr,
@@ -717,17 +717,17 @@ class TransformerEmbeddingModel(ScoringModelBase):
                 )
                 loss.backward()
 
-                diag.update_grad_norms({
+                diagnostic_accumulator.update_grad_norms({
                     "transformer": transformer_params,
                     "projection": projection_params,
                     "scoring_head": scoring_head_params,
                 })
-                diag.update_gradient_attribution({
+                diagnostic_accumulator.update_gradient_attribution({
                     **split_tensor_with_grad(prompt_features, prompt_feature_names),
                     "prompt_embedding": prompt_embedding,
                     "model_embedding": model_embedding_a,
                 })
-                diag.update_score_variance(
+                diagnostic_accumulator.update_score_variance(
                     torch.cat([scores_a.detach(), scores_b.detach()]),  # [2 * batch_size]
                     torch.cat([model_ids_a, model_ids_b]),              # [2 * batch_size]
                 )
@@ -742,7 +742,7 @@ class TransformerEmbeddingModel(ScoringModelBase):
 
             avg_loss = total_loss / n_batches
             avg_accuracy = total_accuracy / n_batches
-            additional_metrics = diag.to_dict()
+            additional_metrics = diagnostic_accumulator.to_dict()
 
             with Timer("perform_validation", verbosity="start+end", parent=timer):
                 val_loss, val_accuracy = self._perform_validation(val_dataloader, timer) if val_dataloader is not None else (None, None)
