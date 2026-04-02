@@ -17,6 +17,7 @@ from src.models.scoring.transformer_embedding_model import TransformerEmbeddingM
 from src.models.scoring.response_predictive_model import ResponsePredictiveModel
 from src.models.length_prediction.dn_embedding_length_prediction_model import DnEmbeddingLengthPredictionModel
 from src.models.length_prediction.gb_length_prediction_model import GbLengthPredictionModel
+from src.models.length_prediction.simple_length_prediction_model import SimpleLengthPredictionModel
 from src.models.model_base import ModelBase
 from src.scripts.model_types import (
     DenseNetworkSpecification,
@@ -31,6 +32,7 @@ from src.scripts.model_types import (
     ResponsePredictiveSpecification,
     DnEmbeddingLengthPredictionSpecification,
     GbLengthPredictionSpecification,
+    SimpleLengthPredictionSpecification,
 )
 from src.scripts.training_spec import TrainingSpecification
 from src.utils import data_split
@@ -113,6 +115,8 @@ def _create_starting_model(spec: TrainingSpecification) -> ModelBase:
             return _create_starting_dn_embedding_length_prediction(spec)
         case "gb_length_prediction":
             return _create_starting_gb_length_prediction(spec)
+        case "simple_length_prediction":
+            return _create_starting_simple_length_prediction(spec)
         case unknown:
             raise ValueError(f"Unknown model type: {unknown}")  # pyright: ignore[reportUnreachable]
 
@@ -384,6 +388,24 @@ def _create_starting_gb_length_prediction(training_spec: TrainingSpecification) 
         embedding_model_epochs=model_spec.embedding_model_epochs,
         print_every=training_spec.log.print_every,
         seed=training_spec.data.seed,
+    )
+
+
+def _create_starting_simple_length_prediction(training_spec: TrainingSpecification) -> SimpleLengthPredictionModel:
+    if training_spec.model.start_state is not None:
+        return SimpleLengthPredictionModel.load(training_spec.model.start_state)
+
+    if not isinstance(training_spec.model.spec, SimpleLengthPredictionSpecification):
+        raise ValueError(f"Expected model specification to be of type {SimpleLengthPredictionSpecification.__name__}, but found {type(training_spec.model.spec).__name__}")
+
+    model_spec = training_spec.model.spec
+    return SimpleLengthPredictionModel(
+        input_features=model_spec.input_features,
+        use_scaled_features=model_spec.use_scaled_features,
+        embedding_model_name=model_spec.embedding_model_name,
+        min_model_comparisons=model_spec.min_model_comparisons,
+        run_name=training_spec.log.run_name,
+        print_every=training_spec.log.print_every,
     )
 
 

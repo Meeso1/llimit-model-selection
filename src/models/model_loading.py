@@ -25,6 +25,7 @@ ScoringModelType = Literal[
 LengthPredictionModelType = Literal[
     "dn_embedding_length_prediction",
     "gb_length_prediction",
+    "simple_length_prediction",
 ]
 
 ModelType = ScoringModelType | LengthPredictionModelType
@@ -78,6 +79,9 @@ def load_model(model_type: ModelType, model_name: str) -> ModelBase:
         case "gb_length_prediction":
             from src.models.length_prediction.gb_length_prediction_model import GbLengthPredictionModel
             return GbLengthPredictionModel.load(model_name)
+        case "simple_length_prediction":
+            from src.models.length_prediction.simple_length_prediction_model import SimpleLengthPredictionModel
+            return SimpleLengthPredictionModel.load(model_name)
         case unknown:
             raise ValueError(f"Unknown model type: {unknown}")  # pyright: ignore[reportUnreachable]
 
@@ -138,6 +142,9 @@ def load_model_from_state_dict(model_type: ModelType, state_dict: dict[str, Any]
         case "gb_length_prediction":
             from src.models.length_prediction.gb_length_prediction_model import GbLengthPredictionModel
             return GbLengthPredictionModel.load_state_dict(state_dict)
+        case "simple_length_prediction":
+            from src.models.length_prediction.simple_length_prediction_model import SimpleLengthPredictionModel
+            return SimpleLengthPredictionModel.load_state_dict(state_dict)
         case unknown:
             raise ValueError(f"Unknown model type: {unknown}")  # pyright: ignore[reportUnreachable]
 

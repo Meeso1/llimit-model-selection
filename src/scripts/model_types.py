@@ -161,6 +161,14 @@ class GbLengthPredictionSpecification(ModelSpecBase):
     embedding_model_epochs: int = 10
 
 
+class SimpleLengthPredictionSpecification(ModelSpecBase):
+    model_type: Literal["simple_length_prediction"] = "simple_length_prediction"
+    input_features: list[str] = []
+    use_scaled_features: bool = True
+    embedding_model_name: str = "all-MiniLM-L6-v2"
+    min_model_comparisons: int = 20
+
+
 ModelSpec = Annotated[
     Union[
         DenseNetworkSpecification, 
@@ -174,7 +182,8 @@ ModelSpec = Annotated[
         TransformerEmbeddingSpecification, 
         ResponsePredictiveSpecification, 
         DnEmbeddingLengthPredictionSpecification, 
-        GbLengthPredictionSpecification
+        GbLengthPredictionSpecification,
+        SimpleLengthPredictionSpecification,
     ], 
     Field(discriminator="model_type")
 ]
