@@ -58,7 +58,7 @@ class HybridMuonOptimizer(optim.Optimizer):
                     param_to_multiplier[param] = multiplier
         
         # Separate parameters into Muon-eligible and AdamW-eligible
-        muon_params = []  # ≥2D parameters in transformer
+        muon_params = []  # ≥2D parameters
         adamw_lr_to_params: dict[float, list[nn.Parameter]] = {}  # Group by effective LR
         
         for model in models:
@@ -66,8 +66,8 @@ class HybridMuonOptimizer(optim.Optimizer):
                 if not param.requires_grad:
                     continue
                 
-                # Use Muon for ≥2D transformer parameters
-                if 'transformer' in name and param.ndim >= 2:
+                # Use Muon for ≥2D parameters
+                if param.ndim >= 2:
                     muon_params.append(param)
                 else:
                     # AdamW parameters: apply multiplier if specified
@@ -86,7 +86,7 @@ class HybridMuonOptimizer(optim.Optimizer):
                 momentum=muon_momentum,
                 nesterov=muon_nesterov,
             )
-            print(f"Muon optimizer: {len(muon_params)} parameters (≥2D transformer weights) @ lr={muon_lr}")
+            print(f"Muon optimizer: {len(muon_params)} parameters (≥2D weights) @ lr={muon_lr}")
         else:
             self._muon = None
         

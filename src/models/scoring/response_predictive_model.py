@@ -390,7 +390,7 @@ class ResponsePredictiveModel(ScoringModelBase):
                         )  # [batch_size]
                         model_scores.append(batch_scores)
 
-                    all_scores = torch.cat(model_scores)  # [n_prompts]
+                    all_scores = torch.tanh(torch.cat(model_scores))  # [n_prompts]
                     scores_dict[model_name] = all_scores.cpu().numpy()
 
             return PromptRoutingOutput(_scores=scores_dict)
@@ -1550,7 +1550,7 @@ class ResponsePredictiveModel(ScoringModelBase):
             pf = self.feat_proj(prompt_features)     # [batch, input_proj_dim]
             rr = self.repr_proj(response_repr)       # [batch, input_proj_dim]
             combined = torch.cat([pe, pf, rr], dim=1)  # [batch, input_proj_dim * 3]
-            return torch.tanh(self.trunk(combined).squeeze(-1))  # [batch]
+            return self.trunk(combined).squeeze(-1)  # [batch]
 
     class _ResponsePredictiveNetwork(nn.Module):
         """Neural network with three components: ResponseEncoder, ResponsePredictor, ResponseScorer."""
