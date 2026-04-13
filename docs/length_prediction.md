@@ -150,6 +150,12 @@ The model tracks several custom metrics:
 - **rmse**: Root Mean Squared Error in scaled space
 - **mae**: Mean absolute error in original token space
 
+**Per-epoch training diagnostics:**
+- **`train_prediction_std`**: Standard deviation of predictions across all training samples at the current round. Tracks how the model's output distribution spreads as more trees are added.
+- **`tree_contribution_mean`**: Mean absolute delta between current and previous round's predictions (unavailable at round 1). Measures how much the most recently added tree moved predictions — a convergence signal; should decrease toward zero in later rounds.
+- **Feature block importance** (`importance_prompt_features`, `importance_model_embedding`, `importance_prompt_embedding`, `importance_model_id`): Fraction of total XGBoost `total_gain` attributable to each input feature block. Values sum to 1.0 across blocks.
+- **Per-feature importances** (`importance_feature/<FeatureName>` for each of the 45 named prompt features): Fraction of total gain for each individual named prompt feature. These are stored separately for analysis but the plot aggregates them into the block-level `importance_prompt_features` bar.
+
 **Key Parameters:**
 ```python
 model = GbLengthPredictionModel(

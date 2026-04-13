@@ -17,6 +17,7 @@ package with one module of generic helpers and one module per model type.
 | `src/plotting/dense_network.py` | `DenseNetworkModel` |
 | `src/plotting/dn_embedding.py` | `DnEmbeddingModel` |
 | `src/plotting/gradient_boosting.py` | `GradientBoostingModel` |
+| `src/plotting/_gradient_boosting_shared.py` | Shared GB helpers (internal — not for direct import) |
 | `src/plotting/_length_prediction_shared.py` | Shared LP helpers (internal — not for direct import) |
 | `src/plotting/dn_length_prediction.py` | `DnEmbeddingLengthPredictionModel` |
 | `src/plotting/gb_length_prediction.py` | `GbLengthPredictionModel` |
@@ -195,11 +196,28 @@ from `EpochDiagnosticsAccumulator` are included; post-training metrics (e.g.
 | `plot_loss` | `train_loss` / `val_loss` |
 | `plot_accuracy` | `train_accuracy` / `val_accuracy` |
 
+### `_gradient_boosting_shared.py`
+
+Internal module shared between `gradient_boosting.py` and `gb_length_prediction.py`.
+Not intended for direct import. Provides:
+
+| Function | Description |
+|---|---|
+| `plot_block_importance(axes, log)` | Fraction of total XGBoost gain per input feature block (linear scale). Auto-detects available `importance_<block>` keys. |
+| `plot_convergence_diagnostics(axes, log)` | `train_prediction_std` and `tree_contribution_mean` on log scale. |
+
 ### `gradient_boosting.py`
 
-`plot_metrics` produces a 1 × 2 grid (epoch-level only). After training, the model logs
+`plot_metrics` produces a 2 × 2 grid. After training, the model logs
 post-training **`sensitivity/*`** accuracy drops in `final_metrics` (not per-epoch);
 those are omitted from `plot_metrics` by design.
+
+| Function | Metric keys | Notes |
+|---|---|---|
+| `plot_loss` | `train_loss` / `val_loss` | |
+| `plot_accuracy` | `train_accuracy` / `val_accuracy` | |
+| `plot_block_importance` (via shared) | `importance_<block>` keys | Fraction of total gain per input block |
+| `plot_convergence_diagnostics` (via shared) | `train_prediction_std`, `tree_contribution_mean` | Log scale; tree contribution absent at round 1 |
 
 ### `dn_length_prediction.py`
 
@@ -226,9 +244,9 @@ and `plot_grad_attr_embeddings` are re-exported from `dn_embedding.py`.
 
 ### `gb_length_prediction.py`
 
-`plot_metrics` produces a 4 × 2 grid (last panel hidden). Shares the 7
+`plot_metrics` produces a 5 × 2 grid (last panel hidden). Shares the 7
 regression metric functions with `dn_length_prediction.py` via
-`_length_prediction_shared.py`.
+`_length_prediction_shared.py`. Diagnostic panels come from `_gradient_boosting_shared.py`.
 
 | Function | Metric keys | Notes |
 |---|---|---|
@@ -239,6 +257,8 @@ regression metric functions with `dn_length_prediction.py` via
 | `plot_relative_error` | `train_avg_relative_error` / val | |
 | `plot_relative_ratio` | `train_avg_relative_ratio` / val | |
 | `plot_stddev_ratio` | `train_stddev_ratio` / val | |
+| `plot_convergence_diagnostics` (via shared) | `train_prediction_std`, `tree_contribution_mean` | Log scale |
+| `plot_block_importance` (via shared) | `importance_<block>` keys | Fraction of total gain per input block |
 
 ---
 

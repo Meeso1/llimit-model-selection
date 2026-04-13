@@ -25,6 +25,7 @@ from src.utils.data_split import ValidationSplit, split_length_prediction_prepro
 from src.utils.best_model_tracker import BestModelTracker
 from src.utils.length_prediction_metrics import compute_length_prediction_metrics
 from src.models import model_loading
+from src.preprocessing.scoring_feature_extraction import get_feature_descriptions
 
 
 FeatureType = Literal["prompt_features", "prompt_embedding", "model_embedding", "model_id"]
@@ -226,15 +227,18 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
             
             with Timer("boosting_rounds", verbosity="start+end", parent=train_timer) as rounds_timer:
                 self._xgb_model = None
+                prev_train_pred: np.ndarray | None = None
                 for epoch in range(1, epochs + 1):
                     result = self._train_epoch(
-                        epoch, 
-                        params, 
-                        dtrain, 
-                        dval, 
+                        epoch,
+                        params,
+                        dtrain,
+                        dval,
+                        prev_train_pred,
                         rounds_timer,
                     )
-                    
+                    prev_train_pred = result.train_pred
+
                     self._log_epoch_result(result)
                     
                     # Track best model based on validation accuracy (or train if no validation)
@@ -546,6 +550,79 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
         
         return np.concatenate(result)
 
+    def _input_feature_slices(self) -> dict[str, tuple[int, int]]:
+        """Column ranges in the flat feature vector for each enabled input feature type."""
+        if (
+            self._prompt_embedding_dim is None
+            or self._prompt_features_dim is None
+            or self._model_embedding_dim is None
+        ):
+            raise RuntimeError("Feature dimensions not initialized")
+        offset = 0
+        slices: dict[str, tuple[int, int]] = {}
+        for ft in ("prompt_features", "model_embedding", "prompt_embedding", "model_id"):
+            if ft not in self.input_features:
+                continue
+            if ft == "prompt_features":
+                d = self._prompt_features_dim
+            elif ft == "model_embedding":
+                d = self._model_embedding_dim
+            elif ft == "prompt_embedding":
+                d = self._prompt_embedding_dim
+            else:
+                d = self._n_models
+            slices[ft] = (offset, offset + d)
+            offset += d
+        return slices
+
+    def _compute_block_importance(self) -> dict[str, float]:
+        """Fractional share of total XGBoost gain per input feature block and per named prompt feature.
+
+        Returns block-level keys ``importance_<block_name>`` (values sum to 1.0) plus
+        per-feature keys ``importance_feature/<FeatureName>`` for each of the 45 named
+        prompt features (fraction of total gain across all features).  Features that
+        appear in no tree are treated as zero gain.  Returns an empty dict if the model
+        has not yet been trained.
+        """
+        if self._xgb_model is None:
+            return {}
+        scores = self._xgb_model.get_score(importance_type='total_gain')
+        slices = self._input_feature_slices()
+
+        # Accumulate gain per feature index
+        col_gains: dict[int, float] = {}
+        for fname, gain in scores.items():
+            col_gains[int(fname[1:])] = gain  # "f42" -> 42
+
+        # Block-level aggregates
+        block_gains: dict[str, float] = {name: 0.0 for name in slices}
+        for idx, gain in col_gains.items():
+            for name, (start, end) in slices.items():
+                if start <= idx < end:
+                    block_gains[name] += gain
+                    break
+        total = sum(block_gains.values())
+
+        result: dict[str, float] = {}
+        if total > 0:
+            result.update({f"importance_{name}": gain / total for name, gain in block_gains.items()})
+        else:
+            result.update({f"importance_{name}": 0.0 for name in block_gains})
+
+        # Per-named-feature importances within the prompt_features block
+        if "prompt_features" in slices:
+            numeric_descs, bool_descs = get_feature_descriptions()
+            feature_names = [d.name for d in numeric_descs] + [d.name for d in bool_descs]
+            pf_start, pf_end = slices["prompt_features"]
+            for rel_idx, feat_name in enumerate(feature_names):
+                abs_idx = pf_start + rel_idx
+                if abs_idx >= pf_end:
+                    break
+                gain = col_gains.get(abs_idx, 0.0)
+                result[f"importance_feature/{feat_name}"] = gain / total if total > 0 else 0.0
+
+        return result
+
     def _serialize_xgb_model(self, model: xgb.Booster) -> bytes:
         """
         Serialize XGBoost model to bytes.
@@ -591,72 +668,66 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
                 os.unlink(tmp_path)
 
     def _train_epoch(
-        self, 
+        self,
         epoch: int,
         params: dict[str, Any],
         dtrain: xgb.DMatrix,
         dval: xgb.DMatrix | None,
+        prev_train_pred: np.ndarray | None,  # [n_train_samples] predictions from previous round
         rounds_timer: Timer,
     ) -> "GbLengthPredictionModel.EpochResult":
-        """
-        Train one boosting round (add one tree).
-        
-        Args:
-            epoch: Current epoch/round number
-            params: XGBoost parameters
-            dtrain: Training data
-            dval: Validation data (optional)
-            rounds_timer: Parent timer for all rounds
-            
-        Returns:
-            EpochResult with metrics
-        """
+        """Train one boosting round (add one tree)."""
         with Timer(f"round_{epoch}", verbosity="start+end", parent=rounds_timer) as timer:
-            # Train one more tree
             evals_result: dict[str, dict[str, list[float]]] = {}
             evals = [(dtrain, 'train')]
             if dval is not None:
                 evals.append((dval, 'val'))
-            
+
             self._xgb_model = xgb.train(
                 params,
                 dtrain,
-                num_boost_round=1,  # Add just one tree
-                xgb_model=self._xgb_model,  # Continue from previous model
+                num_boost_round=1,
+                xgb_model=self._xgb_model,
                 evals=evals,
                 evals_result=evals_result,
                 verbose_eval=False,
             )
-            
+
             # Get predictions for metrics
             train_pred = self._xgb_model.predict(dtrain)  # [n_train_samples]
             train_labels = dtrain.get_label()  # [n_train_samples]
             train_metrics = compute_length_prediction_metrics(train_pred, train_labels, self.scaler)
-            
+
             # Validation metrics
             val_metrics = None
+            val_pred: np.ndarray | None = None
             if dval is not None:
                 val_pred = self._xgb_model.predict(dval)  # [n_val_samples]
                 val_labels = dval.get_label()  # [n_val_samples]
                 val_metrics = compute_length_prediction_metrics(val_pred, val_labels, self.scaler)
-            
-            # Prepare additional metrics for logging
-            additional_metrics = {
+
+            # Diagnostic metrics
+            additional_metrics: dict[str, float] = {
                 "train_avg_relative_error": train_metrics["avg_relative_error"],
                 "train_avg_relative_ratio": train_metrics["avg_relative_ratio"],
                 "train_stddev_ratio": train_metrics["stddev_ratio"],
                 "train_rmse": train_metrics["rmse"],
                 "train_mae": train_metrics["mae"],
+                "train_prediction_std": float(np.std(train_pred)),
+                **self._compute_block_importance(),
             }
-            if val_metrics is not None:
+            if prev_train_pred is not None:
+                additional_metrics["tree_contribution_mean"] = float(np.mean(np.abs(train_pred - prev_train_pred)))
+            if val_metrics is not None and val_pred is not None:
                 additional_metrics.update({
                     "val_avg_relative_error": val_metrics["avg_relative_error"],
                     "val_avg_relative_ratio": val_metrics["avg_relative_ratio"],
                     "val_stddev_ratio": val_metrics["stddev_ratio"],
                     "val_rmse": val_metrics["rmse"],
                     "val_mae": val_metrics["mae"],
+                    "val_prediction_std": float(np.std(val_pred)),
                 })
-            
+
             entry = TrainingHistoryEntry(
                 epoch=epoch,
                 total_loss=train_metrics["rmse"],
@@ -666,9 +737,9 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
                 additional_metrics=additional_metrics,
             )
             self._history_entries.append(entry)
-            
+
             self.append_entry_to_log(entry, log_timings_from=self.last_timer)
-        
+
         return self.EpochResult(
             epoch=epoch,
             train_rmse=train_metrics["rmse"],
@@ -679,6 +750,7 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
             val_relative_error=val_metrics["avg_relative_error"] if val_metrics is not None else None,
             train_mae=train_metrics["mae"],
             val_mae=val_metrics["mae"] if val_metrics is not None else None,
+            train_pred=train_pred,
             duration=timer.elapsed_time,
         )
 
@@ -711,4 +783,5 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
         val_relative_error: float | None
         train_mae: float
         val_mae: float | None
+        train_pred: np.ndarray  # [n_train_samples] — used to compute tree contribution next round
         duration: float

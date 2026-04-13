@@ -6,17 +6,20 @@ from src.plotting.core import (
     plot_combined_accuracy as _plot_combined_accuracy,
     _get_metric,
 )
+from src.plotting._gradient_boosting_shared import plot_block_importance, plot_convergence_diagnostics
 
 
 def plot_metrics(log: TrainingLog) -> plt.Figure:
     """Create a figure with all metrics for GradientBoostingModel.
 
-    Layout: 1 row × 2 columns.
+    Layout: 2 rows × 2 columns.
     """
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 
-    plot_loss(axes[0], log)
-    plot_accuracy(axes[1], log)
+    plot_loss(axes[0, 0], log)
+    plot_accuracy(axes[0, 1], log)
+    plot_block_importance(axes[1, 0], log)
+    plot_convergence_diagnostics(axes[1, 1], log)
 
     fig.tight_layout()
     return fig
