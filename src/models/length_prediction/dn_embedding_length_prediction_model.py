@@ -776,17 +776,20 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
     class _ResidualBlock(nn.Module):
         """Dense layer with a linear skip connection (projection shortcut).
 
-        The main path applies Linear → LeakyReLU → Dropout; the shortcut is a
-        bias-free linear projection that matches dimensions.  The two paths are
-        summed so that gradients can flow directly through the shortcut, easing
-        optimisation of deeper networks.
+        The main path applies Linear → LayerNorm → LeakyReLU → Dropout; the
+        shortcut is a bias-free linear projection that matches dimensions.  The
+        two paths are summed so that gradients can flow directly through the
+        shortcut, easing optimisation of deeper networks.
         """
+
+        _LEAKY_RELU_SLOPE = 0.1
 
         def __init__(self, in_dim: int, out_dim: int, dropout: float) -> None:
             super().__init__()
             self.main = nn.Sequential(
                 nn.Linear(in_dim, out_dim),
-                nn.LeakyReLU(negative_slope=0.01),
+                nn.LayerNorm(out_dim),
+                nn.LeakyReLU(negative_slope=self._LEAKY_RELU_SLOPE),
                 nn.Dropout(dropout),
             )
             self.shortcut = nn.Linear(in_dim, out_dim, bias=False) if in_dim != out_dim else nn.Identity()
@@ -868,6 +871,6 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
         def _init_weights(self) -> None:
             for m in self.modules():
                 if isinstance(m, nn.Linear):
-                    nn.init.kaiming_normal_(m.weight, a=0.1, nonlinearity="leaky_relu")
+                    nn.init.kaiming_normal_(m.weight, a=self._LEAKY_RELU_SLOPE, nonlinearity="leaky_relu")
                     if m.bias is not None:
                         nn.init.zeros_(m.bias)

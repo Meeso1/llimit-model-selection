@@ -63,7 +63,7 @@ Model embeddings and model IDs are both kept as inputs because they serve comple
 - The model ID embedding (`nn.Embedding`, dim `model_id_embedding_dim`, default 64) is **not** projected — it is a fully-learned representation whose dimension is directly controlled, so adding a projection would be redundant. Its default is set equal to `input_proj_dim` so each modality starts with equal representation in the concatenated input.
 - Concatenated input dimension: `input_proj_dim * 3 + model_id_embedding_dim`.
 - Passes through configurable residual blocks (default: [256, 128, 64]):
-  - Each block has a **main path** (Linear → LeakyReLU → Dropout) and a **projection shortcut** (bias-free Linear), summed together
+  - Each block has a **main path** (Linear → LayerNorm → LeakyReLU(0.1) → Dropout) and a **projection shortcut** (bias-free Linear), summed together
   - Shortcut always projects since dimensions change between blocks, enabling direct gradient flow
 - Final `Linear(last_hidden_dim, 1)` output layer (no activation — unbounded regression)
 - All linear layers are initialised with Kaiming Normal (`a=0.1, nonlinearity='leaky_relu'`).
@@ -424,7 +424,6 @@ Length prediction differs from scoring models in several ways:
 3. **Data Processing**: Extracts response lengths and standardizes them
 4. **Output**: Predicted token count vs. relative scores
 5. **Output Activation**: None (unbounded regression) vs. tanh (for scores)
-6. **Network Activation**: LeakyReLU vs. ReLU
 7. **Metrics**: Custom regression metrics vs. pairwise accuracy
 
 ### Data Format
