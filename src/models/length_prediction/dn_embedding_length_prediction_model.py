@@ -41,13 +41,14 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
         self,
         hidden_dims: list[int] | None = None,
         dropout: float = 0.2,
+        input_proj_dim: int = 64,
         optimizer_spec: OptimizerSpecification | None = None,
         embedding_model_name: str = "all-MiniLM-L6-v2",
         embedding_spec: EmbeddingSpec | None = None,
         load_embedding_model_from: str | None = None,
         min_model_comparisons: int = 20,
         embedding_model_epochs: int = 10,
-        model_id_embedding_dim: int = 8,
+        model_id_embedding_dim: int = 64,
         run_name: str | None = None,
         print_every: int | None = None,
         seed: int = 42,
@@ -56,6 +57,7 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
         
         self.hidden_dims = hidden_dims if hidden_dims is not None else [256, 128, 64]
         self.dropout = dropout
+        self.input_proj_dim = input_proj_dim
         self.optimizer_spec = optimizer_spec if optimizer_spec is not None else AdamWSpec(learning_rate=0.001)
         self.embedding_model_name = embedding_model_name
         self.print_every = print_every
@@ -126,6 +128,7 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
             model_embedding_dim=self.embedding_model.embedding_dim,
             n_models=n_models,
             model_id_embedding_dim=self.model_id_embedding_dim,
+            input_proj_dim=self.input_proj_dim,
             hidden_dims=self.hidden_dims,
             dropout=self.dropout,
         ).to(self.device)
@@ -135,6 +138,8 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
         return {
             "model_type": "dn_embedding_length_prediction",
             "hidden_dims": self.hidden_dims,
+            "dropout": self.dropout,
+            "input_proj_dim": self.input_proj_dim,
             "optimizer_type": self.optimizer_spec.optimizer_type,
             "optimizer_params": self.optimizer_spec.to_dict(),
             "embedding_model_name": self.embedding_model_name,
@@ -371,6 +376,7 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
             "scheduler_state": self._scheduler_state,
             "hidden_dims": self.hidden_dims,
             "dropout": self.dropout,
+            "input_proj_dim": self.input_proj_dim,
             "embedding_model_name": self.embedding_model_name,
             "print_every": self.print_every,
             "preprocessor_version": self.preprocessor.version,
@@ -421,6 +427,7 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
             model = cls(
                 hidden_dims=state_dict["hidden_dims"],
                 dropout=state_dict["dropout"],
+                input_proj_dim=state_dict["input_proj_dim"],
                 optimizer_spec=optimizer_spec,
                 embedding_model_name=state_dict["embedding_model_name"],
                 embedding_spec=embedding_spec,
@@ -750,7 +757,7 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
                 nn.LeakyReLU(negative_slope=0.01),
                 nn.Dropout(dropout),
             )
-            self.shortcut = nn.Linear(in_dim, out_dim, bias=False)
+            self.shortcut = nn.Linear(in_dim, out_dim, bias=False) if in_dim != out_dim else nn.Identity()
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:  # [batch_size, in_dim] -> [batch_size, out_dim]
             return self.main(x) + self.shortcut(x)
@@ -763,6 +770,7 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
             model_embedding_dim: int,
             n_models: int,
             model_id_embedding_dim: int,
+            input_proj_dim: int,
             hidden_dims: list[int],
             dropout: float = 0.2,
         ) -> None:
@@ -772,16 +780,22 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
                 num_embeddings=n_models,
                 embedding_dim=model_id_embedding_dim,
             )
-            
+
+            self.prompt_emb_proj = nn.Sequential(nn.Linear(prompt_embedding_dim, input_proj_dim), nn.LeakyReLU(0.1))
+            self.prompt_feat_proj = nn.Sequential(nn.Linear(prompt_features_dim, input_proj_dim), nn.LeakyReLU(0.1))
+            self.model_emb_proj = nn.Sequential(nn.Linear(model_embedding_dim, input_proj_dim), nn.LeakyReLU(0.1))
+
             blocks = []
-            prev_dim = prompt_embedding_dim + prompt_features_dim + model_embedding_dim + model_id_embedding_dim
-            
+            prev_dim = input_proj_dim * 3 + model_id_embedding_dim
+
             for hidden_dim in hidden_dims:
                 blocks.append(DnEmbeddingLengthPredictionModel._ResidualBlock(prev_dim, hidden_dim, dropout))
                 prev_dim = hidden_dim
-            
+
             self.blocks = nn.ModuleList(blocks)
             self.output_layer = nn.Linear(prev_dim, 1)
+
+            self._init_weights()
 
         def forward(
             self,
@@ -795,8 +809,20 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
             id_embs = self.model_id_embedding(model_id.clamp(min=0))  # [batch_size, model_id_embedding_dim]
             mean_emb = self.model_id_embedding.weight.mean(dim=0)  # [model_id_embedding_dim]
             id_embs = torch.where(known_mask.unsqueeze(-1), id_embs, mean_emb)  # [batch_size, model_id_embedding_dim]
-            x = torch.cat([prompt_embedding, prompt_features, model_embedding, id_embs], dim=1)  # [batch_size, total_input_dim]
+
+            pe = self.prompt_emb_proj(prompt_embedding)   # [batch_size, input_proj_dim]
+            pf = self.prompt_feat_proj(prompt_features)   # [batch_size, input_proj_dim]
+            me = self.model_emb_proj(model_embedding)     # [batch_size, input_proj_dim]
+
+            x = torch.cat([pe, pf, me, id_embs], dim=1)  # [batch_size, input_proj_dim * 3 + model_id_embedding_dim]
             for block in self.blocks:
                 x = block(x)  # [batch_size, hidden_dim]
             output: torch.Tensor = self.output_layer(x)  # [batch_size, 1]
             return output.squeeze(-1)  # [batch_size]
+
+        def _init_weights(self) -> None:
+            for m in self.modules():
+                if isinstance(m, nn.Linear):
+                    nn.init.kaiming_normal_(m.weight, a=0.1, nonlinearity="leaky_relu")
+                    if m.bias is not None:
+                        nn.init.zeros_(m.bias)

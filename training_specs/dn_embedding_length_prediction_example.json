@@ -8,6 +8,7 @@
         128,
         64
       ],
+      "input_proj_dim": 64,
       "optimizer": {
         "optimizer_type": "adamw",
         "learning_rate": 0.001,
@@ -28,7 +29,7 @@
       },
       "min_model_comparisons": 20,
       "embedding_model_epochs": 10,
-      "model_id_embedding_dim": 8
+      "model_id_embedding_dim": 64
     }
   },
   "data": {

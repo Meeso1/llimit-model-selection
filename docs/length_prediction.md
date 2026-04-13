@@ -59,11 +59,14 @@ A neural network model that predicts response lengths using:
 Model embeddings and model IDs are both kept as inputs because they serve complementary roles: model embeddings encode inter-model behavioral relationships learned from pairwise scoring data, while model IDs let the length prediction network learn per-model length patterns independently. If model embeddings turn out to be redundant for a given dataset, the network can learn to down-weight them without losing information.
 
 **Architecture:**
-- Concatenates prompt embedding, prompt features, model embedding, and model ID embedding
+- Each of the three pre-computed inputs is independently projected to `input_proj_dim` (default 64) via `Linear + LeakyReLU(0.1)`, then concatenated with the model ID embedding. This normalises the different raw dimensionalities (e.g., 384-dim sentence-transformer space, varying model embedding dims) into a homogeneous space before mixing.
+- The model ID embedding (`nn.Embedding`, dim `model_id_embedding_dim`, default 64) is **not** projected — it is a fully-learned representation whose dimension is directly controlled, so adding a projection would be redundant. Its default is set equal to `input_proj_dim` so each modality starts with equal representation in the concatenated input.
+- Concatenated input dimension: `input_proj_dim * 3 + model_id_embedding_dim`.
 - Passes through configurable residual blocks (default: [256, 128, 64]):
   - Each block has a **main path** (Linear → LeakyReLU → Dropout) and a **projection shortcut** (bias-free Linear), summed together
   - Shortcut always projects since dimensions change between blocks, enabling direct gradient flow
 - Final `Linear(last_hidden_dim, 1)` output layer (no activation — unbounded regression)
+- All linear layers are initialised with Kaiming Normal (`a=0.1, nonlinearity='leaky_relu'`).
 - Predictions are automatically descaled to original token count range
 
 **Training:**
@@ -87,12 +90,14 @@ The model tracks several custom metrics to evaluate performance:
 ```python
 model = DnEmbeddingLengthPredictionModel(
     hidden_dims=[256, 128, 64],  # Network architecture
+    dropout=0.2,
+    input_proj_dim=64,  # Each of the 3 pre-computed inputs is projected to this dim before concatenation
     optimizer_spec=AdamWSpec(learning_rate=0.001),
     embedding_model_name="all-MiniLM-L6-v2",
     load_embedding_model_from="dn_embedding/my_scoring_model",  # Load pre-trained embeddings (format: model_type/model_name)
     min_model_comparisons=20,  # Filter rare models
     embedding_model_epochs=10,
-    model_id_embedding_dim=8,  # Dimension of learned model ID embeddings
+    model_id_embedding_dim=64,  # Dimension of learned model ID embeddings; matches input_proj_dim by default
     print_every=1,  # Print progress every N epochs
     seed=42,
 )
@@ -246,6 +251,7 @@ Length prediction models use the same training command as scoring models. Create
     "spec": {
       "model_type": "dn_embedding_length_prediction",
       "hidden_dims": [256, 128, 64],
+      "input_proj_dim": 64,
       "optimizer": {
         "optimizer_type": "adamw",
         "learning_rate": 0.001
