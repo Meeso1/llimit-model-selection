@@ -2,21 +2,35 @@ import matplotlib.pyplot as plt
 
 from src.utils.training_logger import TrainingLog
 from src.plotting.core import (
-    plot_combined_loss as _plot_combined_loss,
-    plot_combined_accuracy as _plot_combined_accuracy,
-    plot_combined_positive_metric as _plot_combined_positive_metric,
-    plot_combined_relative_error as _plot_combined_relative_error,
-    plot_combined_ratio_around_one as _plot_combined_ratio_around_one,
+    plot_loss_components as _plot_loss_components,
     _get_metric,
+)
+from src.plotting._length_prediction_shared import (
+    plot_loss,
+    plot_accuracy,
+    plot_mae,
+    plot_rmse,
+    plot_relative_error,
+    plot_relative_ratio,
+    plot_stddev_ratio,
+)
+from src.plotting.dn_embedding import (
+    plot_modality_norms,
+    plot_modality_variances,
+    plot_grad_attr_embeddings,
 )
 
 
 def plot_metrics(log: TrainingLog) -> plt.Figure:
-    """Create a figure with all metrics for DnEmbeddingLengthPredictionModel.
+    """Create a figure with all per-epoch metrics for DnEmbeddingLengthPredictionModel.
 
-    Layout: 4 rows × 2 columns (last panel hidden).
+    Includes training diagnostics (projection norms/variances, gradient norms).
+    Gradient attribution (``plot_grad_attr_embeddings``) is available as a
+    standalone function but not included here.
+
+    Layout: 5 rows × 2 columns (10 panels).
     """
-    fig, axes = plt.subplots(4, 2, figsize=(14, 20))
+    fig, axes = plt.subplots(5, 2, figsize=(14, 25))
 
     plot_loss(axes[0, 0], log)
     plot_accuracy(axes[0, 1], log)
@@ -25,76 +39,25 @@ def plot_metrics(log: TrainingLog) -> plt.Figure:
     plot_relative_error(axes[2, 0], log)
     plot_relative_ratio(axes[2, 1], log)
     plot_stddev_ratio(axes[3, 0], log)
-    axes[3, 1].set_visible(False)
+    plot_modality_norms(axes[3, 1], log)
+    plot_modality_variances(axes[4, 0], log)
+    plot_gradient_norms(axes[4, 1], log)
 
     fig.tight_layout()
     return fig
 
 
-def plot_loss(axes: plt.Axes, log: TrainingLog) -> None:
-    _plot_combined_loss(
+def plot_gradient_norms(axes: plt.Axes, log: TrainingLog) -> None:
+    """Gradient norms: trunk, input projections, and model-id embedding (log scale, normalized)."""
+    _plot_loss_components(
         axes,
-        _get_metric(log, 'train_loss'),
-        _get_metric(log, 'val_loss'),
-        'Loss',
-    )
-
-
-def plot_accuracy(axes: plt.Axes, log: TrainingLog) -> None:
-    _plot_combined_accuracy(
-        axes,
-        _get_metric(log, 'train_accuracy'),
-        _get_metric(log, 'val_accuracy'),
-        'Accuracy',
-    )
-
-
-def plot_mae(axes: plt.Axes, log: TrainingLog) -> None:
-    _plot_combined_positive_metric(
-        axes,
-        _get_metric(log, 'train_mae'),
-        _get_metric(log, 'val_mae'),
-        'Mean Absolute Error (token space)',
-        ylabel='MAE (tokens)',
-        show_original_scale=True,
-    )
-
-
-def plot_rmse(axes: plt.Axes, log: TrainingLog) -> None:
-    _plot_combined_positive_metric(
-        axes,
-        _get_metric(log, 'train_rmse'),
-        _get_metric(log, 'val_rmse'),
-        'RMSE (scaled log-space)',
-        ylabel='RMSE',
-        show_original_scale=True,
-    )
-
-
-def plot_relative_error(axes: plt.Axes, log: TrainingLog) -> None:
-    _plot_combined_relative_error(
-        axes,
-        _get_metric(log, 'train_avg_relative_error'),
-        _get_metric(log, 'val_avg_relative_error'),
-        'Average Relative Error',
-    )
-
-
-def plot_relative_ratio(axes: plt.Axes, log: TrainingLog) -> None:
-    _plot_combined_ratio_around_one(
-        axes,
-        _get_metric(log, 'train_avg_relative_ratio'),
-        _get_metric(log, 'val_avg_relative_ratio'),
-        'Average Relative Ratio (ideal = 1.0)',
-        ylabel='Ratio',
-    )
-
-
-def plot_stddev_ratio(axes: plt.Axes, log: TrainingLog) -> None:
-    _plot_combined_ratio_around_one(
-        axes,
-        _get_metric(log, 'train_stddev_ratio'),
-        _get_metric(log, 'val_stddev_ratio'),
-        'Stddev Ratio (ideal = 1.0)',
-        ylabel='Ratio',
+        {
+            'Trunk': _get_metric(log, 'trunk_grad_norm'),
+            'Prompt emb proj': _get_metric(log, 'prompt_emb_proj_grad_norm'),
+            'Prompt feat proj': _get_metric(log, 'prompt_feat_proj_grad_norm'),
+            'Model emb proj': _get_metric(log, 'model_emb_proj_grad_norm'),
+            'Model id emb': _get_metric(log, 'model_id_embedding_grad_norm'),
+        },
+        'Gradient Norms by Component (Training)',
+        normalize=True,
     )

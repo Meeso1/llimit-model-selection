@@ -86,6 +86,12 @@ The model tracks several custom metrics to evaluate performance:
 - **stddev_ratio**: `stddev(predictions)/stddev(actuals)` - variance matching (should be ~1.0)
 - **mae**: Mean absolute error in original token space
 
+**Per-epoch training diagnostics** (via `EpochDiagnosticsAccumulator`):
+- **Gradient norms** (`trunk_grad_norm`, `prompt_emb_proj_grad_norm`, `prompt_feat_proj_grad_norm`, `model_emb_proj_grad_norm`, `model_id_embedding_grad_norm`): L2 gradient norms per parameter group, averaged over batches. Useful for detecting vanishing/exploding gradients or imbalanced update magnitudes across modules.
+- **Input projection norms** (`prompt_emb_proj_norm`, `prompt_feat_proj_norm`, `model_emb_proj_norm`): Mean L2 norm of the projected representations for each input modality. Tracks the scale of activations entering the trunk.
+- **Input projection variance** (`prompt_emb_proj_variance`, `prompt_feat_proj_variance`, `model_emb_proj_variance`): Mean per-dimension variance of projected representations. Low values signal representation collapse.
+- **Gradient × input attribution** (`grad_attr_<FeatureName>` for each of the 45 prompt features, plus `grad_attr_prompt_embedding` and `grad_attr_model_embedding`): Mean `|grad| × |input|` per input, averaged over the batch. Measures how much each input contributes to the loss gradient — a rough feature-importance signal during training.
+
 **Key Parameters:**
 ```python
 model = DnEmbeddingLengthPredictionModel(

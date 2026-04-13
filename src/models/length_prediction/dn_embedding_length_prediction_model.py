@@ -29,6 +29,8 @@ from src.utils.length_prediction_metrics import compute_length_prediction_metric
 from src.models.optimizers.optimizer_spec import OptimizerSpecification
 from src.models import model_loading
 from src.utils.best_model_tracker import BestModelTracker
+from src.analysis.training_diagnostics import EpochDiagnosticsAccumulator, split_tensor_with_grad
+from src.preprocessing.scoring_feature_extraction import get_feature_descriptions
 
 
 _DataLoaderType = DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]
@@ -578,19 +580,34 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
             total_loss = 0.0
             n_batches = 0
             total_samples = 0
-            
+
             all_predictions = []
             all_actuals = []
-            
+
+            diagnostic_accumulator = EpochDiagnosticsAccumulator()
+            trunk_params, prompt_emb_proj_params, prompt_feat_proj_params, model_emb_proj_params, model_id_emb_params = self.network.get_param_groups_for_metrics()
+            numeric_descs, bool_descs = get_feature_descriptions()
+            prompt_feature_names = [d.name for d in numeric_descs] + [d.name for d in bool_descs]
+
             for batch_emb, batch_features, batch_model_emb, batch_model_ids, batch_lengths in dataloader:
-                batch_emb: torch.Tensor = batch_emb.to(self.device)  # [batch_size, prompt_embedding_dim]
-                batch_features: torch.Tensor = batch_features.to(self.device)  # [batch_size, prompt_features_dim]
-                batch_model_emb: torch.Tensor = batch_model_emb.to(self.device)  # [batch_size, model_embedding_dim]
+                batch_emb: torch.Tensor = batch_emb.to(self.device).requires_grad_(True)  # [batch_size, prompt_embedding_dim]
+                batch_features: torch.Tensor = batch_features.to(self.device).requires_grad_(True)  # [batch_size, prompt_features_dim]
+                batch_model_emb: torch.Tensor = batch_model_emb.to(self.device).requires_grad_(True)  # [batch_size, model_embedding_dim]
                 batch_model_ids: torch.Tensor = batch_model_ids.to(self.device)  # [batch_size]
                 batch_lengths: torch.Tensor = batch_lengths.to(self.device)  # [batch_size]
-                
+
                 total_samples += len(batch_emb)
-                
+
+                with torch.no_grad():
+                    pe = self.network.prompt_emb_proj(batch_emb)        # [batch_size, input_proj_dim]
+                    pf = self.network.prompt_feat_proj(batch_features)  # [batch_size, input_proj_dim]
+                    me = self.network.model_emb_proj(batch_model_emb)   # [batch_size, input_proj_dim]
+                diagnostic_accumulator.update_representation_stats({
+                    "prompt_emb_proj": pe,
+                    "prompt_feat_proj": pf,
+                    "model_emb_proj": me,
+                })
+
                 optimizer.zero_grad()
                 predictions: torch.Tensor = self.network(
                     batch_emb,
@@ -598,36 +615,51 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
                     batch_model_emb,
                     batch_model_ids,
                 )  # [batch_size]
-                
+
                 loss: torch.Tensor = criterion(predictions, batch_lengths)
                 loss.backward()
-                
+
+                diagnostic_accumulator.update_grad_norms({
+                    "trunk": trunk_params,
+                    "prompt_emb_proj": prompt_emb_proj_params,
+                    "prompt_feat_proj": prompt_feat_proj_params,
+                    "model_emb_proj": model_emb_proj_params,
+                    "model_id_embedding": model_id_emb_params,
+                })
+                diagnostic_accumulator.update_gradient_attribution({
+                    **split_tensor_with_grad(batch_features, prompt_feature_names),
+                    "prompt_embedding": batch_emb,
+                    "model_embedding": batch_model_emb,
+                })
+
+                torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=1.0)
                 optimizer.step()
-                
+
                 total_loss += loss.item()
                 n_batches += 1
-                
+
                 # Collect for metrics computation
                 all_predictions.append(predictions.detach().cpu().numpy())
                 all_actuals.append(batch_lengths.detach().cpu().numpy())
             
             avg_loss = total_loss / n_batches
-            
+
             # Compute train metrics
             all_predictions_np = np.concatenate(all_predictions)
             all_actuals_np = np.concatenate(all_actuals)
             train_metrics = compute_length_prediction_metrics(all_predictions_np, all_actuals_np, self.scaler)
-            
+
             with Timer("perform_validation", verbosity="start+end", parent=timer):
                 val_loss, val_metrics = self._perform_validation(val_dataloader, criterion, timer) if val_dataloader is not None else (None, None)
-            
+
             # Combine metrics
-            additional_metrics = {
+            additional_metrics: dict[str, float] = {
                 "train_avg_relative_error": train_metrics["avg_relative_error"],
                 "train_avg_relative_ratio": train_metrics["avg_relative_ratio"],
                 "train_stddev_ratio": train_metrics["stddev_ratio"],
                 "train_rmse": train_metrics["rmse"],
                 "train_mae": train_metrics["mae"],
+                **diagnostic_accumulator.to_dict(),
             }
             if val_metrics is not None:
                 additional_metrics.update({
@@ -819,6 +851,19 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
                 x = block(x)  # [batch_size, hidden_dim]
             output: torch.Tensor = self.output_layer(x)  # [batch_size, 1]
             return output.squeeze(-1)  # [batch_size]
+
+        def get_param_groups_for_metrics(
+            self,
+        ) -> tuple[list[nn.Parameter], list[nn.Parameter], list[nn.Parameter], list[nn.Parameter], list[nn.Parameter]]:
+            """Return (trunk_params, prompt_emb_proj_params, prompt_feat_proj_params, model_emb_proj_params, model_id_embedding_params) for gradient norm metrics."""
+            trunk_params = list(self.blocks.parameters()) + list(self.output_layer.parameters())
+            return (
+                trunk_params,
+                list(self.prompt_emb_proj.parameters()),
+                list(self.prompt_feat_proj.parameters()),
+                list(self.model_emb_proj.parameters()),
+                list(self.model_id_embedding.parameters()),
+            )
 
         def _init_weights(self) -> None:
             for m in self.modules():

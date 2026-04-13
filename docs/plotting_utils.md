@@ -17,6 +17,7 @@ package with one module of generic helpers and one module per model type.
 | `src/plotting/dense_network.py` | `DenseNetworkModel` |
 | `src/plotting/dn_embedding.py` | `DnEmbeddingModel` |
 | `src/plotting/gradient_boosting.py` | `GradientBoostingModel` |
+| `src/plotting/_length_prediction_shared.py` | Shared LP helpers (internal — not for direct import) |
 | `src/plotting/dn_length_prediction.py` | `DnEmbeddingLengthPredictionModel` |
 | `src/plotting/gb_length_prediction.py` | `GbLengthPredictionModel` |
 
@@ -200,9 +201,34 @@ from `EpochDiagnosticsAccumulator` are included; post-training metrics (e.g.
 post-training **`sensitivity/*`** accuracy drops in `final_metrics` (not per-epoch);
 those are omitted from `plot_metrics` by design.
 
-### `dn_length_prediction.py`, `gb_length_prediction.py`
+### `dn_length_prediction.py`
 
-`plot_metrics` produces a 4 × 2 grid.
+`plot_metrics` produces a 5 × 2 grid (10 panels). Per-epoch diagnostics from
+`EpochDiagnosticsAccumulator` are included. `plot_grad_attr_embeddings` is
+available as a standalone function but not included in `plot_metrics`.
+The 7 regression metrics are shared with `gb_length_prediction.py` via
+`_length_prediction_shared.py`; `plot_modality_norms`, `plot_modality_variances`,
+and `plot_grad_attr_embeddings` are re-exported from `dn_embedding.py`.
+
+| Function | Metric keys | Notes |
+|---|---|---|
+| `plot_loss` | `train_loss` / `val_loss` | |
+| `plot_accuracy` | `train_accuracy` / `val_accuracy` | |
+| `plot_mae` | `train_mae` / `val_mae` | Y-axis shows token counts (original scale) |
+| `plot_rmse` | `train_rmse` / `val_rmse` | Y-axis shows original scale values |
+| `plot_relative_error` | `train_avg_relative_error` / val | |
+| `plot_relative_ratio` | `train_avg_relative_ratio` / val | |
+| `plot_stddev_ratio` | `train_stddev_ratio` / val | |
+| `plot_modality_norms` | `prompt_emb_proj_norm`, `prompt_feat_proj_norm`, `model_emb_proj_norm` | |
+| `plot_modality_variances` | `*_variance` for the three input projections | |
+| `plot_gradient_norms` | `trunk_grad_norm`, `prompt_emb_proj_grad_norm`, `prompt_feat_proj_grad_norm`, `model_emb_proj_grad_norm`, `model_id_embedding_grad_norm` | Normalized; includes model-id embedding group |
+| `plot_grad_attr_embeddings` | `grad_attr_prompt_embedding`, `grad_attr_model_embedding` | Standalone only |
+
+### `gb_length_prediction.py`
+
+`plot_metrics` produces a 4 × 2 grid (last panel hidden). Shares the 7
+regression metric functions with `dn_length_prediction.py` via
+`_length_prediction_shared.py`.
 
 | Function | Metric keys | Notes |
 |---|---|---|
