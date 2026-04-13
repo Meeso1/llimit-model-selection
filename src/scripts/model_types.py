@@ -137,12 +137,14 @@ class ResponsePredictiveSpecification(ModelSpecBase):
 class DnEmbeddingLengthPredictionSpecification(ModelSpecBase):
     model_type: Literal["dn_embedding_length_prediction"] = "dn_embedding_length_prediction"
     hidden_dims: list[int]
+    dropout: float = 0.2
     optimizer: OptimizerSpec
     embedding_model_name: str = "all-MiniLM-L6-v2"
     embedding_spec: EmbeddingSpec | None = None
     load_embedding_model_from: str | None = None
     min_model_comparisons: int = 20
     embedding_model_epochs: int = 10
+    model_id_embedding_dim: int = 8
 
 
 class GbLengthPredictionSpecification(ModelSpecBase):
@@ -153,7 +155,7 @@ class GbLengthPredictionSpecification(ModelSpecBase):
     colsample_bylevel: float = 1.0
     reg_alpha: float = 0.0
     reg_lambda: float = 1.0
-    input_features: list[Literal["prompt_features", "prompt_embedding", "model_embedding"]] = ["prompt_features", "model_embedding", "prompt_embedding"]
+    input_features: list[Literal["prompt_features", "prompt_embedding", "model_embedding", "model_id"]] = ["prompt_features", "model_embedding", "prompt_embedding", "model_id"]
     embedding_model_name: str = "all-MiniLM-L6-v2"
     embedding_spec: EmbeddingSpec | None = None
     load_embedding_model_from: str | None = None

@@ -12,7 +12,8 @@
       "input_features": [
         "prompt_features",
         "model_embedding",
-        "prompt_embedding"
+        "prompt_embedding",
+        "model_id"
       ],
       "embedding_model_name": "all-MiniLM-L6-v2",
       "embedding_spec": {

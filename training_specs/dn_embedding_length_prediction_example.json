@@ -27,7 +27,8 @@
         }
       },
       "min_model_comparisons": 20,
-      "embedding_model_epochs": 10
+      "embedding_model_epochs": 10,
+      "model_id_embedding_dim": 8
     }
   },
   "data": {

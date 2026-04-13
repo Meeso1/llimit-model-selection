@@ -354,12 +354,14 @@ def _create_starting_dn_embedding_length_prediction(training_spec: TrainingSpeci
     model_spec = training_spec.model.spec
     return DnEmbeddingLengthPredictionModel(
         hidden_dims=model_spec.hidden_dims,
+        dropout=model_spec.dropout,
         optimizer_spec=model_spec.optimizer,
         embedding_model_name=model_spec.embedding_model_name,
         embedding_spec=model_spec.embedding_spec,
         load_embedding_model_from=model_spec.load_embedding_model_from,
         min_model_comparisons=model_spec.min_model_comparisons,
         embedding_model_epochs=model_spec.embedding_model_epochs,
+        model_id_embedding_dim=model_spec.model_id_embedding_dim,
         print_every=training_spec.log.print_every,
         seed=training_spec.data.seed,
     )
