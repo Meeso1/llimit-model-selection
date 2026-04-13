@@ -54,9 +54,12 @@ A neural network model that predicts response lengths using:
   - Context features (conversation history)
   - Output format expectations
 - **Model embeddings**: Learned embeddings for each LLM (reused from scoring models)
+- **Model ID**: Integer index for each LLM, looked up through a learnable `nn.Embedding` layer (dim configurable via `model_id_embedding_dim`, default 8). An extra embedding at index `n_models` serves as the fallback for models not seen during training.
+
+Model embeddings and model IDs are both kept as inputs because they serve complementary roles: model embeddings encode inter-model behavioral relationships learned from pairwise scoring data, while model IDs let the length prediction network learn per-model length patterns independently. If model embeddings turn out to be redundant for a given dataset, the network can learn to down-weight them without losing information.
 
 **Architecture:**
-- Concatenates prompt embedding, prompt features, and model embedding
+- Concatenates prompt embedding, prompt features, model embedding, and model ID embedding
 - Passes through configurable residual blocks (default: [256, 128, 64]):
   - Each block has a **main path** (Linear → LeakyReLU → Dropout) and a **projection shortcut** (bias-free Linear), summed together
   - Shortcut always projects since dimensions change between blocks, enabling direct gradient flow
@@ -89,6 +92,7 @@ model = DnEmbeddingLengthPredictionModel(
     load_embedding_model_from="dn_embedding/my_scoring_model",  # Load pre-trained embeddings (format: model_type/model_name)
     min_model_comparisons=20,  # Filter rare models
     embedding_model_epochs=10,
+    model_id_embedding_dim=8,  # Dimension of learned model ID embeddings
     print_every=1,  # Print progress every N epochs
     seed=42,
 )
@@ -100,9 +104,12 @@ A gradient boosting (XGBoost) model that predicts response lengths using tree-ba
 
 **Input Features:**
 Supports configurable input features (via `input_features` parameter):
-- **Prompt embeddings**: Dense embeddings from sentence transformers
-- **Prompt features**: 45 handcrafted features (same as dense network model)
-- **Model embeddings**: Learned embeddings for each LLM
+- **`prompt_features`**: 45 handcrafted features (same as dense network model)
+- **`model_embedding`**: Learned embeddings for each LLM
+- **`prompt_embedding`**: Dense embeddings from sentence transformers
+- **`model_id`**: One-hot encoded model ID (vector of size `n_models`). Unseen models at inference receive an all-zeros vector.
+
+Model embeddings and model IDs are both kept as inputs because they serve complementary roles: model embeddings encode inter-model behavioral relationships learned from pairwise scoring data, while model IDs let XGBoost learn per-model length patterns via direct binary splits. Users can experiment with subsets of features via the `input_features` parameter.
 
 **Architecture:**
 - Uses XGBoost with regression objective (`reg:squarederror`)
@@ -141,7 +148,7 @@ model = GbLengthPredictionModel(
     colsample_bylevel=1.0,  # Fraction of features per level (feature-level sampling)
     reg_alpha=0.0,  # L1 regularization
     reg_lambda=1.0,  # L2 regularization
-    input_features=["prompt_features", "model_embedding", "prompt_embedding"],  # Configurable inputs
+    input_features=["prompt_features", "model_embedding", "prompt_embedding", "model_id"],  # Configurable inputs
     embedding_spec=FrozenEmbeddingSpec(...),  # Or load_embedding_model_from
     embedding_model_name="all-MiniLM-L6-v2",
     min_model_comparisons=20,

@@ -27,7 +27,7 @@ from src.utils.length_prediction_metrics import compute_length_prediction_metric
 from src.models import model_loading
 
 
-FeatureType = Literal["prompt_features", "prompt_embedding", "model_embedding"]
+FeatureType = Literal["prompt_features", "prompt_embedding", "model_embedding", "model_id"]
 
 
 class GbLengthPredictionModel(LengthPredictionModelBase):
@@ -87,6 +87,8 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
         self._xgb_model: xgb.Booster | None = None
         self._best_model_tracker = BestModelTracker()
         self._model_avg_lengths: dict[str, float] = {}
+        self._model_encoder: StringEncoder | None = None
+        self._n_models: int = 0
         
         self.last_timer: Timer | None = None
 
@@ -108,10 +110,12 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
         prompt_embedding_dim: int,
         prompt_features_dim: int,
         model_embedding_dim: int,
+        n_models: int,
     ) -> None:
         self._prompt_embedding_dim = prompt_embedding_dim
         self._prompt_features_dim = prompt_features_dim
         self._model_embedding_dim = model_embedding_dim
+        self._n_models = n_models
 
     def get_config_for_logging(self) -> dict[str, Any]:
         """Get configuration dictionary for Weights & Biases logging."""
@@ -185,11 +189,13 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
             
             self._scaler = SimpleScaler.from_state_dict(preprocessed_data.output_scaler_state)
             self._prompt_features_scaler = SimpleScaler.from_state_dict(preprocessed_data.prompt_features_scaler_state)
+            self._model_encoder = preprocessed_data.model_encoder
             
             self._initialize_dimensions(
                 prompt_embedding_dim=preprocessed_data.embedding_dim,
                 prompt_features_dim=preprocessed_data.prompt_features_dim,
                 model_embedding_dim=self.embedding_model.embedding_dim,
+                n_models=preprocessed_data.model_encoder.size,
             )
             
             with Timer("split_preprocessed_data", verbosity="start+end", parent=train_timer):
@@ -275,7 +281,7 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
         Returns:
             LengthPredictionOutputData with predicted lengths for each model
         """
-        if self._xgb_model is None:
+        if self._xgb_model is None or self._model_encoder is None:
             raise RuntimeError("Model not trained or loaded yet")
         
         with Timer("predict", verbosity="start+end") as predict_timer:
@@ -285,7 +291,7 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
                 encoded_prompts = self.preprocessor.preprocess_for_inference(
                     prompts=X.prompts,
                     model_names=X.model_names,
-                    model_encoder=StringEncoder(),  # We don't need model IDs here
+                    model_encoder=self._model_encoder,
                     scaler=self._prompt_features_scaler,
                 )
             
@@ -295,13 +301,16 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
                 prompt_indices = []  # Track which prompt each row belongs to
                 model_names_flat = []  # Track which model each row is for
                 
+                model_id_map = dict(zip(X.model_names, encoded_prompts.model_ids))
+
                 for prompt_idx, (prompt_emb, prompt_feat) in enumerate(
                     zip(encoded_prompts.prompt_embeddings, encoded_prompts.prompt_features)
                 ):
                     for model_name in X.model_names:
                         model_emb = self.model_embeddings[model_name]
+                        model_id = model_id_map[model_name]
                         # Concatenate based on input_features
-                        features = self._create_features(prompt_emb, prompt_feat, model_emb)
+                        features = self._create_features(prompt_emb, prompt_feat, model_emb, model_id)
                         all_features.append(features)
                         prompt_indices.append(prompt_idx)
                         model_names_flat.append(model_name)
@@ -348,6 +357,9 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
         # Serialize XGBoost model to bytes
         xgb_model_bytes = self._serialize_xgb_model(self._xgb_model)
         
+        if self._model_encoder is None:
+            raise RuntimeError("Model encoder not initialized")
+
         return {
             "embedding_model_name": self.embedding_model_name,
             "print_every": self.print_every,
@@ -355,6 +367,8 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
             "prompt_embedding_dim": self._prompt_embedding_dim,
             "prompt_features_dim": self._prompt_features_dim,
             "model_embedding_dim": self._model_embedding_dim,
+            "n_models": self._n_models,
+            "model_encoder_state": self._model_encoder.get_state_dict(),
             "scaler_state": self.scaler.get_state_dict(),
             "prompt_features_scaler_state": self._prompt_features_scaler.get_state_dict(),
             "xgb_model_bytes": xgb_model_bytes,
@@ -409,16 +423,18 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
                 reg_lambda=state_dict["reg_lambda"],
                 print_every=state_dict["print_every"],
                 seed=state_dict["seed"],
-                input_features=state_dict.get("input_features", ["prompt_features", "model_embedding", "prompt_embedding"]),
+                input_features=state_dict["input_features"],
             )
         
         model.embedding_model = EmbeddingModelBase.load_from_state_dict(state_dict["embedding_model_state_dict"])
+        model._model_encoder = StringEncoder.load_state_dict(state_dict["model_encoder_state"])
 
         if model._prompt_embedding_dim is None:
             model._initialize_dimensions(
                 prompt_embedding_dim=state_dict["prompt_embedding_dim"],
                 prompt_features_dim=state_dict["prompt_features_dim"],
                 model_embedding_dim=state_dict["model_embedding_dim"],
+                n_models=state_dict["n_models"],
             )
         
         model._scaler = SimpleScaler.from_state_dict(state_dict["scaler_state"])
@@ -483,7 +499,8 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
             features_a = self._create_features(
                 sample.prompt_embedding, 
                 sample.prompt_features, 
-                sample.model_embedding_a
+                sample.model_embedding_a,
+                sample.model_id_a,
             )
             features_list.append(features_a)
             lengths_list.append(sample.log_response_length_a - avg_a)
@@ -492,7 +509,8 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
             features_b = self._create_features(
                 sample.prompt_embedding, 
                 sample.prompt_features, 
-                sample.model_embedding_b
+                sample.model_embedding_b,
+                sample.model_id_b,
             )
             features_list.append(features_b)
             lengths_list.append(sample.log_response_length_b - avg_b)
@@ -503,10 +521,11 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
         return xgb.DMatrix(X, label=y)
     
     def _create_features(
-        self, 
-        prompt_embedding: np.ndarray, 
-        prompt_features: np.ndarray, 
-        model_embedding: np.ndarray,
+        self,
+        prompt_embedding: np.ndarray,  # [prompt_embedding_dim]
+        prompt_features: np.ndarray,  # [prompt_features_dim]
+        model_embedding: np.ndarray,  # [model_embedding_dim]
+        model_id: int | None = None,
     ) -> np.ndarray:
         result = []
         
@@ -516,6 +535,11 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
             result.append(model_embedding)
         if "prompt_embedding" in self.input_features:
             result.append(prompt_embedding)
+        if "model_id" in self.input_features:
+            one_hot = np.zeros(self._n_models, dtype=np.float32)  # [n_models]
+            if model_id is not None and 0 <= model_id < self._n_models:
+                one_hot[model_id] = 1.0
+            result.append(one_hot)
             
         if len(result) == 0:
             raise ValueError("No input features specified")

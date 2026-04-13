@@ -111,3 +111,4 @@ class PreprocessedLengthPredictionInferenceInput:
     """Preprocessed input for length prediction inference."""
     prompt_embeddings: np.ndarray  # [n_prompts, prompt_embedding_dim]
     prompt_features: np.ndarray  # [n_prompts, prompt_features_dim]
+    model_ids: list[int | None]  # [n_models] -- None for models not seen during training

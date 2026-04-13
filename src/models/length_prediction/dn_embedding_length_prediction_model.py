@@ -31,7 +31,7 @@ from src.models import model_loading
 from src.utils.best_model_tracker import BestModelTracker
 
 
-_DataLoaderType = DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]
+_DataLoaderType = DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]
 
 
 class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
@@ -47,6 +47,7 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
         load_embedding_model_from: str | None = None,
         min_model_comparisons: int = 20,
         embedding_model_epochs: int = 10,
+        model_id_embedding_dim: int = 8,
         run_name: str | None = None,
         print_every: int | None = None,
         seed: int = 42,
@@ -60,6 +61,7 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
         self.print_every = print_every
         self.min_model_comparisons = min_model_comparisons
         self.embedding_model_epochs = embedding_model_epochs
+        self.model_id_embedding_dim = model_id_embedding_dim
         self.seed = seed
         
         self.embedding_spec = embedding_spec
@@ -82,6 +84,8 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
         self._prompt_features_scaler: SimpleScaler | None = None
         self._best_model_tracker = BestModelTracker()
         self._model_avg_lengths: dict[str, float] = {}
+        self._model_encoder: StringEncoder | None = None
+        self._n_models: int = 0
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
@@ -111,13 +115,17 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
         self,
         prompt_embedding_dim: int,
         prompt_features_dim: int,
+        n_models: int,
     ) -> None:
         self._prompt_embedding_dim = prompt_embedding_dim
         self._prompt_features_dim = prompt_features_dim
+        self._n_models = n_models
         self._network = self._DenseNetwork(
             prompt_embedding_dim=prompt_embedding_dim,
             prompt_features_dim=prompt_features_dim,
             model_embedding_dim=self.embedding_model.embedding_dim,
+            n_models=n_models,
+            model_id_embedding_dim=self.model_id_embedding_dim,
             hidden_dims=self.hidden_dims,
             dropout=self.dropout,
         ).to(self.device)
@@ -135,6 +143,7 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
             "embedding_spec": self.embedding_spec.model_dump() if self.embedding_spec is not None else None,
             "min_model_comparisons": self.min_model_comparisons,
             "embedding_model_epochs": self.embedding_model_epochs,
+            "model_id_embedding_dim": self.model_id_embedding_dim,
         }
 
     def train(
@@ -184,11 +193,13 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
             
             self._scaler = SimpleScaler.from_state_dict(preprocessed_data.output_scaler_state)
             self._prompt_features_scaler = SimpleScaler.from_state_dict(preprocessed_data.prompt_features_scaler_state)
+            self._model_encoder = preprocessed_data.model_encoder
                 
             if self._network is None:
                 self._initialize_network(
                     prompt_embedding_dim=preprocessed_data.embedding_dim,
                     prompt_features_dim=preprocessed_data.prompt_features_dim,
+                    n_models=preprocessed_data.model_encoder.size,
                 )
             
             with Timer("split_preprocessed_data", verbosity="start+end", parent=train_timer):
@@ -264,7 +275,7 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
         Returns:
             LengthPredictionOutputData with predicted lengths for each model
         """
-        if self._network is None:
+        if self._network is None or self._model_encoder is None:
             raise RuntimeError("Model not trained or loaded yet")
         
         with Timer("predict", verbosity="start+end") as predict_timer:
@@ -273,12 +284,15 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
                 encoded_prompts = self.preprocessor.preprocess_for_inference(
                     prompts=X.prompts,
                     model_names=X.model_names,
-                    model_encoder=StringEncoder(),  # We don't need model IDs here
+                    model_encoder=self._model_encoder,
                     scaler=self._prompt_features_scaler,
                 )
             
             prompt_embeddings = torch.from_numpy(encoded_prompts.prompt_embeddings).to(self.device)  # [n_prompts, embedding_dim]
             prompt_features = torch.from_numpy(encoded_prompts.prompt_features).to(self.device)  # [n_prompts, prompt_features_dim]
+
+            # Map model names to IDs; unknown models use index n_models (dedicated unknown slot)
+            model_id_map = dict(zip(X.model_names, encoded_prompts.model_ids))
             
             self.network.eval()
             predictions_dict: dict[str, np.ndarray] = {}
@@ -291,6 +305,10 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
                     else:
                         model_embedding = self.model_embeddings[model_name]
                     
+                    raw_model_id = model_id_map[model_name]
+                    # Unknown models use -1; the network computes the mean of all known embeddings for them
+                    model_id_idx = raw_model_id if raw_model_id is not None else -1
+
                     model_embedding_tensor = torch.from_numpy(model_embedding).to(self.device)
                     model_predictions = []
                     
@@ -301,11 +319,18 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
                         
                         # Repeat model embedding for batch
                         batch_model_embedding = model_embedding_tensor.unsqueeze(0).repeat(batch_size_actual, 1)  # [batch_size, model_embedding_dim]
+                        batch_model_ids = torch.full(
+                            (batch_size_actual,),
+                            model_id_idx,
+                            dtype=torch.long,
+                            device=self.device,
+                        )  # [batch_size]
                         
                         batch_predictions: torch.Tensor = self.network(
                             batch_embeddings,
                             batch_features,
                             batch_model_embedding,
+                            batch_model_ids,
                         )  # [batch_size]
                         
                         # Add back per-model average, then convert scaled log-lengths to raw lengths
@@ -336,6 +361,9 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
         if not self.embedding_model.is_initialized:
             raise RuntimeError("Embedding model not initialized")
         
+        if self._model_encoder is None:
+            raise RuntimeError("Model encoder not initialized")
+
         return {
             "optimizer_type": self.optimizer_spec.optimizer_type,
             "optimizer_params": self.optimizer_spec.to_dict(),
@@ -348,6 +376,9 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
             "preprocessor_version": self.preprocessor.version,
             "prompt_embedding_dim": self._prompt_embedding_dim,
             "prompt_features_dim": self._prompt_features_dim,
+            "n_models": self._n_models,
+            "model_id_embedding_dim": self.model_id_embedding_dim,
+            "model_encoder_state": self._model_encoder.get_state_dict(),
             "scaler_state": self.scaler.get_state_dict(),
             "prompt_features_scaler_state": self._prompt_features_scaler.get_state_dict(),
             "network_state_dict": state_dict_to_cpu(self.network.state_dict()),
@@ -389,22 +420,25 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
             
             model = cls(
                 hidden_dims=state_dict["hidden_dims"],
-                dropout=state_dict.get("dropout", 0.2),
+                dropout=state_dict["dropout"],
                 optimizer_spec=optimizer_spec,
                 embedding_model_name=state_dict["embedding_model_name"],
                 embedding_spec=embedding_spec,
                 min_model_comparisons=state_dict["min_model_comparisons"],
                 embedding_model_epochs=state_dict["embedding_model_epochs"],
+                model_id_embedding_dim=state_dict["model_id_embedding_dim"],
                 print_every=state_dict["print_every"],
                 seed=state_dict["seed"],
             )
         
         model.embedding_model = EmbeddingModelBase.load_from_state_dict(state_dict["embedding_model_state_dict"])
+        model._model_encoder = StringEncoder.load_state_dict(state_dict["model_encoder_state"])
 
         if model._network is None:
             model._initialize_network(
                 prompt_embedding_dim=state_dict["prompt_embedding_dim"],
                 prompt_features_dim=state_dict["prompt_features_dim"],
+                n_models=state_dict["n_models"],
             )
         model.network.load_state_dict(state_dict["network_state_dict"])
         model.network.to(model.device)
@@ -465,6 +499,7 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
         prompt_embeddings_list = []  # [n_samples, embedding_dim]
         prompt_features_list = []  # [n_samples, prompt_features_dim]
         model_embeddings_list = []  # [n_samples, model_embedding_dim]
+        model_ids_list = []  # [n_samples]
         lengths_list = []  # [n_samples]
         
         for sample in preprocessed_data.samples:
@@ -477,23 +512,27 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
             prompt_embeddings_list.append(torch.from_numpy(sample.prompt_embedding))
             prompt_features_list.append(torch.from_numpy(sample.prompt_features))
             model_embeddings_list.append(torch.from_numpy(sample.model_embedding_a))
+            model_ids_list.append(sample.model_id_a)
             lengths_list.append(sample.log_response_length_a - avg_a)
             
             # Add model B sample (target is residual from per-model average)
             prompt_embeddings_list.append(torch.from_numpy(sample.prompt_embedding))
             prompt_features_list.append(torch.from_numpy(sample.prompt_features))
             model_embeddings_list.append(torch.from_numpy(sample.model_embedding_b))
+            model_ids_list.append(sample.model_id_b)
             lengths_list.append(sample.log_response_length_b - avg_b)
         
         prompt_embeddings = torch.stack(prompt_embeddings_list)  # [n_samples, embedding_dim]
         prompt_features = torch.stack(prompt_features_list)  # [n_samples, prompt_features_dim]
         model_embeddings = torch.stack(model_embeddings_list)  # [n_samples, model_embedding_dim]
+        model_ids = torch.tensor(model_ids_list, dtype=torch.long)  # [n_samples]
         lengths = torch.tensor(lengths_list, dtype=torch.float32)  # [n_samples]
         
         dataset = TensorDataset(
             prompt_embeddings,
             prompt_features,
             model_embeddings,
+            model_ids,
             lengths,
         )
         
@@ -536,10 +575,11 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
             all_predictions = []
             all_actuals = []
             
-            for batch_emb, batch_features, batch_model_emb, batch_lengths in dataloader:
+            for batch_emb, batch_features, batch_model_emb, batch_model_ids, batch_lengths in dataloader:
                 batch_emb: torch.Tensor = batch_emb.to(self.device)  # [batch_size, prompt_embedding_dim]
                 batch_features: torch.Tensor = batch_features.to(self.device)  # [batch_size, prompt_features_dim]
                 batch_model_emb: torch.Tensor = batch_model_emb.to(self.device)  # [batch_size, model_embedding_dim]
+                batch_model_ids: torch.Tensor = batch_model_ids.to(self.device)  # [batch_size]
                 batch_lengths: torch.Tensor = batch_lengths.to(self.device)  # [batch_size]
                 
                 total_samples += len(batch_emb)
@@ -549,6 +589,7 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
                     batch_emb,
                     batch_features,
                     batch_model_emb,
+                    batch_model_ids,
                 )  # [batch_size]
                 
                 loss: torch.Tensor = criterion(predictions, batch_lengths)
@@ -625,11 +666,12 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
         all_predictions = []
         all_actuals = []
         
-        for batch_emb, batch_features, batch_model_emb, batch_lengths in val_dataloader:
+        for batch_emb, batch_features, batch_model_emb, batch_model_ids, batch_lengths in val_dataloader:
             with Timer(f"batch_{n_batches}", verbosity="start+end", parent=timer):
                 batch_emb: torch.Tensor = batch_emb.to(self.device)  # [batch_size, embedding_dim]
                 batch_features: torch.Tensor = batch_features.to(self.device)  # [batch_size, prompt_features_dim]
                 batch_model_emb: torch.Tensor = batch_model_emb.to(self.device)  # [batch_size, model_embedding_dim]
+                batch_model_ids: torch.Tensor = batch_model_ids.to(self.device)  # [batch_size]
                 batch_lengths: torch.Tensor = batch_lengths.to(self.device)  # [batch_size]
                 
                 total_samples += len(batch_emb)
@@ -639,6 +681,7 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
                         batch_emb,
                         batch_features,
                         batch_model_emb,
+                        batch_model_ids,
                     )  # [batch_size]
                     
                     loss: torch.Tensor = criterion(predictions, batch_lengths)
@@ -718,13 +761,20 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
             prompt_embedding_dim: int,
             prompt_features_dim: int,
             model_embedding_dim: int,
+            n_models: int,
+            model_id_embedding_dim: int,
             hidden_dims: list[int],
             dropout: float = 0.2,
         ) -> None:
             super().__init__()
+
+            self.model_id_embedding = nn.Embedding(
+                num_embeddings=n_models,
+                embedding_dim=model_id_embedding_dim,
+            )
             
             blocks = []
-            prev_dim = prompt_embedding_dim + prompt_features_dim + model_embedding_dim
+            prev_dim = prompt_embedding_dim + prompt_features_dim + model_embedding_dim + model_id_embedding_dim
             
             for hidden_dim in hidden_dims:
                 blocks.append(DnEmbeddingLengthPredictionModel._ResidualBlock(prev_dim, hidden_dim, dropout))
@@ -738,8 +788,14 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
             prompt_embedding: torch.Tensor,  # [batch_size, prompt_embedding_dim]
             prompt_features: torch.Tensor,  # [batch_size, prompt_features_dim]
             model_embedding: torch.Tensor,  # [batch_size, model_embedding_dim]
+            model_id: torch.Tensor,  # [batch_size] -- integer IDs; -1 means unknown (uses mean of all embeddings)
         ) -> torch.Tensor:
-            x = torch.cat([prompt_embedding, prompt_features, model_embedding], dim=1)  # [batch_size, total_input_dim]
+            known_mask = model_id >= 0  # [batch_size]
+            # Clamp to valid range so the lookup never errors; unknown rows are overwritten below
+            id_embs = self.model_id_embedding(model_id.clamp(min=0))  # [batch_size, model_id_embedding_dim]
+            mean_emb = self.model_id_embedding.weight.mean(dim=0)  # [model_id_embedding_dim]
+            id_embs = torch.where(known_mask.unsqueeze(-1), id_embs, mean_emb)  # [batch_size, model_id_embedding_dim]
+            x = torch.cat([prompt_embedding, prompt_features, model_embedding, id_embs], dim=1)  # [batch_size, total_input_dim]
             for block in self.blocks:
                 x = block(x)  # [batch_size, hidden_dim]
             output: torch.Tensor = self.output_layer(x)  # [batch_size, 1]

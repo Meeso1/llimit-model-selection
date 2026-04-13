@@ -169,10 +169,13 @@ class LengthPredictionPreprocessor:
             model_encoder,
             scaler
         )
+
+        model_ids: list[int | None] = model_encoder.encode(model_names)  # type: ignore[assignment]
         
         return PreprocessedLengthPredictionInferenceInput(
             prompt_embeddings=preprocessed.prompt_embeddings,  # [n_prompts, embedding_dim]
             prompt_features=preprocessed.prompt_features,  # [n_prompts, prompt_features_dim]
+            model_ids=model_ids,  # [n_models]
         )
 
     def _filter_out(
