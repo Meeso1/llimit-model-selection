@@ -30,7 +30,7 @@ Features are referenced by the `.name` attribute of the descriptors returned by 
 
 **Boolean (18):** Has code request, Has code block, Has math, Has numbers, Has math symbols, Has creative writing, Has factual query, Has instruction following, Has roleplay, Has analysis, Starts with verb, Is question, Is follow-up, Expects list, Expects table, Expects JSON, Expects code, Expects long response.
 
-The `use_scaled_features` parameter controls whether the transformed (log/softplus + standardised) features from the preprocessor are used as-is (`True`, default) or numerically unscaled back toward raw space first (`False`, via `unscale_prompt_features()`). Both options work for OLS; `True` is the default since the features are already available in that form.
+The `use_scaled_features` parameter controls whether the transformed (log/softplus + standardised) features from the preprocessor are used as-is (`True`, default) or fully inverted back toward raw space first (`False`, via `inverse_transform_prompt_features()`). Both options work for OLS; `True` is the default since the features are already available in that form.
 
 ---
 

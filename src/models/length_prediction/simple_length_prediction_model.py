@@ -11,7 +11,7 @@ from src.data_models.length_prediction.length_prediction_data_models import (
 )
 from src.models.length_prediction.length_prediction_model_base import LengthPredictionModelBase
 from src.preprocessing.length_prediction_preprocessor import LengthPredictionPreprocessor
-from src.preprocessing.scoring_feature_extraction import get_feature_descriptions, unscale_prompt_features
+from src.preprocessing.scoring_feature_extraction import get_feature_descriptions, inverse_transform_prompt_features
 from src.preprocessing.simple_scaler import SimpleScaler
 from src.utils.data_split import ValidationSplit, _compute_split_indices
 from src.utils.length_prediction_metrics import compute_length_prediction_metrics
@@ -278,7 +278,7 @@ class SimpleLengthPredictionModel(LengthPredictionModelBase):
         if not self.use_scaled_features:
             if self._prompt_features_scaler is None:
                 raise RuntimeError("prompt_features_scaler not set -- model not trained yet")
-            prompt_features_list = unscale_prompt_features(
+            prompt_features_list = inverse_transform_prompt_features(
                 prompt_features_list, self._prompt_features_scaler
             )
 

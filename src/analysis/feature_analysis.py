@@ -43,8 +43,11 @@ def display_numeric_feature(
 ) -> None:
     assert len(feature_values) == len(target_values)
 
+    _title_fontsize = 16
+    _tick_fontsize = 13
+
     if axes is None:
-        _, axes = plt.subplots(1, 3, figsize=(25, 5))
+        _, axes = plt.subplots(1, 3, figsize=(18, 6))
 
     # Drop entries where target is 0
     indexes = np.where(target_values > 0)[0]
@@ -99,12 +102,15 @@ def display_numeric_feature(
     sorted_final = np.sort(_compute_scaled_final(feature_values, logarythmic, many_zeros))  # [n_nonzero] or [n_samples]
     final_label = f"{feature_name} (scaled+softplus, non-zero)" if many_zeros else f"{feature_name} (scaled)"
 
-    axes[0].plot(sorted_raw)
-    axes[0].set_title(f"{feature_name} (raw)")
-    axes[1].plot(sorted_transformed)
-    axes[1].set_title(transform_label)
-    axes[2].plot(sorted_final)
-    axes[2].set_title(final_label)
+    for ax, y_data, title in (
+        (axes[0], sorted_raw, f"{feature_name} (raw)"),
+        (axes[1], sorted_transformed, transform_label),
+        (axes[2], sorted_final, final_label),
+    ):
+        ax.plot(np.linspace(0, 1, len(y_data)), y_data)
+        ax.set_title(title, fontsize=_title_fontsize)
+        ax.tick_params(axis="both", labelsize=_tick_fontsize)
+        ax.set_box_aspect(1)
 
 
 def display_boolean_feature(

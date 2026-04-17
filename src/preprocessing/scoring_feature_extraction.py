@@ -353,25 +353,65 @@ def extract_and_transform_all_prompt_features(
     ], scaler  # [n_prompts, n_features]
 
 
-def unscale_prompt_features(
+def inverse_transform_prompt_features(
     prompt_features: list[np.ndarray],
     scaler: SimpleScaler
 ) -> list[np.ndarray]:
     """
-    Unscale numeric prompt features, leaving boolean features as is.
+    Invert the full transformation applied by extract_and_transform_all_prompt_features,
+    recovering approximately the original numeric features. Boolean features are left as-is.
+
+    The forward transform per numeric feature is:
+      - If logarythmic: log(clip(x, 1e-6))
+      - If many_zeros: scale only non-zero values, then apply softplus; zeros become -1
+      - Otherwise: standard scale
+
+    This function applies the exact inverse of that pipeline.
     """
+    assert scaler.mean is not None and scaler.scale is not None
+
     features_array = np.stack(prompt_features)  # [n_samples, n_features]
-    
-    # Numeric features are the first 27, boolean are the remaining 18
+
     numeric_dim = 27
-    numeric_part = features_array[:, :numeric_dim]  # [n_samples, 27]
-    
-    unscaled_numeric = scaler.inverse_transform(numeric_part)  # [n_samples, 27]
+    numeric_part = features_array[:, :numeric_dim].copy()  # [n_samples, 27]
     boolean_part = features_array[:, numeric_dim:]  # [n_samples, 18]
-    
-    unscaled_features = np.concatenate([unscaled_numeric, boolean_part], axis=1)  # [n_samples, 45]
-    
-    return [unscaled_features[i] for i in range(len(prompt_features))]
+
+    numeric_feature_descriptions, _ = get_feature_descriptions()
+
+    # Reverse softplus for many_zeros features and collect pre-unscale values,
+    # mirroring the unbalanced structure used in the forward pass.
+    pre_unscale_data: list[np.ndarray] = []
+    non_zero_masks: list[np.ndarray | None] = []
+    for index, feature_description in enumerate(numeric_feature_descriptions):
+        values = numeric_part[:, index]  # [n_samples]
+        if feature_description.many_zeros:
+            non_zero_mask = values != -1
+            non_zero_values = values[non_zero_mask]
+            # Inverse softplus: y = log(1 + exp(x))  =>  x = log(exp(y) - 1)
+            pre_unscale_data.append(np.log(np.exp(non_zero_values) - 1))
+            non_zero_masks.append(non_zero_mask)
+        else:
+            pre_unscale_data.append(values)
+            non_zero_masks.append(None)
+
+    unscaled_data = scaler.inverse_transform_unbalanced(pre_unscale_data)
+
+    for index, feature_description in enumerate(numeric_feature_descriptions):
+        unscaled = unscaled_data[index]
+
+        if feature_description.logarythmic:
+            unscaled = np.exp(unscaled)
+
+        if feature_description.many_zeros:
+            non_zero_mask = non_zero_masks[index]
+            result = np.zeros(len(numeric_part), dtype=numeric_part.dtype)
+            result[non_zero_mask] = unscaled  # type: ignore[index]
+            numeric_part[:, index] = result
+        else:
+            numeric_part[:, index] = unscaled
+
+    result_array = np.concatenate([numeric_part, boolean_part], axis=1)  # [n_samples, 45]
+    return [result_array[i] for i in range(len(prompt_features))]
 
 
 def get_feature_descriptions() -> tuple[list["NumericFeatureDescription"], list["BooleanFeatureDescription"]]:
@@ -383,13 +423,13 @@ def get_feature_descriptions() -> tuple[list["NumericFeatureDescription"], list[
         NumericFeatureDescription(name="Character count", logarythmic=True),
         NumericFeatureDescription(name="Word count", logarythmic=True),
         NumericFeatureDescription(name="Sentence count", logarythmic=True),
-        NumericFeatureDescription(name="Inverse Type-token ratio", many_zeros=True),
+        NumericFeatureDescription(name="ITT ratio", many_zeros=True),
         NumericFeatureDescription(name="Average word length", logarythmic=True),
         NumericFeatureDescription(name="Question density", logarythmic=True, many_zeros=True),
         NumericFeatureDescription(name="Nesting depth", logarythmic=True, many_zeros=True),
         NumericFeatureDescription(name="Multi-part request density", logarythmic=True, many_zeros=True),
         # Domain (12)
-        NumericFeatureDescription(name="Science domain score", many_zeros=True, logarythmic=True),
+        NumericFeatureDescription(name="Science score", many_zeros=True, logarythmic=True),
         NumericFeatureDescription(name="Medicine domain score", many_zeros=True, logarythmic=True),
         NumericFeatureDescription(name="Law domain score", many_zeros=True, logarythmic=True),
         NumericFeatureDescription(name="Finance domain score", many_zeros=True, logarythmic=True),
