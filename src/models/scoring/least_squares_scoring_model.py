@@ -408,7 +408,7 @@ class LeastSquaresScoringModel(ScoringModelBase):
     def _log_metrics(self, metrics: "LeastSquaresScoringModel.TrainMetrics") -> None:
         self.init_logger_if_needed()
         final_metrics = compute_model_scores_stats(self.get_all_model_scores())
-        final_metrics.update(metrics)
+        final_metrics.update(metrics.__dict__)
         self.finish_logger_if_needed(
             final_metrics=final_metrics,
             log_timings_from=self.last_timer,

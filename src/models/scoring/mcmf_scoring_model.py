@@ -380,11 +380,10 @@ class McmfScoringModel(ScoringModelBase):
         print(f"Comparisons used: {metrics.pct_comparisons_used_by_flow*100:.2f}%")
         print(f"Scores: {metrics.min_score:.2f}/{metrics.bottom_10_pct_score:.2f}/{metrics.avg_score:.2f}/{metrics.top_10_pct_score:.2f}/{metrics.max_score:.2f}")
 
-
     def _log_metrics(self, metrics: "McmfScoringModel.TrainMetrics") -> None:
         self.init_logger_if_needed()
         final_metrics = compute_model_scores_stats(self.get_all_model_scores())
-        final_metrics.update(metrics)
+        final_metrics.update(metrics.__dict__)
         self.finish_logger_if_needed(
             final_metrics=final_metrics,
             log_timings_from=self.last_timer,

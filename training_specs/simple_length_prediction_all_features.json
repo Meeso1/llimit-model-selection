@@ -1,0 +1,69 @@
+{
+  "model": {
+    "name": "simple-length-prediction-all-features",
+    "start_state": null,
+    "spec": {
+      "model_type": "simple_length_prediction",
+      "input_features": [
+        "Character count",
+        "Word count",
+        "Sentence count",
+        "ITT ratio",
+        "Average word length",
+        "Question density",
+        "Nesting depth",
+        "Multi-part request density",
+        "Science score",
+        "Medicine domain score",
+        "Law domain score",
+        "Finance domain score",
+        "Tech domain score",
+        "Academic domain score",
+        "Casual domain score",
+        "Formal domain score",
+        "Philosophical domain score",
+        "Historical domain score",
+        "Personal domain score",
+        "Business domain score",
+        "Informal marker density",
+        "Specificity density",
+        "Politeness density",
+        "Urgency density",
+        "Conversation turn count",
+        "Total context length",
+        "Assistant turn count",
+        "Has code request",
+        "Has code block",
+        "Has math",
+        "Has numbers",
+        "Has math symbols",
+        "Has creative writing",
+        "Has factual query",
+        "Has instruction following",
+        "Has roleplay",
+        "Has analysis",
+        "Starts with verb",
+        "Is question",
+        "Is follow-up",
+        "Expects list",
+        "Expects table",
+        "Expects JSON",
+        "Expects code",
+        "Expects long response"
+      ],
+      "use_scaled_features": true,
+      "embedding_model_name": "all-MiniLM-L6-v2",
+      "min_model_comparisons": 20
+    }
+  },
+  "data": {
+    "validation_split": 0.2,
+    "seed": 42
+  },
+  "log": {
+    "print_every": 1,
+    "run_name": "simple-length-prediction-all-features"
+  },
+  "epochs": 1,
+  "batch_size": 32
+}

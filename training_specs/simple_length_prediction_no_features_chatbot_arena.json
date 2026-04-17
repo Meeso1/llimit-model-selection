@@ -1,0 +1,24 @@
+{
+  "model": {
+    "name": "simple-length-prediction-no-features-chatbot-arena",
+    "start_state": null,
+    "spec": {
+      "model_type": "simple_length_prediction",
+      "input_features": [],
+      "use_scaled_features": true,
+      "embedding_model_name": "all-MiniLM-L6-v2",
+      "min_model_comparisons": 20
+    }
+  },
+  "data": {
+    "validation_split": 0.2,
+    "seed": 42,
+    "dataset": "chatbot_arena"
+  },
+  "log": {
+    "print_every": 1,
+    "run_name": "simple-length-prediction-no-features-chatbot-arena"
+  },
+  "epochs": 1,
+  "batch_size": 32
+}
