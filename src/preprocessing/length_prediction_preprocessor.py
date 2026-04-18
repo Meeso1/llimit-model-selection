@@ -46,7 +46,7 @@ class LengthPredictionPreprocessor:
             min_model_comparisons=min_model_comparisons,
         )
         
-        self.version = "v4"
+        self.version = "v5"
         self.last_timer: Timer | None = None
 
     def preprocess(
@@ -88,7 +88,7 @@ class LengthPredictionPreprocessor:
                 log_response_lengths_b = np.log(np.array(response_lengths_b))  # [n_pairs]
                     
                 # Fit scaler on all lengths and transform
-                scaler = SimpleScaler().fit(np.array(log_response_lengths_a + log_response_lengths_b))
+                scaler = SimpleScaler().fit(np.concatenate([log_response_lengths_a, log_response_lengths_b]))
                 
                 log_response_lengths_a_scaled = scaler.transform(np.array(log_response_lengths_a))  # [n_pairs]
                 log_response_lengths_b_scaled = scaler.transform(np.array(log_response_lengths_b))  # [n_pairs]

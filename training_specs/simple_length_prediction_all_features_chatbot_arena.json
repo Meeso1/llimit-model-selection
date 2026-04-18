@@ -51,9 +51,9 @@
         "Expects code",
         "Expects long response"
       ],
-      "use_scaled_features": true,
+      "use_scaled_features": false,
       "embedding_model_name": "all-MiniLM-L6-v2",
-      "min_model_comparisons": 20
+      "min_model_comparisons": 0
     }
   },
   "data": {
