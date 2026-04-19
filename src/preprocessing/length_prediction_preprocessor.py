@@ -187,7 +187,7 @@ class LengthPredictionPreprocessor:
         
         response_length_limit = np.percentile(np.array(
             [len(entry.model_a_response.strip()) for entry in entries] 
-            + [len(entry.model_b_response.strip()) for entry in entries]), 99) * 1.3
+            + [len(entry.model_b_response.strip()) for entry in entries]), 95)
         
         remaining_entries: list[EvaluationEntry] = []
         remaining_pairs: list[PreprocessedPromptPair] = []

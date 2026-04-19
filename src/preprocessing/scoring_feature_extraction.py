@@ -193,7 +193,7 @@ def extract_prompt_style_features(prompt: str) -> tuple[np.ndarray, np.ndarray]:
 def extract_context_features(
     prompt: str, 
     conversation_history: list[EvaluationMessage]
-) -> tuple[np.ndarray, np.ndarray]:  # ([3] (numeric), [1] (boolean))
+) -> tuple[np.ndarray, np.ndarray]:  # ([2] (numeric), [1] (boolean))
     """
     Extract features from conversation context.
     
@@ -203,7 +203,7 @@ def extract_context_features(
         timer: Optional timer for profiling
         
     Returns:
-        Array of 4 context features
+        Array of 3 context features
     """
     numeric_features = []
     boolean_features = []
@@ -219,10 +219,6 @@ def extract_context_features(
     # Total context length (affects model performance)
     total_context_chars = sum(len(m.content) for m in conversation_history)
     numeric_features.append(float(total_context_chars))
-    
-    # Assistant response count (how many turns of dialogue)
-    assistant_turns = sum(1 for m in conversation_history if m.role == 'assistant')
-    numeric_features.append(float(assistant_turns))
     
     return np.array(numeric_features, dtype=np.float32), np.array(boolean_features, dtype=np.float32)
 
@@ -446,10 +442,9 @@ def get_feature_descriptions() -> tuple[list["NumericFeatureDescription"], list[
         NumericFeatureDescription(name="Specificity density", logarythmic=True, many_zeros=True),
         NumericFeatureDescription(name="Politeness density", logarythmic=True, many_zeros=True),
         NumericFeatureDescription(name="Urgency density", logarythmic=True, many_zeros=True),
-        # Context numeric (3)
+        # Context numeric (2)
         NumericFeatureDescription(name="Conversation turn count", logarythmic=True, many_zeros=True),
         NumericFeatureDescription(name="Total context length", logarythmic=True, many_zeros=True),
-        NumericFeatureDescription(name="Assistant turn count", logarythmic=True, many_zeros=True),
     ], \
     [
         # Task type (10)

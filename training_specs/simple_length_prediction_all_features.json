@@ -31,7 +31,6 @@
         "Urgency density",
         "Conversation turn count",
         "Total context length",
-        "Assistant turn count",
         "Has code request",
         "Has code block",
         "Has math",
