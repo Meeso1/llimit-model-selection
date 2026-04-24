@@ -136,25 +136,23 @@ class AttentionEmbeddingPreprocessor:
         Returns:
             Tuple of (dictionary mapping model_id to list of ProcessedPairs, scaler state)
         """
-        # Collect all unique (prompt, response) pairs with their models
-        unique_pairs: dict[tuple[str, str], str] = {}  # (prompt, response) -> model_id
-        
+        pairs: list[tuple[str, str, str]] = []
         for entry in data.entries:
-            unique_pairs[(entry.user_prompt, entry.model_a_response)] = entry.model_a
-            unique_pairs[(entry.user_prompt, entry.model_b_response)] = entry.model_b
-        
+            pairs.append((entry.user_prompt, entry.model_a_response, entry.model_a))
+            pairs.append((entry.user_prompt, entry.model_b_response, entry.model_b))
+            
         # Extract embeddings
         with Timer("embed_texts", verbosity="start+end", parent=timer):
-            prompts = [pair[0] for pair in unique_pairs.keys()]
-            responses = [pair[1] for pair in unique_pairs.keys()]
+            prompts = [pair[0] for pair in pairs]
+            responses = [pair[1] for pair in pairs]
             
             prompt_embeddings = self._embed_texts(prompts)  # [n_pairs, d_emb]
             response_embeddings = self._embed_texts(responses)  # [n_pairs, d_emb]
         
         # Extract and normalize scalar features
         with Timer("extract_and_scale_response_features", verbosity="start+end", parent=timer) as features_timer:
-            prompts_list = [pair[0] for pair in unique_pairs.keys()]
-            responses_list = [pair[1] for pair in unique_pairs.keys()]
+            prompts_list = [pair[0] for pair in pairs]
+            responses_list = [pair[1] for pair in pairs]
             
             normalized_scalar_features_list, scaler = extract_response_features_for_many(
                 prompt_embeddings,
@@ -173,8 +171,11 @@ class AttentionEmbeddingPreprocessor:
         # Group by model
         pairs_by_model: dict[str, list[ProcessedPair]] = defaultdict(list)
         indexes_by_model: dict[str, list[int]] = defaultdict(list)
-        
-        for i, (index, ((prompt, response), model_id)) in enumerate(zip(indexes, unique_pairs.items())):
+
+        # Each entry produces two pairs (model_a and model_b), so expand indexes to match.
+        pair_indexes = [idx for idx in indexes for _ in range(2)]
+
+        for i, (index, (prompt, response, model_id)) in enumerate(zip(pair_indexes, pairs, strict=True)):
             processed_pair = ProcessedPair(
                 prompt_emb=prompt_embeddings[i],
                 response_emb=response_embeddings[i],
