@@ -168,7 +168,10 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
                         )
                     else:
                         raise RuntimeError("No embedding model available and no way to create one")
-                    
+
+                self.init_logger_if_needed() # Must be called after embedding model is created
+                self.embedding_model.set_training_logger(self._logger)
+
                 if not self.embedding_model.is_initialized:
                     self.embedding_model.train(
                         data, 
@@ -176,8 +179,6 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
                         epochs=self.embedding_model_epochs, 
                         batch_size=batch_size,
                     )
-            
-            self.init_logger_if_needed() # Must be called after embedding model is initialized
             
             with Timer("encode_prompts", verbosity="start+end", parent=train_timer):
                 preprocessed_without_embeddings = self.preprocessor.preprocess(data)

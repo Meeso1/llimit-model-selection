@@ -205,6 +205,18 @@ class TransformerEmbeddingModel(ScoringModelBase):
                     else:
                         raise RuntimeError("No embedding model available and no way to create one")
             
+            with Timer("preprocess", verbosity="start+end", parent=train_timer):
+                preprocessed_data = self.preprocessor.preprocess(data)
+
+            self._prompt_features_scaler = SimpleScaler.from_state_dict(preprocessed_data.scaler_state)
+            if self._network is None:
+                self._initialize_network(
+                    prompt_features_dim=preprocessed_data.prompt_features_dim,
+                )
+
+            self.init_logger_if_needed()
+            self.embedding_model.set_training_logger(self._logger)
+
             with Timer("train_embedding_model", verbosity="start+end", parent=train_timer):
                 if not self.embedding_model.is_initialized:
                     self.embedding_model.train(
@@ -215,17 +227,6 @@ class TransformerEmbeddingModel(ScoringModelBase):
                     )
                 elif self.print_every is not None:
                     print("Embedding model is already trained")
-            
-            with Timer("preprocess", verbosity="start+end", parent=train_timer):
-                preprocessed_data = self.preprocessor.preprocess(data)
-
-            self._prompt_features_scaler = SimpleScaler.from_state_dict(preprocessed_data.scaler_state)
-            if self._network is None:
-                self._initialize_network(
-                    prompt_features_dim=preprocessed_data.prompt_features_dim,
-                )
-            
-            self.init_logger_if_needed()
             
             with Timer("add_model_embeddings_to_training_data", verbosity="start+end", parent=train_timer):
                 preprocessed_pairs = [

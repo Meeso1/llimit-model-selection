@@ -18,6 +18,13 @@ class LogEntry:
 
 
 @dataclass
+class EmbeddingModelLog:
+    """Container for embedding sub-model training logs."""
+    epoch_logs: list[LogEntry] = field(default_factory=list)
+    final_metrics: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class TrainingLog:
     """Container for all training logs for a run."""
     run_name: str
@@ -27,6 +34,7 @@ class TrainingLog:
     start_time: datetime = field(default_factory=datetime.now)
     end_time: datetime | None = None
     timings: dict[str, float] | None = None
+    embedding_model_log: EmbeddingModelLog | None = None
 
 
 @dataclass
@@ -119,6 +127,38 @@ class TrainingLogger:
         self._current_run.final_metrics.update(metrics)
         self._save()
     
+    def log_embedding_epoch(self, data: dict[str, Any]) -> None:
+        """
+        Log one epoch of the embedding sub-model.
+
+        Args:
+            data: Dictionary of metrics for this epoch
+        """
+        if self._current_run is None:
+            raise RuntimeError("No active training run. Call init() first.")
+
+        if self._current_run.embedding_model_log is None:
+            self._current_run.embedding_model_log = EmbeddingModelLog()
+
+        self._current_run.embedding_model_log.epoch_logs.append(LogEntry(data=data))
+        self._save()
+
+    def finish_embedding_log(self, final_metrics: dict[str, Any]) -> None:
+        """
+        Store final metrics for the embedding sub-model.
+
+        Args:
+            final_metrics: Dictionary of final metrics (e.g. best_universal_accuracy)
+        """
+        if self._current_run is None:
+            raise RuntimeError("No active training run. Call init() first.")
+
+        if self._current_run.embedding_model_log is None:
+            self._current_run.embedding_model_log = EmbeddingModelLog()
+
+        self._current_run.embedding_model_log.final_metrics.update(final_metrics)
+        self._save()
+
     def finish(self, log_timings_from: Timer | None = None) -> None:
         """
         Finish the current training run.

@@ -40,11 +40,18 @@ Represents a single epoch's metrics:
 Container for a complete training run:
 - `run_name`: Unique name with timestamp
 - `config`: Model configuration dictionary
-- `epoch_logs`: List of LogEntry objects
+- `epoch_logs`: List of LogEntry objects (main network epochs)
 - `final_metrics`: Dictionary of final metrics (e.g., test accuracy, model score statistics)
 - `start_time`: When training started
 - `end_time`: When training finished
 - `timings`: Optional dict of timing data (dotted paths to elapsed seconds), overwritten each time `log_timings_from` is passed to `log()` or `finish()`
+- `embedding_model_log`: Optional `EmbeddingModelLog` — present when the model trained an embedding sub-model
+
+### EmbeddingModelLog
+
+Container for the embedding sub-model training logs, nested inside `TrainingLog.embedding_model_log`:
+- `epoch_logs`: List of LogEntry objects, one per embedding training epoch
+- `final_metrics`: Dictionary of final metrics for the embedding model (currently `best_universal_accuracy`)
 
 ### RunInfo
 
@@ -222,6 +229,20 @@ self.finish_logger_if_needed(final_metrics=final_metrics)
 ```
 
 This is especially important for non-iterative models (like `GreedyRankingModel`, `McmfScoringModel`, `LeastSquaresScoringModel`) that don't have epoch logs but still want to save their configuration and final results.
+
+## Embedding Sub-Model Logging
+
+Models that internally train an embedding sub-model (e.g. `DnEmbeddingModel`, `DnEmbeddingLengthPredictionModel`) automatically forward their `TrainingLogger` to the embedding model before training it:
+
+```python
+self.init_logger_if_needed()
+self.embedding_model.set_training_logger(self._logger)
+# ... embedding_model.train(...) follows
+```
+
+The embedding model then writes one `LogEntry` per epoch to `TrainingLog.embedding_model_log.epoch_logs` (via `log_embedding_epoch()`), and stores final metrics such as `best_universal_accuracy` in `TrainingLog.embedding_model_log.final_metrics` (via `finish_embedding_log()`) at the end of training.
+
+Embedding epoch logs are **not** stored in the embedding model's own state dict — they only live in the `TrainingLog` file.
 
 ## Non-Epoch Models
 

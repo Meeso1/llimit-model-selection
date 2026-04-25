@@ -349,7 +349,10 @@ class GradientBoostingModel(ScoringModelBase):
                         )
                     else:
                         raise RuntimeError("No embedding model available and no way to create one")
-                    
+
+                self.init_logger_if_needed() # Must be called after embedding model is created
+                self.embedding_model.set_training_logger(self._logger)
+
                 if not self.embedding_model.is_initialized:
                     self.embedding_model.train(
                         data, 
@@ -396,9 +399,7 @@ class GradientBoostingModel(ScoringModelBase):
                 model_embedding_dim=self.embedding_model.embedding_dim,
                 prompt_categories_dim=preprocessed_without_model_embeddings.prompt_categories_dim,
             )
-            
-            self.init_logger_if_needed()
-            
+
             with Timer("split_preprocessed_data", verbosity="start+end", parent=train_timer):
                 preprocessed_train, preprocessed_val = split_gradient_boosting_preprocessed_data(
                     preprocessed_data,

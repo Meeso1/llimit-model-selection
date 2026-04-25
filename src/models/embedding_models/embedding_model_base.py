@@ -6,6 +6,7 @@ import numpy as np
 
 from src.data_models.data_models import TrainingData
 from src.utils.data_split import ValidationSplit
+from src.utils.training_logger import TrainingLogger
 
 
 class EmbeddingModelBase(ABC):
@@ -18,7 +19,10 @@ class EmbeddingModelBase(ABC):
     This is used as a component within other models (e.g., DnEmbeddingModel) to
     learn model representations that can be used for routing or other tasks.
     """
-    
+
+    def __init__(self) -> None:
+        self._training_logger: TrainingLogger | None = None
+
     @property
     @abstractmethod
     def embedding_dim(self) -> int:
@@ -43,6 +47,18 @@ class EmbeddingModelBase(ABC):
         """Get the type of the embedding model."""
         pass
     
+    def set_training_logger(self, logger: TrainingLogger | None) -> None:
+        """
+        Attach a TrainingLogger from the parent model.
+
+        Call this before training so that per-epoch metrics are written into
+        the parent model's TrainingLog file.
+
+        Args:
+            logger: TrainingLogger to write to, or None to disable embedding logging
+        """
+        self._training_logger = logger
+
     @abstractmethod
     def train(
         self,

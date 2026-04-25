@@ -428,7 +428,6 @@ class TripletFrozenEncoderModel(TripletModelBase[TripletEmbedding]):
             "preprocessor_seed": self.preprocessor_seed,
             "print_every": self.print_every,
             "module_state_dict": state_dict_to_cpu(self._module.state_dict()),
-            "epoch_logs": self._epoch_logs,
             "input_dim": self.input_dim,
             "model_embeddings": self.model_embeddings,
         }
@@ -459,8 +458,7 @@ class TripletFrozenEncoderModel(TripletModelBase[TripletEmbedding]):
         )
         model._module.to(model.device)
         model._model_embeddings = state_dict["model_embeddings"]
-        model._epoch_logs = state_dict["epoch_logs"]
-        
+
         return model
     
     class _EncoderModule(nn.Module):

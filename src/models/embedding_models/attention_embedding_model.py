@@ -1,5 +1,6 @@
 """Attention-based embedding model for LLM fingerprinting."""
 
+import dataclasses
 from dataclasses import dataclass
 from typing import Any
 import numpy as np
@@ -318,8 +319,10 @@ class AttentionEmbeddingModel(EmbeddingModelBase):
         self.embeddings_per_model = embeddings_per_model
         self.print_every = print_every
         
+        super().__init__()
+
         self.optimizer_spec = optimizer_spec if optimizer_spec is not None else AdamWSpec(learning_rate=1e-4)
-        
+
         self.preprocessor = AttentionEmbeddingPreprocessor(
             embedding_model_name=embedding_model_name,
             min_model_comparisons=min_model_comparisons,
@@ -330,7 +333,7 @@ class AttentionEmbeddingModel(EmbeddingModelBase):
         self._set_aggregator: SetAggregator | None = None
         self._epoch_logs: list["AttentionEmbeddingModel.EpochLog"] = []
         self._model_embeddings: dict[str, np.ndarray] | None = None
-        
+
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self._best_model_tracker = BestModelTracker()
         self.last_timer: Timer | None = None
@@ -451,7 +454,9 @@ class AttentionEmbeddingModel(EmbeddingModelBase):
                     self._epoch_logs.append(epoch_log)
                         
                     self._log_epoch_result(epoch_log)
-                    
+                    if self._training_logger is not None:
+                        self._training_logger.log_embedding_epoch(dataclasses.asdict(epoch_log))
+
                     accuracy_to_track = val_universal_accuracy if val_universal_accuracy is not None else train_universal_accuracy
                     self._best_model_tracker.record_state(
                         accuracy=accuracy_to_track,
@@ -468,7 +473,11 @@ class AttentionEmbeddingModel(EmbeddingModelBase):
                 print(f"\nReverting to best model parameters from epoch {self._best_model_tracker.best_epoch} "
                       f"({accuracy_type}_accuracy={self._best_model_tracker.best_accuracy:.4f})")
                 self.load_state_dict(self._best_model_tracker.best_state_dict, instance=self)
-            
+
+            if self._training_logger is not None:
+                best_accuracy = self._best_model_tracker.best_accuracy if self._best_model_tracker.has_best_state else 0.0
+                self._training_logger.finish_embedding_log({"best_universal_accuracy": best_accuracy})
+
             # Compute final embeddings for all models
             with Timer("compute_model_embeddings", verbosity="start+end", parent=train_timer):
                 self._model_embeddings = self._compute_model_embeddings(train_preprocessed)
@@ -941,7 +950,6 @@ class AttentionEmbeddingModel(EmbeddingModelBase):
             "optimizer_params": self.optimizer_spec.to_dict(),
             "pair_encoder_state": state_dict_to_cpu(self._pair_encoder.state_dict()),
             "set_aggregator_state": state_dict_to_cpu(self._set_aggregator.state_dict()),
-            "epoch_logs": self._epoch_logs,
             "model_embeddings": self._model_embeddings,
         }
     
@@ -1013,8 +1021,6 @@ class AttentionEmbeddingModel(EmbeddingModelBase):
         model._set_aggregator.load_state_dict(state_dict["set_aggregator_state"])
         model._set_aggregator.to(model.device)
         
-        # Load epoch logs and embeddings
-        model._epoch_logs = state_dict["epoch_logs"]
         model._model_embeddings = state_dict["model_embeddings"]
         
         return model

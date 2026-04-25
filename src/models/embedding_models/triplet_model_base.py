@@ -2,6 +2,7 @@
 
 from abc import ABC, abstractmethod
 from collections import defaultdict
+import dataclasses
 from dataclasses import dataclass
 from typing import Any, Generic
 import numpy as np
@@ -53,16 +54,18 @@ class TripletModelBase(EmbeddingModelBase, ABC, Generic[TripletType]):
             preprocessor_seed: Random seed for preprocessor
             print_every: Print progress every N epochs (None = no printing)
         """
+        super().__init__()
+
         self.triplet_margin = triplet_margin
         self.regularization_weight = regularization_weight
         self.min_model_comparisons = min_model_comparisons
         self.identity_positive_ratio = identity_positive_ratio
         self.preprocessor_seed = preprocessor_seed
         self.print_every = print_every
-        
+
         self._model_embeddings: dict[str, np.ndarray] | None = None
         self._epoch_logs: list["TripletModelBase.EpochLog"] = []
-        
+
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.last_timer: Timer | None = None
     
@@ -197,10 +200,18 @@ class TripletModelBase(EmbeddingModelBase, ABC, Generic[TripletType]):
                     )
                     
                     self._log_epoch_result(epoch_log)
-                    
+                    if self._training_logger is not None:
+                        self._training_logger.log_embedding_epoch(dataclasses.asdict(epoch_log))
+
                     if scheduler is not None:
                         scheduler.step()
-            
+
+            if self._training_logger is not None:
+                val_accs = [log.val_universal_accuracy for log in self._epoch_logs if log.val_universal_accuracy is not None]
+                train_accs = [log.train_universal_accuracy for log in self._epoch_logs]
+                best_universal_accuracy = max(val_accs) if val_accs else max(train_accs) if train_accs else 0.0
+                self._training_logger.finish_embedding_log({"best_universal_accuracy": best_universal_accuracy})
+
             with Timer("compute_model_embeddings", verbosity="start+end", parent=train_timer):
                 self._model_embeddings = self._compute_model_embeddings(data)
     
