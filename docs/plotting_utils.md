@@ -62,6 +62,14 @@ skipped when the first value is 0.
 accept `show_original_scale=True` to replace log-transformed tick labels with the
 actual (pre-log) values — useful for MAE/RMSE displayed in token counts.
 
+**Skipping early epochs for Y-scale:** `plot_positive_metric`,
+`plot_combined_positive_metric`, `plot_relative_error`,
+`plot_combined_relative_error`, `plot_ratio_around_one`, and
+`plot_combined_ratio_around_one` all accept `skip_first_n_epochs: int = 0`.
+When set, the y-axis limits are computed from epoch `skip_first_n_epochs` onward,
+so early unstable values do not compress the interesting part of the plot.
+All epochs are still drawn; only the visible range is restricted.
+
 ### Combined training + validation functions
 
 These overlay both series. Loss and accuracy plots accept `mark_best_val=True`
@@ -223,7 +231,7 @@ those are omitted from `plot_metrics` by design.
 
 ### `dn_length_prediction.py`
 
-`plot_metrics` produces a 5 × 2 grid (10 panels). Per-epoch diagnostics from
+`plot_metrics(log, skip_first_n_epochs=0)` produces a 5 × 2 grid (10 panels). Per-epoch diagnostics from
 `EpochDiagnosticsAccumulator` are included. `plot_grad_attr_embeddings` is
 available as a standalone function but not included in `plot_metrics`.
 The 7 regression metrics are shared with `gb_length_prediction.py` via
@@ -278,7 +286,7 @@ Both modules read from `log.embedding_model_log` using the shared
 
 ### `gb_length_prediction.py`
 
-`plot_metrics` produces a 5 × 2 grid (last panel hidden). Shares the 7
+`plot_metrics(log, skip_first_n_epochs=0)` produces a 5 × 2 grid (last panel hidden). Shares the 7
 regression metric functions with `dn_length_prediction.py` via
 `_length_prediction_shared.py`. Diagnostic panels come from `_gradient_boosting_shared.py`.
 

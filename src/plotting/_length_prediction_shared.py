@@ -35,7 +35,7 @@ def plot_accuracy(axes: plt.Axes, log: TrainingLog) -> None:
     )
 
 
-def plot_mae(axes: plt.Axes, log: TrainingLog) -> None:
+def plot_mae(axes: plt.Axes, log: TrainingLog, skip_first_n_epochs: int = 0) -> None:
     _plot_combined_positive_metric(
         axes,
         _get_metric(log, 'train_mae'),
@@ -43,10 +43,11 @@ def plot_mae(axes: plt.Axes, log: TrainingLog) -> None:
         'Mean Absolute Error (token space)',
         ylabel='MAE (tokens)',
         show_original_scale=True,
+        skip_first_n_epochs=skip_first_n_epochs,
     )
 
 
-def plot_rmse(axes: plt.Axes, log: TrainingLog) -> None:
+def plot_rmse(axes: plt.Axes, log: TrainingLog, skip_first_n_epochs: int = 0) -> None:
     _plot_combined_positive_metric(
         axes,
         _get_metric(log, 'train_rmse'),
@@ -54,33 +55,37 @@ def plot_rmse(axes: plt.Axes, log: TrainingLog) -> None:
         'RMSE (scaled log-space)',
         ylabel='RMSE',
         show_original_scale=True,
+        skip_first_n_epochs=skip_first_n_epochs,
     )
 
 
-def plot_relative_error(axes: plt.Axes, log: TrainingLog) -> None:
+def plot_relative_error(axes: plt.Axes, log: TrainingLog, skip_first_n_epochs: int = 0) -> None:
     _plot_combined_relative_error(
         axes,
         _get_metric(log, 'train_avg_relative_error'),
         _get_metric(log, 'val_avg_relative_error'),
         'Average Relative Error',
+        skip_first_n_epochs=skip_first_n_epochs,
     )
 
 
-def plot_relative_ratio(axes: plt.Axes, log: TrainingLog) -> None:
+def plot_relative_ratio(axes: plt.Axes, log: TrainingLog, skip_first_n_epochs: int = 0) -> None:
     _plot_combined_ratio_around_one(
         axes,
         _get_metric(log, 'train_avg_relative_ratio'),
         _get_metric(log, 'val_avg_relative_ratio'),
         'Average Relative Ratio (ideal = 1.0)',
         ylabel='Ratio',
+        skip_first_n_epochs=skip_first_n_epochs,
     )
 
 
-def plot_stddev_ratio(axes: plt.Axes, log: TrainingLog) -> None:
+def plot_stddev_ratio(axes: plt.Axes, log: TrainingLog, skip_first_n_epochs: int = 0) -> None:
     _plot_combined_ratio_around_one(
         axes,
         _get_metric(log, 'train_stddev_ratio'),
         _get_metric(log, 'val_stddev_ratio'),
         'Stddev Ratio (ideal = 1.0)',
         ylabel='Ratio',
+        skip_first_n_epochs=skip_first_n_epochs,
     )

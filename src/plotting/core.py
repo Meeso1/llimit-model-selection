@@ -74,11 +74,14 @@ def plot_positive_metric(
     title: str,
     ylabel: str = "log(value)",
     show_original_scale: bool = False,
+    skip_first_n_epochs: int = 0,
 ) -> None:
     """Plot a single positive metric with log scale and rolling mean.
 
     Suitable for MAE, RMSE, or any positive-valued metric that decreases over training.
     When show_original_scale is True, y-axis ticks show the original (pre-log) values.
+    When skip_first_n_epochs > 0, the y-axis range is computed from epoch
+    skip_first_n_epochs onward (all epochs are still plotted).
     """
     idx, vals = _filter_nones(values)
     if len(vals) == 0:
@@ -96,8 +99,11 @@ def plot_positive_metric(
         min_val = np.min(rolling)
         axes.axhline(y=min_val, color='r', linestyle='--', label=f'Best: {np.exp(min_val):.4g}')
 
+    y_range = _ylim_for_tail([(idx, log_vals)], skip_first_n_epochs) if skip_first_n_epochs > 0 else None
     if show_original_scale:
-        _set_log_yticks_with_original_scale(axes, log_vals)
+        _set_log_yticks_with_original_scale(axes, log_vals, log_range=y_range)
+    if y_range is not None:
+        axes.set_ylim(*y_range)
     axes.set_ylabel(ylabel)
     axes.set_title(title)
     axes.legend()
@@ -112,10 +118,13 @@ def plot_relative_error(
     axes: plt.Axes,
     values: list[float | None],
     title: str,
+    skip_first_n_epochs: int = 0,
 ) -> None:
     """Plot relative error with log(1+error) scale and rolling mean.
 
     Lower is better. The log(1+error) transform expands the scale near 0.
+    When skip_first_n_epochs > 0, the y-axis range is computed from epoch
+    skip_first_n_epochs onward (all epochs are still plotted).
     """
     idx, vals = _filter_nones(values)
     if len(vals) == 0:
@@ -133,6 +142,10 @@ def plot_relative_error(
         min_rolling = np.min(rolling)
         axes.axhline(y=min_rolling, color='r', linestyle='--', label=f'Best: {np.expm1(min_rolling):.3f}')
 
+    if skip_first_n_epochs > 0:
+        y_range = _ylim_for_tail([(idx, log_err)], skip_first_n_epochs)
+        if y_range is not None:
+            axes.set_ylim(*y_range)
     axes.set_ylabel("log(1 + relative error)")
     axes.set_title(title)
     axes.legend()
@@ -143,10 +156,13 @@ def plot_ratio_around_one(
     values: list[float | None],
     title: str,
     ylabel: str = "Ratio",
+    skip_first_n_epochs: int = 0,
 ) -> None:
     """Plot a ratio metric that should ideally be 1.0 with rolling mean.
 
     Shows a green reference line at 1.0. Suitable for stddev_ratio, avg_relative_ratio.
+    When skip_first_n_epochs > 0, the y-axis range is computed from epoch
+    skip_first_n_epochs onward (all epochs are still plotted).
     """
     idx, vals = _filter_nones(values)
     if len(vals) == 0:
@@ -161,6 +177,10 @@ def plot_ratio_around_one(
         rolling = np.convolve(vals, np.ones(window) / window, mode='valid')
         axes.plot(idx[window - 1:], rolling, color=_ROLLING_MEAN_COLOR, label=f"Rolling mean ({window})")
 
+    if skip_first_n_epochs > 0:
+        y_range = _ylim_for_tail([(idx, vals)], skip_first_n_epochs)
+        if y_range is not None:
+            axes.set_ylim(*y_range)
     axes.axhline(y=1.0, color='g', linestyle='--', label='Ideal (1.0)', alpha=0.7)
     axes.set_ylabel(ylabel)
     axes.set_title(title)
@@ -281,11 +301,14 @@ def plot_combined_positive_metric(
     title: str,
     ylabel: str = "log(value)",
     show_original_scale: bool = False,
+    skip_first_n_epochs: int = 0,
 ) -> None:
     """Plot training and validation of any positive metric on log scale.
 
     Suitable for MAE, RMSE, or similar metrics.
     When show_original_scale is True, y-axis ticks show the original (pre-log) values.
+    When skip_first_n_epochs > 0, the y-axis range is computed from epoch
+    skip_first_n_epochs onward (all epochs are still plotted).
     """
     train_idx, train_vals = _filter_nones(train_values)
     val_idx, val_vals = _filter_nones(val_values)
@@ -294,18 +317,27 @@ def plot_combined_positive_metric(
         axes.set_title(title)
         return
 
-    all_log_vals: list[float] = []
-    if len(train_vals) > 0:
-        log_train = np.log(np.maximum(train_vals, 1e-10))
-        axes.plot(train_idx, log_train, label="Training", alpha=0.8)
-        all_log_vals.extend(log_train.tolist())
-    if len(val_vals) > 0:
-        log_val = np.log(np.maximum(val_vals, 1e-10))
-        axes.plot(val_idx, log_val, label="Validation", alpha=0.8)
-        all_log_vals.extend(log_val.tolist())
+    log_train = np.log(np.maximum(train_vals, 1e-10)) if len(train_vals) > 0 else np.array([])
+    log_val = np.log(np.maximum(val_vals, 1e-10)) if len(val_vals) > 0 else np.array([])
 
-    if show_original_scale and all_log_vals:
-        _set_log_yticks_with_original_scale(axes, np.array(all_log_vals))
+    if len(log_train) > 0:
+        axes.plot(train_idx, log_train, label="Training", alpha=0.8)
+    if len(log_val) > 0:
+        axes.plot(val_idx, log_val, label="Validation", alpha=0.8)
+
+    all_log_vals = np.concatenate([log_train, log_val]) if len(log_train) + len(log_val) > 0 else np.array([])
+
+    tail_series = []
+    if len(log_train) > 0:
+        tail_series.append((train_idx, log_train))
+    if len(log_val) > 0:
+        tail_series.append((val_idx, log_val))
+    y_range = _ylim_for_tail(tail_series, skip_first_n_epochs) if skip_first_n_epochs > 0 and tail_series else None
+
+    if show_original_scale and len(all_log_vals) > 0:
+        _set_log_yticks_with_original_scale(axes, all_log_vals, log_range=y_range)
+    if y_range is not None:
+        axes.set_ylim(*y_range)
     axes.set_ylabel(ylabel)
     axes.set_title(title)
     axes.legend()
@@ -316,10 +348,13 @@ def plot_combined_relative_error(
     train_values: list[float | None],
     val_values: list[float | None],
     title: str,
+    skip_first_n_epochs: int = 0,
 ) -> None:
     """Plot training and validation relative error using log(1+error) scale.
 
     The log(1+error) transform expands the scale near 0 where improvements matter most.
+    When skip_first_n_epochs > 0, the y-axis range is computed from epoch
+    skip_first_n_epochs onward (all epochs are still plotted).
     """
     train_idx, train_vals = _filter_nones(train_values)
     val_idx, val_vals = _filter_nones(val_values)
@@ -328,11 +363,23 @@ def plot_combined_relative_error(
         axes.set_title(title)
         return
 
-    if len(train_vals) > 0:
-        axes.plot(train_idx, np.log1p(train_vals), label="Training", alpha=0.8)
-    if len(val_vals) > 0:
-        axes.plot(val_idx, np.log1p(val_vals), label="Validation", alpha=0.8)
+    log_train = np.log1p(train_vals) if len(train_vals) > 0 else np.array([])
+    log_val = np.log1p(val_vals) if len(val_vals) > 0 else np.array([])
 
+    if len(log_train) > 0:
+        axes.plot(train_idx, log_train, label="Training", alpha=0.8)
+    if len(log_val) > 0:
+        axes.plot(val_idx, log_val, label="Validation", alpha=0.8)
+
+    if skip_first_n_epochs > 0:
+        tail_series = []
+        if len(log_train) > 0:
+            tail_series.append((train_idx, log_train))
+        if len(log_val) > 0:
+            tail_series.append((val_idx, log_val))
+        y_range = _ylim_for_tail(tail_series, skip_first_n_epochs) if tail_series else None
+        if y_range is not None:
+            axes.set_ylim(*y_range)
     axes.set_ylabel("log(1 + relative error)")
     axes.set_title(title)
     axes.legend()
@@ -344,11 +391,14 @@ def plot_combined_ratio_around_one(
     val_values: list[float | None],
     title: str,
     ylabel: str = "Ratio",
+    skip_first_n_epochs: int = 0,
 ) -> None:
     """Plot training and validation of a ratio that should ideally be 1.0.
 
     Displays a green reference line at 1.0.
     Suitable for stddev_ratio, avg_relative_ratio.
+    When skip_first_n_epochs > 0, the y-axis range is computed from epoch
+    skip_first_n_epochs onward (all epochs are still plotted).
     """
     train_idx, train_vals = _filter_nones(train_values)
     val_idx, val_vals = _filter_nones(val_values)
@@ -362,6 +412,15 @@ def plot_combined_ratio_around_one(
     if len(val_vals) > 0:
         axes.plot(val_idx, val_vals, label="Validation", alpha=0.8)
 
+    if skip_first_n_epochs > 0:
+        tail_series = []
+        if len(train_vals) > 0:
+            tail_series.append((train_idx, train_vals))
+        if len(val_vals) > 0:
+            tail_series.append((val_idx, val_vals))
+        y_range = _ylim_for_tail(tail_series, skip_first_n_epochs) if tail_series else None
+        if y_range is not None:
+            axes.set_ylim(*y_range)
     axes.axhline(y=1.0, color='g', linestyle='--', label='Ideal (1.0)', alpha=0.7)
     axes.set_ylabel(ylabel)
     axes.set_title(title)
@@ -603,16 +662,48 @@ def _normalize_loss(vals: np.ndarray) -> np.ndarray:
     return vals / first
 
 
-def _set_log_yticks_with_original_scale(axes: plt.Axes, log_vals: np.ndarray) -> None:
+def _ylim_for_tail(
+    series: list[tuple[np.ndarray, np.ndarray]],
+    skip_first_n_epochs: int,
+) -> tuple[float, float] | None:
+    """Compute y-axis limits from plotted values at epoch index >= skip_first_n_epochs.
+
+    Returns (y_min, y_max) with 5% padding, or None if no tail data is available.
+    The series argument is a list of (index_array, value_array) pairs as already
+    plotted (i.e. log-transformed or otherwise scaled).
+    """
+    tail: list[float] = []
+    for idx, vals in series:
+        mask = idx >= skip_first_n_epochs
+        if mask.any():
+            tail.extend(vals[mask].tolist())
+    if not tail:
+        return None
+    arr = np.array(tail)
+    lo, hi = float(np.min(arr)), float(np.max(arr))
+    margin = 0.05 * (hi - lo) if hi - lo > 1e-6 else 0.1
+    return lo - margin, hi + margin
+
+
+def _set_log_yticks_with_original_scale(
+    axes: plt.Axes,
+    log_vals: np.ndarray,
+    log_range: tuple[float, float] | None = None,
+) -> None:
     """Set y-axis tick labels to show original (pre-log) values on a log-transformed axis.
 
     Generates 6 evenly-spaced ticks across the data range and labels each with
-    the corresponding exponentiated value.
+    the corresponding exponentiated value.  When log_range is provided, ticks are
+    placed within that (min, max) range instead of the full data range — use this
+    together with axes.set_ylim to keep ticks inside a restricted view.
     """
     if len(log_vals) == 0:
         return
-    min_log = float(np.min(log_vals))
-    max_log = float(np.max(log_vals))
+    if log_range is not None:
+        min_log, max_log = log_range
+    else:
+        min_log = float(np.min(log_vals))
+        max_log = float(np.max(log_vals))
     if max_log - min_log < 1e-6:
         return
     tick_positions = np.linspace(min_log, max_log, 6)

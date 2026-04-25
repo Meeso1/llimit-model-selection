@@ -21,12 +21,15 @@ from src.plotting.dn_embedding import (
 )
 
 
-def plot_metrics(log: TrainingLog) -> plt.Figure:
+def plot_metrics(log: TrainingLog, skip_first_n_epochs: int = 0) -> plt.Figure:
     """Create a figure with all per-epoch metrics for DnEmbeddingLengthPredictionModel.
 
     Includes training diagnostics (projection norms/variances, gradient norms).
     Gradient attribution (``plot_grad_attr_embeddings``) is available as a
     standalone function but not included here.
+
+    When skip_first_n_epochs > 0, the y-axis range of metric plots is computed
+    from that epoch onward (all epochs are still drawn).
 
     Layout: 5 rows × 2 columns (10 panels).
     """
@@ -34,11 +37,11 @@ def plot_metrics(log: TrainingLog) -> plt.Figure:
 
     plot_loss(axes[0, 0], log)
     plot_accuracy(axes[0, 1], log)
-    plot_mae(axes[1, 0], log)
-    plot_rmse(axes[1, 1], log)
-    plot_relative_error(axes[2, 0], log)
-    plot_relative_ratio(axes[2, 1], log)
-    plot_stddev_ratio(axes[3, 0], log)
+    plot_mae(axes[1, 0], log, skip_first_n_epochs=skip_first_n_epochs)
+    plot_rmse(axes[1, 1], log, skip_first_n_epochs=skip_first_n_epochs)
+    plot_relative_error(axes[2, 0], log, skip_first_n_epochs=skip_first_n_epochs)
+    plot_relative_ratio(axes[2, 1], log, skip_first_n_epochs=skip_first_n_epochs)
+    plot_stddev_ratio(axes[3, 0], log, skip_first_n_epochs=skip_first_n_epochs)
     plot_modality_norms(axes[3, 1], log)
     plot_modality_variances(axes[4, 0], log)
     plot_gradient_norms(axes[4, 1], log)
