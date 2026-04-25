@@ -339,3 +339,97 @@ python -m src.scripts.cli infer \
 
 This will create an output file in `inference_outputs/` with a timestamped filename.
 
+## Listing Training Logs
+
+List all known training runs:
+
+```bash
+python -m src.scripts.cli list logs
+```
+
+### Arguments
+
+- `--list-timestamps`: Print each version's unix timestamp under its run name.
+- `--json`: Emit all runs as a JSON array (suitable for piping to `jq`).
+
+### `--json` output format
+
+```json
+[
+  {
+    "base_name": "my-experiment",
+    "timestamps": [1776527993, 1776527963, 1776527632],
+    "latest_timestamp": 1776527993,
+    "latest_full_name": "my-experiment-1776527993"
+  }
+]
+```
+
+`timestamps` is sorted newest-first. Each entry is the unix timestamp that was appended to the run name when training was initiated (matches the `--timestamp` argument to `inspect`).
+
+## Inspecting a Training Log
+
+Print the config and/or metrics of a training run as JSON:
+
+```bash
+python -m src.scripts.cli inspect <run_name> [--timestamp <unix_ts>]
+```
+
+Defaults to the latest version when `--timestamp` is omitted.
+
+### Arguments
+
+- `run_name` (positional): Base name of the run (without timestamp suffix).
+- `--timestamp INT`: Inspect a specific version (unix timestamp). Obtain available timestamps from `list logs --json`.
+- `--include-config / --no-include-config`: Include model config section (default: **on**).
+- `--include-final-metrics / --no-include-final-metrics`: Include final metrics section (default: **on**).
+- `--include-epoch-logs / --no-include-epoch-logs`: Include per-epoch metric logs (default: **off**).
+
+### Output format
+
+```json
+{
+  "run_name": "my-experiment",
+  "timestamp": 1776527993,
+  "full_name": "my-experiment-1776527993",
+  "config": { "model_type": "simple_scoring", "...": "..." },
+  "final_metrics": { "val_accuracy": 0.87, "...": "..." }
+}
+```
+
+Sections not requested are omitted entirely (not set to `null`).
+
+`epoch_logs` (when included) is a list of `{"epoch_index": N, "data": {...}}` objects.
+
+### Example use-cases with `jq`
+
+**Find the version with the highest validation accuracy:**
+
+```bash
+for ts in $(python -m src.scripts.cli list logs --json | jq -r '.[] | select(.base_name=="my-experiment") | .timestamps[]'); do
+  python -m src.scripts.cli inspect my-experiment --timestamp "$ts"
+done | jq -s 'max_by(.final_metrics.val_accuracy // 0)'
+```
+
+**Compare configs between two runs:**
+
+```bash
+diff \
+  <(python -m src.scripts.cli inspect run-a | jq -S .config) \
+  <(python -m src.scripts.cli inspect run-b | jq -S .config)
+```
+
+**Print only final metrics for all versions of a run:**
+
+```bash
+python -m src.scripts.cli list logs --json \
+  | jq -r '.[] | select(.base_name=="my-experiment") | .timestamps[]' \
+  | xargs -I{} python -m src.scripts.cli inspect my-experiment --timestamp {} --no-include-config \
+  | jq '{timestamp, final_metrics}'
+```
+
+### Linking saved models to training logs
+
+There is currently no automated way to link a saved model file to its training log. The model save name (`model.name` in the training spec) and the log run name (`log.run_name`) are configured independently and neither stores a reference to the other.
+
+

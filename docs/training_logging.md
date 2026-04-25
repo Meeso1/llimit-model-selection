@@ -134,6 +134,21 @@ print(log.epoch_logs)
 print(log.final_metrics)
 ```
 
+## CLI Inspection
+
+Training logs can be inspected from the command line. See [docs/cli.md](cli.md) for the full reference.
+
+```bash
+# Default: config + final metrics as JSON
+python -m src.scripts.cli inspect my-experiment
+
+# Specific version
+python -m src.scripts.cli inspect my-experiment --timestamp 1771244318
+
+# List all versions of all runs as JSON (for piping to jq)
+python -m src.scripts.cli list logs --json
+```
+
 ## Storage
 
 - Logs are stored in `training_logs/` by default

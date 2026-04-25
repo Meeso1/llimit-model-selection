@@ -1,5 +1,5 @@
 import argparse
-from src.scripts import list_preprocessed_data, train, infer, list_models, list_logs
+from src.scripts import list_preprocessed_data, train, infer, list_models, list_logs, inspect_log
 
 
 def main():
@@ -31,7 +31,16 @@ def main():
 
     ls_training_logs = list_subparsers.add_parser("logs")
     ls_training_logs.add_argument("--list-timestamps", action="store_true", help="List timestamps separately")
+    ls_training_logs.add_argument("--json", action="store_true", help="Emit runs as a JSON array (unix-int timestamps, suitable for jq)")
     ls_training_logs.set_defaults(func=list_logs.run_list_logs)
+
+    insp = subparsers.add_parser("inspect", help="Inspect a training run log, printing it as JSON")
+    insp.add_argument("run_name", type=str, help="Base name of the training run to inspect")
+    insp.add_argument("--timestamp", type=int, default=None, help="Unix timestamp of a specific version (defaults to latest)")
+    insp.add_argument("--include-config", action=argparse.BooleanOptionalAction, default=True, help="Include model config (default: on)")
+    insp.add_argument("--include-final-metrics", action=argparse.BooleanOptionalAction, default=True, help="Include final metrics (default: on)")
+    insp.add_argument("--include-epoch-logs", action=argparse.BooleanOptionalAction, default=False, help="Include per-epoch logs (default: off)")
+    insp.set_defaults(func=inspect_log.run_inspect_log)
 
     args = parser.parse_args()
     if hasattr(args, "func"):
