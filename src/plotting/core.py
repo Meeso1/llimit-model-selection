@@ -401,6 +401,7 @@ def plot_loss_components(
     components: dict[str, list[float | None]],
     title: str,
     normalize: bool = False,
+    ylabel: str = "log(loss)",
 ) -> None:
     """Plot multiple loss components on the same axes in log scale.
 
@@ -421,7 +422,7 @@ def plot_loss_components(
         axes.set_title(title)
         return
 
-    axes.set_ylabel("log(loss)")
+    axes.set_ylabel(ylabel)
     axes.set_title(title)
     axes.legend()
 
@@ -573,6 +574,13 @@ def plot_distribution_over_time(
 def _get_metric(log: TrainingLog, key: str) -> list[float | None]:
     """Extract a per-epoch metric series from a TrainingLog by key."""
     return [entry.data.get(key) for entry in log.epoch_logs]
+
+
+def _get_embedding_metric(log: TrainingLog, key: str) -> list[float | None]:
+    """Extract a per-epoch metric series from TrainingLog.embedding_model_log."""
+    if log.embedding_model_log is None:
+        return []
+    return [entry.data.get(key) for entry in log.embedding_model_log.epoch_logs]
 
 
 def _filter_nones(values: list[float | None]) -> tuple[np.ndarray, np.ndarray]:

@@ -10,6 +10,8 @@ package with one module of generic helpers and one module per model type.
 | Module | Model |
 |---|---|
 | `src/plotting/core.py` | Generic, model-agnostic helpers |
+| `src/plotting/triplet_embedding_model.py` | `TripletFrozenEncoderModel` / `TripletFinetunableEncoderModel` embedding logs |
+| `src/plotting/attention_embedding_model.py` | `AttentionEmbeddingModel` embedding logs |
 | `src/plotting/response_predictive.py` | `ResponsePredictiveModel` |
 | `src/plotting/simple_scoring.py` | `SimpleScoringModel` |
 | `src/plotting/elo.py` | `EloScoringModel` |
@@ -241,6 +243,38 @@ and `plot_grad_attr_embeddings` are re-exported from `dn_embedding.py`.
 | `plot_modality_variances` | `*_variance` for the three input projections | |
 | `plot_gradient_norms` | `trunk_grad_norm`, `prompt_emb_proj_grad_norm`, `prompt_feat_proj_grad_norm`, `model_emb_proj_grad_norm`, `model_id_embedding_grad_norm` | Normalized; includes model-id embedding group |
 | `plot_grad_attr_embeddings` | `grad_attr_prompt_embedding`, `grad_attr_model_embedding` | Standalone only |
+
+### `triplet_embedding_model.py`
+
+Plots metrics stored in ``TrainingLog.embedding_model_log`` for
+``TripletFrozenEncoderModel`` and ``TripletFinetunableEncoderModel``.
+**Triplet accuracy** and **nearest-neighbour accuracy** are intentionally
+omitted — only loss, universal accuracy, and loss components are shown.
+
+`plot_metrics` produces a 1 × 3 grid.
+
+| Function | Data keys | Notes |
+|---|---|---|
+| `plot_total_loss` | `train_loss` / `val_loss` | |
+| `plot_universal_accuracy` | `train_universal_accuracy` / `val_universal_accuracy` | |
+| `plot_loss_components` | `train_triplet_loss`, `train_reg_loss` | Normalized log-scale components |
+
+### `attention_embedding_model.py`
+
+Plots metrics stored in ``TrainingLog.embedding_model_log`` for
+``AttentionEmbeddingModel``. **Triplet accuracy** and **nearest-neighbour
+accuracy** are intentionally omitted. The contrastive loss has no logged
+component breakdown.
+
+`plot_metrics` produces a 1 × 2 grid.
+
+| Function | Data keys |
+|---|---|
+| `plot_total_loss` | `train_loss` / `val_loss` |
+| `plot_universal_accuracy` | `train_universal_accuracy` / `val_universal_accuracy` |
+
+Both modules read from `log.embedding_model_log` using the shared
+`_get_embedding_metric` helper in `core.py`.
 
 ### `gb_length_prediction.py`
 

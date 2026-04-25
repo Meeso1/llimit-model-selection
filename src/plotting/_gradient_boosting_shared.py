@@ -10,6 +10,15 @@ from src.utils.training_logger import TrainingLog
 from src.plotting.core import _get_metric, plot_linear_components, plot_loss_components
 
 
+_BLOCK_DISPLAY_NAMES: dict[str, str] = {
+    "prompt_features": "Prompt features",
+    "model_embedding": "Model embedding",
+    "prompt_embedding": "Prompt embedding",
+    "prompt_categories": "Prompt categories",
+    "model_id": "Model ID",
+}
+
+
 def plot_block_importance(axes: plt.Axes, log: TrainingLog) -> None:
     """Plot fraction of total XGBoost gain per input feature block over training.
 
@@ -32,7 +41,7 @@ def plot_block_importance(axes: plt.Axes, log: TrainingLog) -> None:
         return
 
     components: dict[str, list[float | None]] = {
-        k.removeprefix("importance_"): _get_metric(log, k)
+        _BLOCK_DISPLAY_NAMES.get(k.removeprefix("importance_"), k.removeprefix("importance_")): _get_metric(log, k)
         for k in block_keys
     }
     plot_linear_components(axes, components, "Feature block importance", ylabel="Fraction of total gain")
@@ -55,4 +64,4 @@ def plot_convergence_diagnostics(axes: plt.Axes, log: TrainingLog) -> None:
     if any(v is not None for v in tree_contrib):
         components["Tree contribution mean"] = tree_contrib
 
-    plot_loss_components(axes, components, "Convergence diagnostics")
+    plot_loss_components(axes, components, "Convergence diagnostics", ylabel="log(value)")
