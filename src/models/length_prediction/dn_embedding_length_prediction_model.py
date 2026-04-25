@@ -34,6 +34,7 @@ from src.preprocessing.scoring_feature_extraction import get_feature_description
 
 
 _DataLoaderType = DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]
+_LEAKY_RELU_SLOPE = 0.1
 
 
 class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
@@ -782,14 +783,12 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
         shortcut, easing optimisation of deeper networks.
         """
 
-        _LEAKY_RELU_SLOPE = 0.1
-
         def __init__(self, in_dim: int, out_dim: int, dropout: float) -> None:
             super().__init__()
             self.main = nn.Sequential(
                 nn.Linear(in_dim, out_dim),
                 nn.LayerNorm(out_dim),
-                nn.LeakyReLU(negative_slope=self._LEAKY_RELU_SLOPE),
+                nn.LeakyReLU(negative_slope=_LEAKY_RELU_SLOPE),
                 nn.Dropout(dropout),
             )
             self.shortcut = nn.Linear(in_dim, out_dim, bias=False) if in_dim != out_dim else nn.Identity()
@@ -871,6 +870,6 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
         def _init_weights(self) -> None:
             for m in self.modules():
                 if isinstance(m, nn.Linear):
-                    nn.init.kaiming_normal_(m.weight, a=self._LEAKY_RELU_SLOPE, nonlinearity="leaky_relu")
+                    nn.init.kaiming_normal_(m.weight, a=_LEAKY_RELU_SLOPE, nonlinearity="leaky_relu")
                     if m.bias is not None:
                         nn.init.zeros_(m.bias)

@@ -306,6 +306,7 @@ def _create_starting_transformer_embedding(training_spec: TrainingSpecification)
         base_model_name=model_spec.base_model,
         ranking_loss_type=model_spec.ranking_loss_type,
         proj_dim=model_spec.proj_dim,
+        run_name=training_spec.log.run_name,
         print_every=training_spec.log.print_every,
         seed=training_spec.data.seed,
     )
@@ -339,6 +340,7 @@ def _create_starting_response_predictive(training_spec: TrainingSpecification) -
         min_model_comparisons=model_spec.min_model_comparisons,
         embedding_model_epochs=model_spec.embedding_model_epochs,
         ranking_loss_type=model_spec.ranking_loss_type,
+        run_name=training_spec.log.run_name,
         print_every=training_spec.log.print_every,
         seed=training_spec.data.seed,
     )
@@ -363,6 +365,7 @@ def _create_starting_dn_embedding_length_prediction(training_spec: TrainingSpeci
         min_model_comparisons=model_spec.min_model_comparisons,
         embedding_model_epochs=model_spec.embedding_model_epochs,
         model_id_embedding_dim=model_spec.model_id_embedding_dim,
+        run_name=training_spec.log.run_name,
         print_every=training_spec.log.print_every,
         seed=training_spec.data.seed,
     )
@@ -389,6 +392,7 @@ def _create_starting_gb_length_prediction(training_spec: TrainingSpecification) 
         load_embedding_model_from=model_spec.load_embedding_model_from,
         min_model_comparisons=model_spec.min_model_comparisons,
         embedding_model_epochs=model_spec.embedding_model_epochs,
+        run_name=training_spec.log.run_name,
         print_every=training_spec.log.print_every,
         seed=training_spec.data.seed,
     )

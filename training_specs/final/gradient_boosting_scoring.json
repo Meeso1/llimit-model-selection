@@ -34,7 +34,7 @@
         }
       },
       "min_model_comparisons": 1000,
-      "embedding_model_epochs": 250,
+      "embedding_model_epochs": 350,
       "ranking_loss_type": "bradley_terry"
     }
   },
