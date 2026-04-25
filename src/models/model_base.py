@@ -123,7 +123,9 @@ class ModelBase[TOutput](ABC):
 
     def save(self, name: str) -> None:
         """Save model to disk."""
-        Jars.models.add(name, self.get_state_dict())
+        timestamp = Jars.models.add(name, self.get_state_dict())
+        if self._logger is not None:
+            self._logger.record_saved_model(f"{name}-{timestamp}")
 
     @classmethod
     def load(cls, name: str) -> Self:

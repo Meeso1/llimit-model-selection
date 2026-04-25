@@ -23,10 +23,8 @@ class Jar:
         name_dir = os.path.dirname(name)
         return os.path.join(self.base_path, name_dir)
 
-    def _get_full_path(self, name: str) -> str:
+    def _full_path_for_version(self, name: str, timestamp: int) -> str:
         dir_path = self._get_dir_path(name)
-        timestamp = int(time.time())
-
         filename = f"{os.path.basename(name)}-{timestamp}.pkl"
         return os.path.join(dir_path, filename)
 
@@ -54,30 +52,51 @@ class Jar:
         latest_file = max(files.keys(), key=files.get)
         return latest_file
 
-    def add(self, name: str, obj: Any) -> None:
+    def add(self, name: str, obj: Any) -> int:
         """
         Save the object to a file with a timestamp.
 
         Args:
             name (str): The name of the object.
             obj (Any): The object to save.
+
+        Returns:
+            Unix timestamp used for this version (same as in the filename, without .pkl).
         """
-        full_path = self._get_full_path(name)
+        timestamp = int(time.time())
+        full_path = self._full_path_for_version(name, timestamp)
         os.makedirs(os.path.dirname(full_path), exist_ok=True)
 
         with open(full_path, "wb") as f:
             pickle.dump(obj, f)
 
-    def replace(self, name: str, obj: Any) -> None:
+        return timestamp
+
+    def replace(self, name: str, obj: Any) -> int:
         """
         Save the object to a file with a timestamp, then remove all older versions.
 
         Args:
             name (str): The name of the object.
             obj (Any): The object to save.
+
+        Returns:
+            Unix timestamp used for this version (same as in the filename, without .pkl).
         """
-        self.add(name, obj)
+        timestamp = self.add(name, obj)
         self.remove_all_but_latest(name)
+        return timestamp
+
+    def has_exact(self, name: str) -> bool:
+        """
+        Return True if a specific version exists on disk.
+
+        Args:
+            name: Full logical name including the version timestamp (no .pkl suffix),
+                e.g. ``my-model-1777103748`` or ``subdir/my-model-1777103748``.
+        """
+        full_path = os.path.join(self.base_path, name + ".pkl")
+        return os.path.isfile(full_path)
 
     def get(self, name: str) -> Any:
         """

@@ -46,6 +46,7 @@ Container for a complete training run:
 - `end_time`: When training finished
 - `timings`: Optional dict of timing data (dotted paths to elapsed seconds), overwritten each time `log_timings_from` is passed to `log()` or `finish()`
 - `embedding_model_log`: Optional `EmbeddingModelLog` — present when the model trained an embedding sub-model
+- `saved_model_name`: Optional full jar object name for the checkpoint written when `ModelBase.save()` ran after this run (same string as `{model.name}-{save_timestamp}` under `saved_models/`, without `.pkl`). Set only when the model was constructed with a `run_name` so a logger exists.
 
 ### EmbeddingModelLog
 
@@ -143,7 +144,7 @@ print(log.final_metrics)
 
 ## CLI Inspection
 
-Training logs can be inspected from the command line. See [docs/cli.md](cli.md) for the full reference.
+Training logs can be inspected from the command line. See [docs/cli.md](cli.md) for the full reference. The JSON output always includes a boolean `saved_model`: whether the file for `saved_model_name` still exists under `saved_models/`.
 
 ```bash
 # Default: config + final metrics as JSON
@@ -252,3 +253,9 @@ Models that don't use iterative training (no epochs) can still use logging to sa
 - Any other relevant results
 
 These models call `init_logger_if_needed()` at the start of training and `finish_logger_if_needed(final_metrics=...)` at the end, just like iterative models, but don't call `log_epoch()`.
+
+## Run lifecycle and linking checkpoints
+
+`TrainingLogger.finish()` marks the run finished but keeps the in-memory `TrainingLog` so a subsequent `ModelBase.save()` can call `TrainingLogger.record_saved_model()` and persist `saved_model_name` via the jar. After `finish()`, epoch logging methods raise until `init()` starts a new run (e.g. a second `train()` on the same model instance).
+
+`Jar.add()` returns the unix save timestamp for that write; together with the logical `name` passed to `save()`, that identifies the exact pickle on disk. `Jar.has_exact(full_name_without_suffix)` checks whether that file exists. `ModelBase.load(name)` still loads the **latest** pickle for the logical `name`; loading a specific older version uses `Jars.models.get_all(name)` (or similar) keyed by version time, not `saved_model_name` alone.

@@ -35,6 +35,7 @@ class TrainingLog:
     end_time: datetime | None = None
     timings: dict[str, float] | None = None
     embedding_model_log: EmbeddingModelLog | None = None
+    saved_model_name: str | None = None
 
 
 @dataclass
@@ -63,7 +64,8 @@ class TrainingLogger:
         """
         self._run_name = run_name
         self._current_run: TrainingLog | None = None
-    
+        self._run_finished: bool = False
+
     def init(self, config: dict[str, Any]) -> None:
         """
         Initialize a new training run.
@@ -75,6 +77,7 @@ class TrainingLogger:
         timestamp = int(time.time())
         unique_run_name = f"{self._run_name}-{timestamp}"
         
+        self._run_finished = False
         self._current_run = TrainingLog(
             run_name=unique_run_name,
             config=config,
@@ -91,7 +94,7 @@ class TrainingLogger:
         if self._current_run is None:
             return None
         return self._current_run.run_name
-    
+
     def log(self, data: dict[str, Any], log_timings_from: Timer | None = None) -> None:
         """
         Log data for the current epoch/step.
@@ -100,17 +103,16 @@ class TrainingLogger:
             data: Dictionary of metrics to log
             log_timings_from: Optional timer to extract timings from (overwrites timings field)
         """
-        if self._current_run is None:
-            raise RuntimeError("No active training run. Call init() first.")
+        self._require_active_run()
 
         if log_timings_from is not None:
             self._current_run.timings = log_timings_from.get_all_timings_recursive()
 
         entry = LogEntry(data=data)
         self._current_run.epoch_logs.append(entry)
-        
+
         self._save()
-    
+
     def log_final_metrics(self, metrics: dict[str, Any]) -> None:
         """
         Log final metrics for the run (e.g., test accuracy, final model scores).
@@ -118,15 +120,14 @@ class TrainingLogger:
         Args:
             metrics: Dictionary of final metrics
         """
-        if self._current_run is None:
-            raise RuntimeError("No active training run. Call init() first.")
+        self._require_active_run()
 
         if len(self._current_run.final_metrics) > 0:
             warnings.warn("Final metrics have been logged. They will be updated.")
-        
+
         self._current_run.final_metrics.update(metrics)
         self._save()
-    
+
     def log_embedding_epoch(self, data: dict[str, Any]) -> None:
         """
         Log one epoch of the embedding sub-model.
@@ -134,8 +135,7 @@ class TrainingLogger:
         Args:
             data: Dictionary of metrics for this epoch
         """
-        if self._current_run is None:
-            raise RuntimeError("No active training run. Call init() first.")
+        self._require_active_run()
 
         if self._current_run.embedding_model_log is None:
             self._current_run.embedding_model_log = EmbeddingModelLog()
@@ -150,8 +150,7 @@ class TrainingLogger:
         Args:
             final_metrics: Dictionary of final metrics (e.g. best_universal_accuracy)
         """
-        if self._current_run is None:
-            raise RuntimeError("No active training run. Call init() first.")
+        self._require_active_run()
 
         if self._current_run.embedding_model_log is None:
             self._current_run.embedding_model_log = EmbeddingModelLog()
@@ -169,18 +168,35 @@ class TrainingLogger:
         if self._current_run is None:
             return
 
+        if self._run_finished:
+            return
+
         if log_timings_from is not None:
             self._current_run.timings = log_timings_from.get_all_timings_recursive()
 
         self._current_run.end_time = datetime.now()
         self._save()
-        self._current_run = None
-    
+        self._run_finished = True
+
+    def record_saved_model(self, full_model_name: str) -> None:
+        """Write the saved model's full jar name (base + save timestamp) into the current log."""
+        if self._current_run is None:
+            return
+
+        self._current_run.saved_model_name = full_model_name
+        self._save()
+
+    def _require_active_run(self) -> None:
+        if self._current_run is None:
+            raise RuntimeError("No active training run. Call init() first.")
+        if self._run_finished:
+            raise RuntimeError("Training run has already finished. Call init() to start a new run.")
+
     def _save(self) -> None:
         """Save the current run to disk."""
         if self._current_run is None:
             return
-        
+
         Jars.training_logs.replace(self._current_run.run_name, self._current_run)
 
 

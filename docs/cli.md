@@ -392,10 +392,13 @@ Defaults to the latest version when `--timestamp` is omitted.
   "run_name": "my-experiment",
   "timestamp": 1776527993,
   "full_name": "my-experiment-1776527993",
+  "saved_model": true,
   "config": { "model_type": "simple_scoring", "...": "..." },
   "final_metrics": { "val_accuracy": 0.87, "...": "..." }
 }
 ```
+
+`saved_model` is always present: `true` if the log records a saved checkpoint name and that exact file still exists under `saved_models/`, otherwise `false`.
 
 Sections not requested are omitted entirely (not set to `null`).
 
@@ -430,6 +433,6 @@ python -m src.scripts.cli list logs --json \
 
 ### Linking saved models to training logs
 
-There is currently no automated way to link a saved model file to its training log. The model save name (`model.name` in the training spec) and the log run name (`log.run_name`) are configured independently and neither stores a reference to the other.
+When training uses a logger (`run_name` set on the model), `ModelBase.save()` writes the full jar object name of the checkpoint (logical `model.name` plus the save timestamp) into the training log as `saved_model_name`. The `inspect` command reports whether that file still exists as the boolean `saved_model`. The log run name (`log.run_name`) and the model save name (`model.name`) remain independent in the spec; only the post-training save step connects them in the log.
 
 

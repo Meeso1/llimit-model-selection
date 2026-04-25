@@ -4,6 +4,7 @@ from dataclasses import asdict, fields, is_dataclass
 from datetime import datetime
 from typing import Any
 
+from src.utils.jars import Jars
 from src.utils.training_logger import TrainingLog, load_training_log
 
 
@@ -44,10 +45,17 @@ def _log_to_dict(
 
     base_name = log.run_name[:last_dash] if last_dash != -1 else log.run_name
 
+    saved_model_name = getattr(log, "saved_model_name", None)
+    saved_model_exists = (
+        saved_model_name is not None
+        and Jars.models.has_exact(saved_model_name)
+    )
+
     result: dict[str, Any] = {
         "run_name": base_name,
         "timestamp": run_timestamp,
         "full_name": log.run_name,
+        "saved_model": saved_model_exists,
     }
 
     if include_config:
