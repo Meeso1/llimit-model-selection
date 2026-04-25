@@ -27,7 +27,7 @@ class DnEmbeddingSpecification(ModelSpecBase):
     optimizer: OptimizerSpec
     balance_model_samples: bool = True
     embedding_model_name: str = "all-MiniLM-L6-v2"
-    embedding_spec: EmbeddingSpec
+    embedding_spec: EmbeddingSpec | None = None
     load_embedding_model_from: str | None = None
     min_model_comparisons: int = 20
     embedding_model_epochs: int = 10
@@ -101,7 +101,7 @@ class TransformerEmbeddingSpecification(ModelSpecBase):
     max_length: int = 256
     optimizer: OptimizerSpec
     balance_model_samples: bool = True
-    embedding_spec: EmbeddingSpec
+    embedding_spec: EmbeddingSpec | None = None
     load_embedding_model_from: str | None = None
     min_model_comparisons: int = 20
     embedding_model_epochs: int = 10
