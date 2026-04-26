@@ -255,7 +255,7 @@ def extract_all_prompt_features(
     prompt: str,
     conversation_history: list[EvaluationMessage],
     timer: Timer | None = None
-) -> tuple[np.ndarray, np.ndarray]:  # ([27] (numeric), [18] (boolean))
+) -> tuple[np.ndarray, np.ndarray]:  # ([26] (numeric), [18] (boolean))
     """
     Extract all scalar features for a prompt.
     
@@ -264,10 +264,10 @@ def extract_all_prompt_features(
     - Prompt complexity (8 features)
     - Domain indicators (12 features)
     - Linguistic style (6 features)
-    - Context features (4 features)
+    - Context features (3 features)
     - Output format (5 features)
     
-    Total: 45 features
+    Total: 44 features
     
     Args:
         prompt: Prompt text
@@ -368,8 +368,8 @@ def inverse_transform_prompt_features(
 
     features_array = np.stack(prompt_features)  # [n_samples, n_features]
 
-    numeric_dim = 27
-    numeric_part = features_array[:, :numeric_dim].copy()  # [n_samples, 27]
+    numeric_dim = 26
+    numeric_part = features_array[:, :numeric_dim].copy()  # [n_samples, 26]
     boolean_part = features_array[:, numeric_dim:]  # [n_samples, 18]
 
     numeric_feature_descriptions, _ = get_feature_descriptions()
@@ -406,7 +406,7 @@ def inverse_transform_prompt_features(
         else:
             numeric_part[:, index] = unscaled
 
-    result_array = np.concatenate([numeric_part, boolean_part], axis=1)  # [n_samples, 45]
+    result_array = np.concatenate([numeric_part, boolean_part], axis=1)  # [n_samples, 44]
     return [result_array[i] for i in range(len(prompt_features))]
 
 

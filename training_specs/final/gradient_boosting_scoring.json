@@ -24,7 +24,7 @@
         "dropout": 0.1,
         "temperature": 0.07,
         "pairs_per_model": 32,
-        "models_per_batch": 16,
+        "models_per_batch": 50,
         "embeddings_per_model": 4,
         "optimizer": {
           "optimizer_type": "adamw",
