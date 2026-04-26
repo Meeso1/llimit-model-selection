@@ -1,0 +1,32 @@
+{
+  "model": {
+    "name": "gradient-boosting-scoring-only-llm-embedding-chatbot-arena",
+    "start_state": null,
+    "spec": {
+      "model_type": "gradient_boosting",
+      "max_depth": 5,
+      "learning_rate": 0.1,
+      "colsample_bytree": 0.8,
+      "reg_alpha": 0.0,
+      "reg_lambda": 1.0,
+      "balance_model_samples": true,
+      "input_features": ["model_embedding"],
+      "embedding_model_name": "BAAI/bge-base-en-v1.5",
+      "load_embedding_model_from": "gradient_boosting/gradient-boosting-scoring-chatbot-arena",
+      "min_model_comparisons": 1000,
+      "embedding_model_epochs": 350,
+      "ranking_loss_type": "bradley_terry"
+    }
+  },
+  "data": {
+    "validation_split": 0.2,
+    "seed": 42,
+    "dataset": "chatbot_arena"
+  },
+  "log": {
+    "run_name": "gradient-boosting-scoring-only-llm-embedding-chatbot-arena",
+    "print_every": 1
+  },
+  "epochs": 100,
+  "batch_size": 32
+}

@@ -246,6 +246,6 @@ class ResponsePredictivePreprocessor:
         embeddings = self.model.encode(
             texts,
             convert_to_tensor=True,
-            show_progress_bar=False,
+            show_progress_bar=True,
         )
         return embeddings
