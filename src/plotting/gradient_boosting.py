@@ -25,6 +25,20 @@ def plot_metrics(log: TrainingLog) -> plt.Figure:
     return fig
 
 
+def plot_loss_accuracy(log: TrainingLog) -> plt.Figure:
+    """Create a figure with loss and accuracy for GradientBoostingModel.
+
+    Layout: 1 row × 2 columns.
+    """
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    plot_loss(axes[0], log)
+    plot_accuracy(axes[1], log)
+    
+    fig.tight_layout()
+    return fig
+
+
 def plot_loss(axes: plt.Axes, log: TrainingLog) -> None:
     _plot_combined_loss(
         axes,

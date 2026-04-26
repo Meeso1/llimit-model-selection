@@ -9,11 +9,11 @@
       "input_proj_dim": 64,
       "optimizer": {
         "optimizer_type": "muon",
-        "learning_rate": 0.003,
-        "lr_decay_gamma": 0.99,
+        "learning_rate": 0.005,
+        "lr_decay_gamma": 0.995,
         "momentum": 0.95,
         "nesterov": true,
-        "adamw_lr": 1e-4,
+        "adamw_lr": 2e-4,
         "weight_decay": 0.001
       },
       "embedding_model_name": "BAAI/bge-base-en-v1.5",

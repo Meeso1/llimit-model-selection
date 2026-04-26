@@ -27,7 +27,7 @@ def plot_metrics(log: TrainingLog) -> plt.Figure:
     Post-training-only metrics (e.g. sensitivity ablations in ``final_metrics``) are
     not plotted.
 
-    Layout: 10 rows × 2 columns.
+    Layout: 9 rows × 2 columns.
     """
     fig, axes = plt.subplots(10, 2, figsize=(14, 42))
 
@@ -40,20 +40,46 @@ def plot_metrics(log: TrainingLog) -> plt.Figure:
     plot_repr_kl_loss(axes[3, 0], log)
     plot_scoring_loss_breakdown(axes[3, 1], log)
     plot_prediction_loss(axes[4, 0], log)
-    plot_pred_scoring_weight(axes[4, 1], log)
-    plot_score_consistency_loss(axes[5, 0], log)
-    plot_repr_dist_kl_loss(axes[5, 1], log)
-    plot_component_losses_weighted(axes[6, 0], log)
-    plot_component_losses_normalized(axes[6, 1], log)
-    plot_diagnostic_grad_norms(axes[7, 0], log)
-    plot_predictor_input_proj_norms(axes[7, 1], log)
-    plot_pred_real_repr_diagnostics(axes[8, 0], log)
-    plot_score_variance_diagnostics(axes[8, 1], log)
-    plot_grad_attr_embeddings(axes[9, 0], log)
-    axes[9, 1].set_visible(False)
+    plot_score_consistency_loss(axes[4, 1], log)
+    plot_repr_dist_kl_loss(axes[5, 0], log)
+    plot_component_losses_weighted(axes[5, 1], log)
+    plot_component_losses_normalized(axes[6, 0], log)
+    plot_diagnostic_grad_norms(axes[6, 1], log)
+    plot_predictor_input_proj_norms(axes[7, 0], log)
+    plot_pred_real_repr_diagnostics(axes[7, 1], log)
+    plot_score_variance_diagnostics(axes[8, 0], log)
+    plot_grad_attr_embeddings(axes[8, 1], log)
 
     fig.tight_layout()
     return fig
+
+
+def plot_metrics_2x3by2(log: TrainingLog) -> plt.Figure:
+    """Create 2 figures with selected metrics for the response predictive model.
+
+    Layout: 3 rows × 2 columns for each figure.
+    """
+    fig1, axes1 = plt.subplots(3, 2, figsize=(14, 15))
+    fig2, axes2 = plt.subplots(3, 2, figsize=(14, 15))
+    
+    plot_total_loss(axes1[0, 0], log)
+    plot_accuracy(axes1[0, 1], log)
+    plot_scorer_real_repr_accuracy(axes1[1, 0], log)
+    plot_prediction_quality(axes1[1, 1], log)
+    plot_repr_mean_variance(axes1[2, 0], log)
+    plot_score_variance_diagnostics(axes1[2, 1], log)
+
+    plot_predictability_loss(axes2[0, 0], log)
+    plot_repr_kl_loss(axes2[0, 1], log)
+    plot_score_consistency_loss(axes2[1, 0], log)
+    plot_repr_dist_kl_loss(axes2[1, 1], log)
+    plot_component_losses_weighted(axes2[2, 0], log)
+    plot_diagnostic_grad_norms(axes2[2, 0], log)
+    plot_predictor_input_proj_norms(axes2[2, 1], log)
+
+    fig1.tight_layout()
+    fig2.tight_layout()
+    return fig1, fig2
 
 
 def plot_total_loss(axes: plt.Axes, log: TrainingLog) -> None:
@@ -143,18 +169,6 @@ def plot_scoring_loss_breakdown(axes: plt.Axes, log: TrainingLog) -> None:
 def plot_prediction_loss(axes: plt.Axes, log: TrainingLog) -> None:
     """Training-only metric."""
     _plot_loss(axes, _get_metric(log, 'prediction_loss'), 'Prediction Loss (Training)')
-
-
-def plot_pred_scoring_weight(axes: plt.Axes, log: TrainingLog) -> None:
-    """Warmup weight for the predicted-repr scoring path (0 → 1 over warmup_epochs)."""
-    idx, vals = _filter_nones(_get_metric(log, 'pred_scoring_weight'))
-    if len(vals) == 0:
-        axes.set_visible(False)
-        return
-    axes.plot(idx, vals)
-    axes.set_ylim(0, 1.05)
-    axes.set_ylabel("Weight")
-    axes.set_title("Predicted-Repr Scoring Weight (warmup)")
 
 
 def plot_score_consistency_loss(axes: plt.Axes, log: TrainingLog) -> None:

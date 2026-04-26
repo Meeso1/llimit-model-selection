@@ -5,15 +5,15 @@
     "spec": {
       "model_type": "dn_embedding_length_prediction",
       "hidden_dims": [1024, 1024, 1024, 1024, 512, 512, 512, 256, 128],
-      "dropout": 0.25,
+      "dropout": 0.2,
       "input_proj_dim": 64,
       "optimizer": {
         "optimizer_type": "muon",
-        "learning_rate": 0.005,
-        "lr_decay_gamma": 0.99,
+        "learning_rate": 0.01,
+        "lr_decay_gamma": 0.995,
         "momentum": 0.95,
         "nesterov": true,
-        "adamw_lr": 5e-5,
+        "adamw_lr": 1e-4,
         "weight_decay": 0.01
       },
       "embedding_model_name": "BAAI/bge-base-en-v1.5",

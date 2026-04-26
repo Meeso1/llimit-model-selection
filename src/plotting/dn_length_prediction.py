@@ -50,6 +50,26 @@ def plot_metrics(log: TrainingLog, skip_first_n_epochs: int = 0) -> plt.Figure:
     return fig
 
 
+def plot_metrics_4by2(log: TrainingLog, skip_first_n_epochs: int = 0) -> plt.Figure:
+    """Create a figure with selected metrics for DnEmbeddingLengthPredictionModel.
+
+    Layout: 4 rows × 2 columns.
+    """
+    fig, axes = plt.subplots(4, 2, figsize=(14, 20))
+    
+    plot_loss(axes[0, 0], log)
+    plot_accuracy(axes[0, 1], log)
+    plot_mae(axes[1, 0], log, skip_first_n_epochs=skip_first_n_epochs)
+    plot_relative_error(axes[1, 1], log, skip_first_n_epochs=skip_first_n_epochs)
+    plot_relative_ratio(axes[2, 0], log, skip_first_n_epochs=skip_first_n_epochs)
+    plot_stddev_ratio(axes[2, 1], log, skip_first_n_epochs=skip_first_n_epochs)
+    plot_modality_norms(axes[3, 0], log)
+    plot_gradient_norms(axes[3, 1], log)
+    
+    fig.tight_layout()
+    return fig
+
+
 def plot_gradient_norms(axes: plt.Axes, log: TrainingLog) -> None:
     """Gradient norms: trunk, input projections, and model-id embedding (log scale, normalized)."""
     _plot_loss_components(
