@@ -33,10 +33,12 @@ class Jar:
         if not os.path.exists(dir_path):
             return {}
 
-        files = [
+        files: list[str] = [
             f
             for f in os.listdir(dir_path)
-            if f.startswith(os.path.basename(name) + "-") and f.endswith(".pkl")
+            if f.startswith(os.path.basename(name) + "-") \
+                and f.endswith(".pkl") \
+                and f.rfind("-") == len(os.path.basename(name))
         ]
 
         return {
