@@ -163,7 +163,6 @@ class TransformerEmbeddingPreprocessor:
             PreprocessedInferenceInput with prompts, features, and model embeddings
         """
         
-        # TODO: Decide what to do with conversation history in inference
         prompt_features_list, _ = extract_and_transform_all_prompt_features(prompts, [[] for _ in prompts], scaler)
         
         model_embeddings_array = np.array([

@@ -88,7 +88,7 @@ def extract_prompt_complexity_features(prompt: str) -> np.ndarray:  # [8], all f
     # Vocabulary complexity
     unique_words = set(w.lower() for w in words)
     type_token_ratio = len(unique_words) / max(len(words), 1)
-    inverse_type_token_ratio = 1 - type_token_ratio # TODO: handle backwards compatibility with changes to features
+    inverse_type_token_ratio = 1 - type_token_ratio
     features.append(inverse_type_token_ratio)
     
     # Average word length (longer words = more technical)

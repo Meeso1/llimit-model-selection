@@ -17,7 +17,6 @@ from src.utils.timer import Timer
 from src.preprocessing.simple_scaler import SimpleScaler
 
 
-# TODO: Predict log response length in all length prediction models
 class LengthPredictionPreprocessor:
     """
     Preprocessor for length prediction models.

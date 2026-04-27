@@ -128,7 +128,7 @@ class PromptEmbeddingWithCategoriesPreprocessor:
         """
         
         preprocessed = self.prompt_embedding_preprocessor.preprocess_for_inference(prompts, model_names, model_encoder, scaler)
-        categories = [np.zeros(self.category_dim) for _ in prompts] # TODO: How to get categories for inference?
+        categories = [np.zeros(self.category_dim) for _ in prompts]
         return PreprocessedInferenceInput(
             prompt_embeddings=preprocessed.prompt_embeddings, # [n_prompts, embedding_dim]
             prompt_features=preprocessed.prompt_features,  # [n_prompts, prompt_features_dim]

@@ -299,7 +299,6 @@ class GradientBoostingModel(ScoringModelBase):
             "base_model": self._base_model_name,
         }
 
-    # TODO: Track best state
     def train(
         self,
         data: TrainingData,
