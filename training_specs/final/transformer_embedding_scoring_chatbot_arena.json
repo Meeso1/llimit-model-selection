@@ -7,7 +7,7 @@
       "transformer_model_name": "BAAI/bge-base-en-v1.5",
       "finetuning_spec": {
         "method": "qlora",
-        "rank": 16,
+        "rank": 32,
         "alpha": 32,
         "dropout": 0.05,
         "bits": 4,
@@ -18,12 +18,12 @@
       "max_length": 256,
       "optimizer": {
         "optimizer_type": "muon",
-        "learning_rate": 0.02,
+        "learning_rate": 0.005,
         "lr_decay_gamma": 0.99,
-        "momentum": 0.5,
+        "momentum": 0.99,
         "nesterov": true,
-        "adamw_lr": 1e-4,
-        "weight_decay": 0.01
+        "adamw_lr": 5e-5,
+        "weight_decay": 0.001
       },
       "balance_model_samples": true,
       "load_embedding_model_from": "gradient_boosting/gradient-boosting-scoring-chatbot-arena",
@@ -42,6 +42,6 @@
     "run_name": "transformer-embedding-scoring-chatbot-arena",
     "print_every": 1
   },
-  "epochs": 30,
+  "epochs": 120,
   "batch_size": 16
 }
