@@ -351,8 +351,8 @@ class DnEmbeddingModel(ScoringModelBase):
         return {
             "optimizer_type": self.optimizer_spec.optimizer_type,
             "optimizer_params": self.optimizer_spec.to_dict(),
-            "optimizer_state": self._optimizer_state,
-            "scheduler_state": self._scheduler_state,
+            "optimizer_state": state_dict_to_cpu(self._optimizer_state) if self._optimizer_state is not None else None,
+            "scheduler_state": state_dict_to_cpu(self._scheduler_state) if self._scheduler_state is not None else None,
             "hidden_dims": self.hidden_dims,
             "dropout": self.dropout,
             "use_skip_connections": self.use_skip_connections,

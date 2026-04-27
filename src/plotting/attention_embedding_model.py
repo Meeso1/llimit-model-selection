@@ -33,7 +33,7 @@ def plot_total_loss(axes: plt.Axes, log: TrainingLog) -> None:
         axes,
         _get_embedding_metric(log, "train_loss"),
         _get_embedding_metric(log, "val_loss"),
-        "Attention embedding — total loss",
+        "Loss",
     )
 
 
@@ -42,5 +42,5 @@ def plot_universal_accuracy(axes: plt.Axes, log: TrainingLog) -> None:
         axes,
         _get_embedding_metric(log, "train_universal_accuracy"),
         _get_embedding_metric(log, "val_universal_accuracy"),
-        "Attention embedding — universal accuracy",
+        "Distinguishability accuracy",
     )
