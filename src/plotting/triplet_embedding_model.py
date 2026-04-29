@@ -19,14 +19,12 @@ from src.plotting.core import (
 def plot_metrics(log: TrainingLog) -> plt.Figure:
     """Create a figure with all training metrics for triplet embedding models.
 
-    Layout: 2 rows × 2 columns (bottom-right panel hidden).
+    Layout: 1 row × 2 columns.
     """
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
-    plot_total_loss(axes[0, 0], log)
-    plot_universal_accuracy(axes[0, 1], log)
-    plot_loss_components(axes[1, 0], log)
-    axes[1, 1].set_visible(False)
+    plot_total_loss(axes[0], log)
+    plot_universal_accuracy(axes[1], log)
 
     fig.tight_layout()
     return fig
@@ -37,7 +35,7 @@ def plot_total_loss(axes: plt.Axes, log: TrainingLog) -> None:
         axes,
         _get_embedding_metric(log, "train_loss"),
         _get_embedding_metric(log, "val_loss"),
-        "Triplet embedding — total loss",
+        "Loss",
     )
 
 
@@ -46,7 +44,7 @@ def plot_universal_accuracy(axes: plt.Axes, log: TrainingLog) -> None:
         axes,
         _get_embedding_metric(log, "train_universal_accuracy"),
         _get_embedding_metric(log, "val_universal_accuracy"),
-        "Triplet embedding — universal accuracy",
+        "Distinguishability accuracy",
     )
 
 
@@ -57,6 +55,6 @@ def plot_loss_components(axes: plt.Axes, log: TrainingLog) -> None:
             "Triplet": _get_embedding_metric(log, "train_triplet_loss"),
             "Regularization": _get_embedding_metric(log, "train_reg_loss"),
         },
-        "Triplet embedding — loss components (train)",
+        "Loss components (train)",
         normalize=True,
     )

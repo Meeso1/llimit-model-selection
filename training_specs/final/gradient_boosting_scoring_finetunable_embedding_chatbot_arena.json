@@ -18,7 +18,7 @@
         "finetuning_spec": {
           "method": "qlora",
           "bits": 4,
-          "rank": 16,
+          "rank": 32,
           "alpha": 32,
           "dropout": 0.05,
           "target_modules": "auto"
@@ -50,5 +50,5 @@
     "print_every": 1
   },
   "epochs": 100,
-  "batch_size": 32
+  "batch_size": 16
 }

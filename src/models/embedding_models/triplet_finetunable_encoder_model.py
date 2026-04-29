@@ -91,8 +91,15 @@ class TripletFinetunableEncoderModel(TripletModelBase[TrainingTriplet]):
             seed=preprocessor_seed,
         )
 
-        self._tokenizer: AutoTokenizer | None = None
-        self._pooling_method: PoolingMethod | None = None
+        self._tokenizer: AutoTokenizer = AutoTokenizer.from_pretrained(
+            transformer_model_name,
+            use_fast=("deberta" not in transformer_model_name),
+        )
+        self._pooling_method: PoolingMethod = detect_pooling_method(transformer_model_name)
+
+        if print_every is not None:
+            print(f"Detected pooling method for {transformer_model_name}: {self._pooling_method}")
+
         self._module: TripletFinetunableEncoderModel._EncoderModule | None = None
 
     @property
@@ -105,28 +112,12 @@ class TripletFinetunableEncoderModel(TripletModelBase[TrainingTriplet]):
         """Get the type of the embedding model."""
         return "finetunable"
 
-    @property
-    def tokenizer(self) -> AutoTokenizer:
-        """Get the tokenizer (must be initialized first)."""
-        if self._tokenizer is None:
-            raise RuntimeError("Tokenizer not initialized. Train or load a model first.")
-        return self._tokenizer
-
     def _get_module(self) -> nn.Module:
         """Get the neural network module."""
         return self._module
 
     def _initialize_module(self, input_dim: int | None = None) -> None:
         """Initialize the neural network module."""
-        self._tokenizer = AutoTokenizer.from_pretrained(
-            self.transformer_model_name,
-            use_fast=("deberta" not in self.transformer_model_name),
-        )
-        self._pooling_method = detect_pooling_method(self.transformer_model_name)
-
-        if self.print_every is not None:
-            print(f"Detected pooling method for {self.transformer_model_name}: {self._pooling_method}")
-
         self._module = self._EncoderModule(
             transformer_model_name=self.transformer_model_name,
             finetuning_spec=self.finetuning_spec,
@@ -178,7 +169,7 @@ class TripletFinetunableEncoderModel(TripletModelBase[TrainingTriplet]):
         """
         dataset = self._TripletTextDataset(
             triplets=preprocessed_data.triplets,
-            tokenizer=self.tokenizer,
+            tokenizer=self._tokenizer,
             max_length=self.max_length,
         )
 
@@ -242,7 +233,7 @@ class TripletFinetunableEncoderModel(TripletModelBase[TrainingTriplet]):
             for pair in pairs:
                 text = f"{pair.prompt} [SEP] {pair.response}"
 
-                tokens = self.tokenizer(
+                tokens = self._tokenizer(
                     text,
                     max_length=self.max_length,
                     padding="max_length",
@@ -469,11 +460,10 @@ class TripletFinetunableEncoderModel(TripletModelBase[TrainingTriplet]):
             print_every=state_dict["print_every"],
         )
 
+        # Restore the serialized pooling method so the module is built with the
+        # same pooling that was used during training (the __init__ auto-detects it,
+        # but we override here in case the saved value differs from detection).
         model._pooling_method = state_dict["pooling_method"]
-        model._tokenizer = AutoTokenizer.from_pretrained(
-            state_dict["transformer_model_name"],
-            use_fast=("deberta" not in state_dict["transformer_model_name"]),
-        )
         model._module = TripletFinetunableEncoderModel._EncoderModule(
             transformer_model_name=state_dict["transformer_model_name"],
             finetuning_spec=finetuning_spec,
