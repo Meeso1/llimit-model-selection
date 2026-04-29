@@ -306,13 +306,10 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
             self.network.eval()
             predictions_dict: dict[str, np.ndarray] = {}
             
+            mean_model_embedding = np.mean(list(self.model_embeddings.values()), axis=0)  # [model_embedding_dim]
             with torch.no_grad():
                 for model_name in X.model_names:
-                    if model_name not in self.model_embeddings:
-                        # Use default embedding if model not seen during training
-                        model_embedding = self.model_embeddings.get("default", np.zeros(self.embedding_model.embedding_dim))
-                    else:
-                        model_embedding = self.model_embeddings[model_name]
+                    model_embedding = self.model_embeddings.get(model_name, mean_model_embedding)  # [model_embedding_dim]
                     
                     raw_model_id = model_id_map[model_name]
                     # Unknown models use -1; the network computes the mean of all known embeddings for them
@@ -426,7 +423,7 @@ class DnEmbeddingLengthPredictionModel(LengthPredictionModelBase):
             
             # Parse embedding spec using Pydantic TypeAdapter
             embedding_spec_adapter = TypeAdapter(EmbeddingSpec)
-            embedding_spec = embedding_spec_adapter.validate_python(state_dict["embedding_spec"])
+            embedding_spec = embedding_spec_adapter.validate_python(state_dict["embedding_spec"]) if state_dict["embedding_spec"] is not None else None
             
             model = cls(
                 hidden_dims=state_dict["hidden_dims"],

@@ -510,11 +510,12 @@ class GradientBoostingModel(ScoringModelBase):
                 prompt_indices = []  # Track which prompt each row belongs to
                 model_names_flat = []  # Track which model each row is for
                 
+                mean_model_embedding = np.mean(list(self.model_embeddings.values()), axis=0)  # [model_embedding_dim]
                 for prompt_idx, (prompt_emb, prompt_feat, prompt_categories) in enumerate(
                     zip(encoded_prompts.prompt_embeddings, encoded_prompts.prompt_features, encoded_prompts.prompt_categories)
                 ):
                     for model_name in X.model_names:
-                        model_emb = self.model_embeddings[model_name]
+                        model_emb = self.model_embeddings.get(model_name, mean_model_embedding)  # [model_embedding_dim]
                         # Concatenate: [prompt_embedding, prompt_features, model_embedding, categories] (missing some based on input_features)
                         features = self._create_features(prompt_emb, prompt_feat, model_emb, prompt_categories)
                         all_features.append(features)

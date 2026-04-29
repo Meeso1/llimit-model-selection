@@ -41,5 +41,5 @@
     "print_every": 1
   },
   "epochs": 100,
-  "batch_size": 32
+  "batch_size": 512
 }

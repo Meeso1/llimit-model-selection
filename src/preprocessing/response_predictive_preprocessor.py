@@ -222,8 +222,9 @@ class ResponsePredictivePreprocessor:
         prompt_embeddings = self._embed_texts(prompts).cpu()  # [n_prompts, embedding_dim]
         
         # Get model embeddings
+        mean_model_embedding = np.mean(list(model_embeddings.values()), axis=0) # [model_embedding_dim]
         model_embs = np.stack([
-            model_embeddings[name] if name in model_embeddings else model_embeddings.get("default", np.zeros(len(next(iter(model_embeddings.values())))))
+            model_embeddings.get(name, mean_model_embedding)
             for name in model_names
         ])  # [n_models, model_embedding_dim]
         

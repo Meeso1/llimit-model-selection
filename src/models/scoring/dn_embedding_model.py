@@ -296,8 +296,9 @@ class DnEmbeddingModel(ScoringModelBase):
             
             prompt_embeddings = torch.from_numpy(encoded_prompts.prompt_embeddings).to(self.device)  # [n_prompts, embedding_dim]
             prompt_features = torch.from_numpy(encoded_prompts.prompt_features).to(self.device)  # [n_prompts, prompt_features_dim]
+            mean_model_embedding = np.mean(list(self.model_embeddings.values()), axis=0)  # [model_embedding_dim]
             model_embeddings = torch.from_numpy(np.array([
-                self.model_embeddings[model_name] if model_name in self.model_embeddings else self.model_embeddings["default"]
+                self.model_embeddings.get(model_name, mean_model_embedding)
                 for model_name in X.model_names
             ])).to(self.device) # [n_models, model_embedding_dim]
             

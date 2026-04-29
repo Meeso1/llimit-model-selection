@@ -1,6 +1,7 @@
 """Inference service for the API."""
 
 from src.data_models.data_models import InputData
+from src.data_models.length_prediction.length_prediction_data_models import LengthPredictionOutputData
 from src.models.length_prediction.length_prediction_model_base import LengthPredictionModelBase
 from src.models.scoring.scoring_model_base import ScoringModelBase
 from src.models.model_loading import LengthPredictionModelType, load_length_prediction_model, ScoringModelType, load_scoring_model
@@ -76,11 +77,11 @@ class InferenceService:
         model = self._get_or_load_length_prediction_model(model_type, model_name)
         
         input_data = InputData(prompts=prompts, model_names=model_names)
-        result = model.predict(input_data, batch_size)
+        result: LengthPredictionOutputData = model.predict(input_data, batch_size)
         
         lengths_dict = {
             model_name: lengths.tolist()
-            for model_name, lengths in result.predicted_lengths.items()
+            for model_name, lengths in result.predictions.items()
         }
         
         return lengths_dict

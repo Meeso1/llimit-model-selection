@@ -307,12 +307,13 @@ class GbLengthPredictionModel(LengthPredictionModelBase):
                 model_names_flat = []  # Track which model each row is for
                 
                 model_id_map = dict(zip(X.model_names, encoded_prompts.model_ids))
+                mean_model_embedding = np.mean(list(self.model_embeddings.values()), axis=0)  # [model_embedding_dim]
 
                 for prompt_idx, (prompt_emb, prompt_feat) in enumerate(
                     zip(encoded_prompts.prompt_embeddings, encoded_prompts.prompt_features)
                 ):
                     for model_name in X.model_names:
-                        model_emb = self.model_embeddings[model_name]
+                        model_emb = self.model_embeddings.get(model_name, mean_model_embedding)  # [model_embedding_dim]
                         model_id = model_id_map[model_name]
                         # Concatenate based on input_features
                         features = self._create_features(prompt_emb, prompt_feat, model_emb, model_id)

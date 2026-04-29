@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import traceback
 from typing import get_args
 from fastapi import FastAPI, HTTPException
 
@@ -67,7 +68,7 @@ async def infer(request: InferenceRequest) -> InferenceResponse:
             scores = inference_service.score(
                 model_type=scoring_model_type,
                 model_name=scoring_model_name,
-                model_names=request.model_names,
+                models_to_score=request.model_names,
                 prompts=request.prompts,
                 batch_size=request.batch_size,
             )
@@ -89,10 +90,13 @@ async def infer(request: InferenceRequest) -> InferenceResponse:
         return InferenceResponse(scores=scores, predicted_lengths=lengths)
         
     except ValueError as e:
+        traceback.print_exc()
         raise HTTPException(status_code=400, detail=str(e))
     except FileNotFoundError as e:
+        traceback.print_exc()
         raise HTTPException(status_code=404, detail=f"Model not found: {str(e)}")
     except Exception as e:
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Inference failed: {str(e)}")
 
 

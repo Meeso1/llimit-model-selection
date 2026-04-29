@@ -165,8 +165,9 @@ class TransformerEmbeddingPreprocessor:
         
         prompt_features_list, _ = extract_and_transform_all_prompt_features(prompts, [[] for _ in prompts], scaler)
         
+        mean_model_embedding = np.mean(list(model_embeddings.values()), axis=0)  # [model_embedding_dim]
         model_embeddings_array = np.array([
-            model_embeddings[model_name] if model_name in model_embeddings else model_embeddings["default"]
+            model_embeddings.get(model_name, mean_model_embedding)
             for model_name in model_names
         ])  # [n_models, model_embedding_dim]
         
