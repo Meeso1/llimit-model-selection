@@ -75,6 +75,7 @@ def plot_positive_metric(
     ylabel: str = "log(value)",
     show_original_scale: bool = False,
     skip_first_n_epochs: int = 0,
+    show_min_line: bool = True,
 ) -> None:
     """Plot a single positive metric with log scale and rolling mean.
 
@@ -82,6 +83,7 @@ def plot_positive_metric(
     When show_original_scale is True, y-axis ticks show the original (pre-log) values.
     When skip_first_n_epochs > 0, the y-axis range is computed from epoch
     skip_first_n_epochs onward (all epochs are still plotted).
+    When show_min_line is False, the horizontal line marking the minimum is omitted.
     """
     idx, vals = _filter_nones(values)
     if len(vals) == 0:
@@ -96,8 +98,9 @@ def plot_positive_metric(
     if window >= 2:
         rolling = np.convolve(log_vals, np.ones(window) / window, mode='valid')
         axes.plot(idx[window - 1:], rolling, color=_ROLLING_MEAN_COLOR, label=f"Rolling mean ({window})")
-        min_val = np.min(rolling)
-        axes.axhline(y=min_val, color='r', linestyle='--', label=f'Best: {np.exp(min_val):.4g}')
+        if show_min_line:
+            min_val = np.min(rolling)
+            axes.axhline(y=min_val, color='r', linestyle='--', label=f'Best: {np.exp(min_val):.4g}')
 
     y_range = _ylim_for_tail([(idx, log_vals)], skip_first_n_epochs) if skip_first_n_epochs > 0 else None
     if show_original_scale:

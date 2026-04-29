@@ -111,6 +111,7 @@ def plot_interaction_norm(axes: plt.Axes, log: TrainingLog) -> None:
         _get_metric(log, 'interaction_norm'),
         'Interaction Norm (Training)',
         ylabel='log(norm)',
+        show_min_line=False,
     )
 
 
