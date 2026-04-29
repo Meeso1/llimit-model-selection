@@ -10,9 +10,9 @@ The triplet-based encoders are Stage 1 models in a two-stage training process. T
 
 We provide two implementations:
 
-1. **TripletFrozenEncoderModel** (`src/models/triplet_frozen_encoder_model.py`): Uses a frozen sentence transformer for initial embeddings, with trainable dense layers on top. Fast to train, good baseline.
+1. **TripletFrozenEncoderModel** (`src/models/embedding_models/triplet_frozen_encoder_model.py`): Uses a frozen sentence transformer for initial embeddings, with trainable dense layers on top. Fast to train, good baseline.
 
-2. **TripletFinetunableEncoderModel** (`src/models/triplet_finetunable_encoder_model.py`): Uses a transformer (e.g., BERT) where only the last layers are fine-tuned. More powerful but slower than the frozen model.
+2. **TripletFinetunableEncoderModel** (`src/models/embedding_models/triplet_finetunable_encoder_model.py`): Uses a HuggingFace transformer model with a configurable fine-tuning strategy (LoRA, last-layers, full, BitFit, QLoRA). More powerful but slower than the frozen model.
 
 Both models share a common base class `TripletModelBase` and have identical public interfaces.
 
@@ -34,19 +34,33 @@ This design keeps the text encoder frozen (avoiding expensive fine-tuning) while
 
 ### 2.2. TripletFinetunableEncoderModel
 
--   **Fine-tunable Transformer**: A transformer model (e.g., `bert-base-uncased`) from HuggingFace where only a fixed number of last layers are fine-tuned (the rest are frozen). Prompts and responses are concatenated with a `[SEP]` token and encoded together.
--   **Optional Projection Layer**: An optional trainable projection layer (with Tanh activation) that projects the transformer's [CLS] token embedding to a lower dimension.
+-   **Fine-tunable Transformer**: A HuggingFace transformer model where the fine-tuning strategy is fully delegated to a `FineTuningSpec` (see §2.2.1). Prompts and responses are concatenated with a `[SEP]` token and encoded together.
+-   **Pooling**: The pooling method (`mean`, `cls`, `last_token`) is auto-detected from the model's HuggingFace config via `detect_pooling_method`. This ensures sentence-transformer models use mean-pooling by default instead of always using the CLS token.
+-   **Projection Layer**: A trainable `Linear → Tanh` projection from the transformer's hidden size to `projection_dim`.
 
-This design allows the model to adapt the most task-specific layers of the transformer while keeping most of it frozen for efficiency and stability.
+#### 2.2.1. Fine-tuning Strategies (`FineTuningSpec`)
+
+The `finetuning_spec` parameter accepts any of the following (same set as `TransformerEmbeddingModel`):
+
+| Spec class         | `method` value  | Description                                              |
+|--------------------|-----------------|----------------------------------------------------------|
+| `LastLayersSpec`   | `last_layers`   | Freeze all layers; unfreeze last N encoder layers (default: 1) |
+| `LoraSpec`         | `lora`          | Low-rank adapters (PEFT) on attention projections        |
+| `QLoraSpec`        | `qlora`         | 4-bit quantized base model + LoRA adapters               |
+| `BitFitSpec`       | `bitfit`        | Fine-tune only bias terms                                |
+| `FullFineTuningSpec` | `full`        | All parameters trainable                                 |
+
+Default is `LastLayersSpec(num_unfrozen_layers=1)`, which preserves approximately the same behaviour as the previous hardcoded implementation.
 
 ### 2.3. Common Base Class
 
-Both implementations extend `TripletModelBase` (`src/models/triplet_model_base.py`), which provides:
+Both implementations extend `TripletModelBase` (`src/models/embedding_models/triplet_model_base.py`), which provides:
 - Common training loop logic
 - Triplet margin loss computation
 - KL-divergence regularization
 - Validation logic
 - Model embedding computation
+- Best-model tracking and revert (see §4.5)
 
 ## 3. Data Flow and Models
 
@@ -94,7 +108,15 @@ The ratio is configurable via `identity_positive_ratio`. All random selections u
 
 ### 4.4. Training Length
 
-Training is defined by a fixed number of **epochs**. Monitor validation triplet accuracy and loss to identify the best-performing epoch and prevent overfitting.
+Training is defined by a fixed number of **epochs**. The best-epoch state is automatically tracked and restored at the end of training (see §4.5).
+
+### 4.5. Best-Model Tracking
+
+`TripletModelBase.train()` uses a `BestModelTracker` to record the epoch with the highest universal accuracy (`val_universal_accuracy` when a validation set is provided, otherwise `train_universal_accuracy`). After the final epoch the module's weights are reverted to the best recorded state, so the saved model always corresponds to the best epoch rather than the last.
+
+### 4.6. Gradient Clipping (`TripletFinetunableEncoderModel`)
+
+Gradients are clipped to `max_norm=1.0` after each backward pass to stabilise fine-tuning of the transformer layers.
 
 ## 5. Data Considerations
 
@@ -123,7 +145,7 @@ Before triplet construction, raw data is filtered:
 
 ### 6.1. Initialization
 
-Both models share the same interface. Example with TripletFrozenEncoderModel:
+Example with `TripletFrozenEncoderModel`:
 
 ```python
 from src.models.embedding_models.triplet_frozen_encoder_model import TripletFrozenEncoderModel
@@ -142,23 +164,37 @@ encoder = TripletFrozenEncoderModel(
 )
 ```
 
-Example with TripletFinetunableEncoderModel:
+Example with `TripletFinetunableEncoderModel` using LoRA:
 
 ```python
 from src.models.embedding_models.triplet_finetunable_encoder_model import TripletFinetunableEncoderModel
+from src.models.finetuning_specs.lora_spec import LoraSpec
 from src.models.optimizers.adamw_spec import AdamWSpec
 
 encoder = TripletFinetunableEncoderModel(
-    transformer_model_name="bert-base-uncased",  # HuggingFace transformer
-    projection_dim=128,  # Optional projection (None = use transformer output directly)
-    max_length=256,  # Maximum sequence length
-    optimizer_spec=AdamWSpec(learning_rate=1e-5),  # Lower LR for fine-tuning
+    transformer_model_name="sentence-transformers/all-MiniLM-L12-v2",
+    finetuning_spec=LoraSpec(rank=16, alpha=32, dropout=0.05),
+    projection_dim=128,
+    max_length=256,
+    optimizer_spec=AdamWSpec(learning_rate=1e-5),
     triplet_margin=0.2,
     regularization_weight=0.01,
     min_model_comparisons=20,
     identity_positive_ratio=0.8,
     preprocessor_seed=42,
     print_every=1,
+)
+```
+
+Example with `LastLayersSpec` (default):
+
+```python
+from src.models.finetuning_specs.last_layers_spec import LastLayersSpec
+
+encoder = TripletFinetunableEncoderModel(
+    transformer_model_name="bert-base-uncased",
+    finetuning_spec=LastLayersSpec(num_unfrozen_layers=2),
+    projection_dim=128,
 )
 ```
 
@@ -235,13 +271,14 @@ state_dict = encoder.get_state_dict()
 # Save to file...
 
 # Loading (use appropriate class)
-encoder = TripletFrozenEncoderModel.load_state_dict(state_dict)
+encoder = TripletFinetunableEncoderModel.load_state_dict(state_dict)
 ```
 
 ### 6.4. History and Serialization
 
 -   **Training History**: Models maintain an internal list of `EpochLog` dataclasses containing loss and accuracy metrics for each epoch.
 -   **Serialization**: Models are serializable via `get_state_dict` and `load_state_dict`, allowing trained encoders to be saved and loaded independently.
+-   **Backward Compatibility**: `TripletFinetunableEncoderModel` checkpoints from before the `finetuning_spec` refactor are **not** compatible with the current `load_state_dict`.
 
 ## 7. Advanced Features
 
@@ -270,7 +307,7 @@ total_loss = triplet_loss + regularization_weight * kl_divergence_loss
 - You have more computational resources (GPU)
 - You want potentially better performance
 - Your domain is specialized and could benefit from fine-tuning
-- You're willing to invest more training time
+- You want to use parameter-efficient fine-tuning (LoRA/QLoRA) for larger transformer models
 
 ### 7.4. Future Enhancements
 
@@ -283,9 +320,9 @@ total_loss = triplet_loss + regularization_weight * kl_divergence_loss
 
 ### 8.1. Completed Components
 
--   **Base Class**: `src/models/triplet_model_base.py` with shared training logic
--   **Frozen Model**: `src/models/triplet_frozen_encoder_model.py`
--   **Fine-tunable Model**: `src/models/triplet_finetunable_encoder_model.py`
+-   **Base Class**: `src/models/embedding_models/triplet_model_base.py` with shared training logic
+-   **Frozen Model**: `src/models/embedding_models/triplet_frozen_encoder_model.py`
+-   **Fine-tunable Model**: `src/models/embedding_models/triplet_finetunable_encoder_model.py`
 -   **Data Types**: `src/data_models/triplet_encoder_types.py`
 -   **Preprocessors**: 
     - `src/preprocessing/triplet_frozen_encoder_preprocessor.py`
@@ -298,4 +335,3 @@ total_loss = triplet_loss + regularization_weight * kl_divergence_loss
 -   Implement prompt-based validation split
 -   Add CLI commands for training and using the encoders
 -   Empirical comparison of frozen vs fine-tunable models
-

@@ -4,27 +4,30 @@ from typing import Literal
 
 from src.models.embedding_specs.embedding_spec import EmbeddingModelSpecification
 from src.models.embedding_models.triplet_finetunable_encoder_model import TripletFinetunableEncoderModel
+from src.models.finetuning_specs.finetuning_spec_union import FineTuningSpec
 from src.models.optimizers.optimizer_spec_union import OptimizerSpec
 
 
 class FinetunableEmbeddingSpec(EmbeddingModelSpecification):
     """
     Specification for fine-tunable transformer embedding model.
-    
-    Uses a fine-tunable transformer (e.g., BERT) with projection layer.
-    More powerful but slower and more resource-intensive than frozen model.
+
+    Uses a fine-tunable transformer (e.g., a sentence-transformer model) with a
+    configurable fine-tuning strategy (LoRA, last-layers, full, BitFit, QLoRA)
+    and a projection layer on top.
     """
-    
+
     embedding_type: Literal["finetunable"] = "finetunable"
-    transformer_model_name: str = "bert-base-uncased"
+    transformer_model_name: str = "sentence-transformers/all-MiniLM-L12-v2"
+    finetuning_spec: FineTuningSpec | None = None
     projection_dim: int = 128
     max_length: int = 256
     optimizer: OptimizerSpec
-    
+
     triplet_margin: float = 0.2
     regularization_weight: float = 0.01
     identity_positive_ratio: float = 0.8
-    
+
     def create_model(
         self,
         min_model_comparisons: int,
@@ -33,6 +36,7 @@ class FinetunableEmbeddingSpec(EmbeddingModelSpecification):
     ) -> TripletFinetunableEncoderModel:
         return TripletFinetunableEncoderModel(
             transformer_model_name=self.transformer_model_name,
+            finetuning_spec=self.finetuning_spec,
             projection_dim=self.projection_dim,
             max_length=self.max_length,
             optimizer_spec=self.optimizer,

@@ -15,6 +15,14 @@
       "embedding_spec": {
         "embedding_type": "finetunable",
         "transformer_model_name": "BAAI/bge-base-en-v1.5",
+        "finetuning_spec": {
+          "method": "qlora",
+          "bits": 4,
+          "rank": 16,
+          "alpha": 32,
+          "dropout": 0.05,
+          "target_modules": "auto"
+        },
         "projection_dim": 128,
         "max_length": 256,
         "triplet_margin": 0.2,

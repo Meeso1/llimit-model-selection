@@ -18,6 +18,7 @@ from src.data_models.triplet_encoder_types import (
     TripletType,
 )
 from src.models.embedding_models.embedding_model_base import EmbeddingModelBase
+from src.utils.best_model_tracker import BestModelTracker
 from src.utils.data_split import ValidationSplit
 from src.utils.timer import Timer
 
@@ -68,6 +69,7 @@ class TripletModelBase(EmbeddingModelBase, ABC, Generic[TripletType]):
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.last_timer: Timer | None = None
+        self._best_model_tracker = BestModelTracker()
     
     @property
     @abstractmethod
@@ -198,13 +200,31 @@ class TripletModelBase(EmbeddingModelBase, ABC, Generic[TripletType]):
                         criterion,
                         epochs_timer,
                     )
-                    
+
                     self._log_epoch_result(epoch_log)
                     if self._training_logger is not None:
                         self._training_logger.log_embedding_epoch(dataclasses.asdict(epoch_log))
 
+                    accuracy = epoch_log.val_universal_accuracy \
+                        if epoch_log.val_universal_accuracy is not None \
+                        else epoch_log.train_universal_accuracy
+                    self._best_model_tracker.record_state(
+                        accuracy=accuracy,
+                        state_dict=self._get_module().state_dict(),
+                        epoch=epoch,
+                    )
+
                     if scheduler is not None:
                         scheduler.step()
+
+            if self._best_model_tracker.has_best_state:
+                if self.print_every is not None:
+                    print(
+                        f"\nReverting to best model parameters from epoch "
+                        f"{self._best_model_tracker.best_epoch} "
+                        f"(accuracy={self._best_model_tracker.best_accuracy:.4f})"
+                    )
+                self._get_module().load_state_dict(self._best_model_tracker.best_state_dict)
 
             if self._training_logger is not None:
                 val_accs = [log.val_universal_accuracy for log in self._epoch_logs if log.val_universal_accuracy is not None]
