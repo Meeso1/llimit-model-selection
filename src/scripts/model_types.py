@@ -33,6 +33,7 @@ class DnEmbeddingSpecification(ModelSpecBase):
     embedding_model_epochs: int = 10
     use_skip_connections: bool = False
     input_proj_dim: int = 64
+    base_model: str | None = None
     ranking_loss_type: PairwiseRankingLossType = "margin_ranking"
 
 

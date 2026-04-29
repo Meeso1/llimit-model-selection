@@ -14,6 +14,8 @@ class PreprocessedPromptPair:
     model_id_a: int
     model_id_b: int
     winner_label: int  # 0 for model_a wins, 1 for model_b wins
+    base_score_a: float = 0.0
+    base_score_b: float = 0.0
 
 
 @dataclass

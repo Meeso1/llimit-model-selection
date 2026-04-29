@@ -26,13 +26,14 @@ from src.utils.accuracy import compute_pairwise_accuracy
 from src.utils.data_split import ValidationSplit, split_dn_embedding_preprocessed_data
 from src.models.optimizers.optimizer_spec import OptimizerSpecification
 from src.models import model_loading
+from src.models.model_outputs_cache import ModelOutputsCache
 from src.utils.best_model_tracker import BestModelTracker
 from src.utils.ranking_loss import PairwiseRankingLossType, compute_pairwise_ranking_loss
 from src.analysis.training_diagnostics import EpochDiagnosticsAccumulator, split_tensor_with_grad
 from src.preprocessing.scoring_feature_extraction import get_feature_descriptions
 
 
-_DataLoaderType = DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]
+_DataLoaderType = DataLoader[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]
 
 
 class DnEmbeddingModel(ScoringModelBase):
@@ -49,6 +50,7 @@ class DnEmbeddingModel(ScoringModelBase):
         load_embedding_model_from: str | None = None,
         min_model_comparisons: int = 20,
         embedding_model_epochs: int = 10,
+        base_model_name: str | None = None,
         run_name: str | None = None,
         print_every: int | None = None,
         seed: int = 42,
@@ -76,6 +78,9 @@ class DnEmbeddingModel(ScoringModelBase):
             embedding_model_name=embedding_model_name,
             min_model_comparisons=min_model_comparisons,
         )
+        
+        self._base_model_name: str | None = base_model_name
+        self._model_outputs_cache: ModelOutputsCache | None = None
         
         self._embedding_model_source: str | None = load_embedding_model_from
         self._prompt_embedding_dim: int | None = None
@@ -141,6 +146,7 @@ class DnEmbeddingModel(ScoringModelBase):
             "min_model_comparisons": self.min_model_comparisons,
             "embedding_model_epochs": self.embedding_model_epochs,
             "ranking_loss_type": self.ranking_loss_type,
+            "base_model": self._base_model_name,
         }
 
     def train(
@@ -152,6 +158,9 @@ class DnEmbeddingModel(ScoringModelBase):
     ) -> None:
         with Timer("train", verbosity="start+end") as train_timer:
             self.last_timer = train_timer
+            
+            with Timer("load_base_model", verbosity="start+end", parent=train_timer):
+                self._load_base_model()
             
             with Timer("init_or_load_embedding_model", verbosity="start+end", parent=train_timer):
                 if self.embedding_model is None:
@@ -190,7 +199,21 @@ class DnEmbeddingModel(ScoringModelBase):
                     prompt_features_dim=encoded_prompts.prompt_features_dim,
                 )
             
+            with Timer("cache_base_model_predictions", verbosity="start+end", parent=train_timer):
+                if self._model_outputs_cache is not None:
+                    self._model_outputs_cache.compute_and_cache(
+                        entries=[data.entries[i] for i in encoded_prompts.filtered_indexes],
+                        indexes=encoded_prompts.filtered_indexes,
+                        timer=train_timer,
+                    )
+            
             with Timer("prepare_preprocessed_data", verbosity="start+end", parent=train_timer):
+                if self._model_outputs_cache is not None:
+                    base_scores_a, base_scores_b = self._model_outputs_cache.get_base_scores(encoded_prompts.filtered_indexes)
+                else:
+                    base_scores_a = [0.0] * len(encoded_prompts.pairs)
+                    base_scores_b = [0.0] * len(encoded_prompts.pairs)
+                
                 preprocessed_pairs = [
                     PreprocessedPromptPair(
                         prompt_embedding=pair.prompt_embedding,
@@ -200,8 +223,10 @@ class DnEmbeddingModel(ScoringModelBase):
                         model_id_a=pair.model_id_a,
                         model_id_b=pair.model_id_b,
                         winner_label=pair.winner_label,
+                        base_score_a=base_a,
+                        base_score_b=base_b,
                     )
-                    for pair in encoded_prompts.pairs
+                    for pair, base_a, base_b in zip(encoded_prompts.pairs, base_scores_a, base_scores_b)
                 ]
                 preprocessed_data = PreprocessedTrainingData(
                     pairs=preprocessed_pairs,
@@ -286,6 +311,11 @@ class DnEmbeddingModel(ScoringModelBase):
         
         with Timer("predict", verbosity="start+end") as predict_timer:
             self.last_timer = predict_timer
+            
+            with Timer("predict_base_model", verbosity="start+end", parent=predict_timer):
+                base_result = self._model_outputs_cache.predict(X, batch_size=batch_size) \
+                    if self._model_outputs_cache is not None else None
+            
             with Timer("preprocess_input", verbosity="start+end", parent=predict_timer):
                 encoded_prompts = self.preprocessor.preprocess_for_inference(
                     prompts=X.prompts,
@@ -329,6 +359,12 @@ class DnEmbeddingModel(ScoringModelBase):
                     
                     all_scores = torch.cat(model_scores)  # [n_prompts]
                     scores_dict[model_name] = all_scores.cpu().numpy()
+            
+            if base_result is not None:
+                scores_dict = {
+                    model_name: scores + base_result.scores.get(model_name, np.zeros_like(scores))
+                    for model_name, scores in scores_dict.items()
+                }
             
             return PromptRoutingOutput(_scores=scores_dict)
 
@@ -375,6 +411,8 @@ class DnEmbeddingModel(ScoringModelBase):
             "embedding_model_state_dict": self.embedding_model.get_state_dict(),
             "seed": self.seed,
             "ranking_loss_type": self.ranking_loss_type,
+            "base_model_name": self._base_model_name,
+            "base_model_state_dict": self._model_outputs_cache.model.get_state_dict() if self._model_outputs_cache is not None else None,
         }
 
     @classmethod
@@ -415,6 +453,7 @@ class DnEmbeddingModel(ScoringModelBase):
                 embedding_spec=embedding_spec,
                 min_model_comparisons=state_dict["min_model_comparisons"],
                 embedding_model_epochs=state_dict["embedding_model_epochs"],
+                base_model_name=state_dict.get("base_model_name", None),
                 print_every=state_dict["print_every"],
                 seed=state_dict["seed"],
                 ranking_loss_type=state_dict.get("ranking_loss_type", "margin_ranking"),
@@ -435,7 +474,34 @@ class DnEmbeddingModel(ScoringModelBase):
         model._scheduler_state = state_dict.get("scheduler_state")
         model._epochs_completed = state_dict.get("epochs_completed", 0)
         
+        if model._base_model_name is not None and state_dict.get("base_model_state_dict") is not None:
+            model_type, _ = model._base_model_name.split("/", 1)
+            base_model = model_loading.load_scoring_model_from_state_dict(model_type, state_dict["base_model_state_dict"])
+            model._model_outputs_cache = ModelOutputsCache(base_model, quiet=model.print_every is None)
+        
         return model
+
+    def _load_base_model(self) -> None:
+        """Load the base model from the specification string."""
+        if self._base_model_name is None or self._model_outputs_cache is not None:
+            return
+        
+        if "/" not in self._base_model_name:
+            raise ValueError("Base model must be of the form 'model_type/model_name'")
+        
+        model_type, model_name = self._base_model_name.split("/", 1)
+        
+        if self.print_every is not None:
+            print(f"Loading base model: {self._base_model_name}")
+        
+        loaded_model = model_loading.load_scoring_model(model_type, model_name)
+        self._model_outputs_cache = ModelOutputsCache(
+            model=loaded_model,
+            quiet=self.print_every is None,
+        )
+        
+        if self.print_every is not None:
+            print("Base model loaded")
 
     def _prepare_dataloader(
         self, 
@@ -466,6 +532,9 @@ class DnEmbeddingModel(ScoringModelBase):
         model_ids_b_list = []  # [n_pairs]
         labels_list = []  # [n_pairs] - 1 if a wins, -1 if b wins
         
+        base_scores_a_list = []  # [n_pairs]
+        base_scores_b_list = []  # [n_pairs]
+        
         for pair in preprocessed_data.pairs:
             prompt_embeddings_a_list.append(torch.from_numpy(pair.prompt_embedding))
             prompt_embeddings_b_list.append(torch.from_numpy(pair.prompt_embedding))
@@ -475,6 +544,8 @@ class DnEmbeddingModel(ScoringModelBase):
             model_embeddings_b_list.append(torch.from_numpy(pair.model_embedding_b))
             model_ids_a_list.append(pair.model_id_a)
             model_ids_b_list.append(pair.model_id_b)
+            base_scores_a_list.append(pair.base_score_a)
+            base_scores_b_list.append(pair.base_score_b)
             
             # label: 1 if model_a should be ranked higher, -1 if model_b should be ranked higher
             labels_list.append(1.0 if pair.winner_label == 0 else -1.0)
@@ -488,6 +559,8 @@ class DnEmbeddingModel(ScoringModelBase):
         labels = torch.tensor(labels_list, dtype=torch.float32)  # [n_pairs]
         model_ids_a = torch.tensor(model_ids_a_list, dtype=torch.long)  # [n_pairs]
         model_ids_b = torch.tensor(model_ids_b_list, dtype=torch.long)  # [n_pairs]
+        base_scores_a = torch.tensor(base_scores_a_list, dtype=torch.float32)  # [n_pairs]
+        base_scores_b = torch.tensor(base_scores_b_list, dtype=torch.float32)  # [n_pairs]
         
         dataset = TensorDataset(
             prompt_embeddings_a,
@@ -499,6 +572,8 @@ class DnEmbeddingModel(ScoringModelBase):
             labels,
             model_ids_a,
             model_ids_b,
+            base_scores_a,
+            base_scores_b,
         )
         
         # Apply weighted sampling if balancing is enabled
@@ -594,7 +669,7 @@ class DnEmbeddingModel(ScoringModelBase):
             numeric_descs, bool_descs = get_feature_descriptions()
             prompt_feature_names = [d.name for d in numeric_descs] + [d.name for d in bool_descs]
 
-            for batch_emb_a, batch_features_a, batch_model_emb_a, batch_emb_b, batch_features_b, batch_model_emb_b, batch_labels, batch_model_ids_a, batch_model_ids_b in dataloader:
+            for batch_emb_a, batch_features_a, batch_model_emb_a, batch_emb_b, batch_features_b, batch_model_emb_b, batch_labels, batch_model_ids_a, batch_model_ids_b, batch_base_scores_a, batch_base_scores_b in dataloader:
                 batch_emb_a: torch.Tensor = batch_emb_a.to(self.device).requires_grad_(True)  # [batch_size, prompt_embedding_dim]
                 batch_features_a: torch.Tensor = batch_features_a.to(self.device).requires_grad_(True)  # [batch_size, prompt_features_dim]
                 batch_model_emb_a: torch.Tensor = batch_model_emb_a.to(self.device).requires_grad_(True)  # [batch_size, model_embedding_dim]
@@ -604,6 +679,8 @@ class DnEmbeddingModel(ScoringModelBase):
                 batch_labels: torch.Tensor = batch_labels.to(self.device)  # [batch_size]
                 batch_model_ids_a: torch.Tensor = batch_model_ids_a.to(self.device)  # [batch_size]
                 batch_model_ids_b: torch.Tensor = batch_model_ids_b.to(self.device)  # [batch_size]
+                batch_base_scores_a: torch.Tensor = batch_base_scores_a.to(self.device)  # [batch_size]
+                batch_base_scores_b: torch.Tensor = batch_base_scores_b.to(self.device)  # [batch_size]
 
                 total_samples += len(batch_emb_a)
 
@@ -622,12 +699,12 @@ class DnEmbeddingModel(ScoringModelBase):
                     batch_emb_a,
                     batch_features_a,
                     batch_model_emb_a,
-                )  # [batch_size]
+                ) + batch_base_scores_a  # [batch_size]
                 scores_b = self.network(
                     batch_emb_b,
                     batch_features_b,
                     batch_model_emb_b,
-                )  # [batch_size]
+                ) + batch_base_scores_b  # [batch_size]
 
                 loss: torch.Tensor = compute_pairwise_ranking_loss(
                     self.ranking_loss_type, scores_a, scores_b, batch_labels, margin=0.1
@@ -699,7 +776,7 @@ class DnEmbeddingModel(ScoringModelBase):
         total_accuracy = 0.0
         n_batches = 0
 
-        for batch_emb_a, batch_features_a, batch_model_emb_a, batch_emb_b, batch_features_b, batch_model_emb_b, batch_labels, _, _ in val_dataloader:
+        for batch_emb_a, batch_features_a, batch_model_emb_a, batch_emb_b, batch_features_b, batch_model_emb_b, batch_labels, _, _, batch_base_scores_a, batch_base_scores_b in val_dataloader:
             batch_emb_a: torch.Tensor = batch_emb_a.to(self.device)  # [batch_size, embedding_dim]
             batch_features_a: torch.Tensor = batch_features_a.to(self.device)  # [batch_size, prompt_features_dim]
             batch_model_emb_a: torch.Tensor = batch_model_emb_a.to(self.device)  # [batch_size, model_embedding_dim]
@@ -707,18 +784,20 @@ class DnEmbeddingModel(ScoringModelBase):
             batch_features_b: torch.Tensor = batch_features_b.to(self.device)  # [batch_size, prompt_features_dim]
             batch_model_emb_b: torch.Tensor = batch_model_emb_b.to(self.device)  # [batch_size, model_embedding_dim]
             batch_labels: torch.Tensor = batch_labels.to(self.device)  # [batch_size]
+            batch_base_scores_a: torch.Tensor = batch_base_scores_a.to(self.device)  # [batch_size]
+            batch_base_scores_b: torch.Tensor = batch_base_scores_b.to(self.device)  # [batch_size]
 
             with torch.no_grad():
                 scores_a = self.network(
                     batch_emb_a,
                     batch_features_a,
                     batch_model_emb_a,
-                )  # [batch_size]
+                ) + batch_base_scores_a  # [batch_size]
                 scores_b = self.network(
                     batch_emb_b,
                     batch_features_b,
                     batch_model_emb_b,
-                )  # [batch_size]
+                ) + batch_base_scores_b  # [batch_size]
 
                 loss: torch.Tensor = compute_pairwise_ranking_loss(
                     self.ranking_loss_type, scores_a, scores_b, batch_labels, margin=0.1
@@ -830,7 +909,7 @@ class DnEmbeddingModel(ScoringModelBase):
                 for (
                     prompt_emb_a, prompt_feat_a, model_emb_a,
                     prompt_emb_b, prompt_feat_b, model_emb_b,
-                    labels, _, _,
+                    labels, _, _, base_scores_a, base_scores_b,
                 ) in dataloader:
                     prompt_emb_a = prompt_emb_a.to(device)   # [batch, prompt_emb_dim]
                     prompt_feat_a = prompt_feat_a.to(device)  # [batch, prompt_feat_dim]
@@ -839,14 +918,16 @@ class DnEmbeddingModel(ScoringModelBase):
                     prompt_feat_b = prompt_feat_b.to(device)  # [batch, prompt_feat_dim]
                     model_emb_b = model_emb_b.to(device)      # [batch, model_emb_dim]
                     labels = labels.to(device)                 # [batch]
+                    base_scores_a = base_scores_a.to(device)  # [batch]
+                    base_scores_b = base_scores_b.to(device)  # [batch]
 
                     if modify_prompt is not None:
                         prompt_emb_a, prompt_feat_a, prompt_emb_b, prompt_feat_b = modify_prompt(
                             prompt_emb_a, prompt_feat_a, prompt_emb_b, prompt_feat_b,
                         )
 
-                    score_a = network(prompt_emb_a, prompt_feat_a, model_emb_a)  # [batch]
-                    score_b = network(prompt_emb_b, prompt_feat_b, model_emb_b)  # [batch]
+                    score_a = network(prompt_emb_a, prompt_feat_a, model_emb_a) + base_scores_a  # [batch]
+                    score_b = network(prompt_emb_b, prompt_feat_b, model_emb_b) + base_scores_b  # [batch]
 
                     batch_size = labels.shape[0]
                     total_correct += compute_pairwise_accuracy(score_a, score_b, labels) * batch_size
@@ -871,7 +952,7 @@ class DnEmbeddingModel(ScoringModelBase):
             total = 0
 
             with torch.no_grad():
-                for (prompt_emb_a, prompt_feat_a, _, _, _, _, _, _, _) in dataloader:
+                for (prompt_emb_a, prompt_feat_a, _, _, _, _, _, _, _, _, _) in dataloader:
                     prompt_emb_a = prompt_emb_a.to(device)   # [batch, prompt_emb_dim]
                     prompt_feat_a = prompt_feat_a.to(device)  # [batch, prompt_feat_dim]
                     if sum_emb is None:

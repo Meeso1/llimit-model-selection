@@ -53,9 +53,10 @@ Training applies `clip_grad_norm_(max_norm=1.0)` after each backward pass to pre
 | `optimizer_spec` | `OptimizerSpecification` | AdamW lr=0.001 | Optimizer and scheduler config |
 | `balance_model_samples` | `bool` | `True` | Weighted sampling to balance model representation |
 | `embedding_model_name` | `str` | `"all-MiniLM-L6-v2"` | Sentence transformer for prompt embedding |
-| `embedding_spec` | `EmbeddingSpec \| None` | — | Spec to create the model embedding model |
+| `embedding_spec` | `EmbeddingSpec \| None` | `None` | Spec to create the model embedding model |
 | `min_model_comparisons` | `int` | `20` | Min comparisons required to include a model |
 | `embedding_model_epochs` | `int` | `10` | Epochs to train the embedding model |
+| `base_model_name` | `str \| None` | `None` | Base model to use as starting point, in `"model_type/model_name"` format |
 | `seed` | `int` | `42` | Random seed |
 | `ranking_loss_type` | `"margin_ranking"` \| `"bradley_terry"` | `"margin_ranking"` | Pairwise ranking loss: margin hinge or Bradley-Terry (sigmoid cross-entropy) |
 
@@ -81,6 +82,15 @@ The pairwise ranking loss is configurable via `ranking_loss_type`:
 - **`bradley_terry`**: Bradley-Terry (sigmoid cross-entropy) on the score difference — models P(winner) = sigmoid(score_winner - score_loser), never saturates so gradients keep flowing.
 
 Each training sample is a `(prompt, model_a, model_b, winner)` comparison. The network scores both `(prompt, model_a)` and `(prompt, model_b)`; the chosen loss compares the two scores.
+
+## Base Model
+
+When `base_model_name` is set (e.g. `"gradient_boosting/gradient-boosting-scoring"`), the DN model learns the **residual** on top of the base model's predictions:
+
+- **Training**: The base model's scores for each training pair are cached upfront. During each forward pass, the effective score is `base_score + dn_score`; the ranking loss is applied on effective scores.
+- **Inference**: `final_score = base_score + tanh(dn_score)`, consistent with the existing tanh-clipped inference output.
+
+The base model's state is persisted in the saved model file, so it is fully self-contained when loading. In the JSON spec, set `"base_model": "model_type/model_name"` (same format as `GradientBoostingSpecification`).
 
 ## Embedding Model
 

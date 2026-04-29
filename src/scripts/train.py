@@ -161,6 +161,7 @@ def _create_starting_dn_embedding(training_spec: TrainingSpecification) -> DnEmb
         load_embedding_model_from=model_spec.load_embedding_model_from,
         min_model_comparisons=model_spec.min_model_comparisons,
         embedding_model_epochs=model_spec.embedding_model_epochs,
+        base_model_name=model_spec.base_model,
         run_name=training_spec.log.run_name,
         print_every=training_spec.log.print_every,
         seed=training_spec.data.seed,
