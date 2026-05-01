@@ -60,11 +60,11 @@ def plot_modality_norms(axes: plt.Axes, log: TrainingLog) -> None:
     _plot_loss_components(
         axes,
         {
-            'Prompt emb proj': _get_metric(log, 'prompt_emb_proj_norm'),
-            'Feat proj': _get_metric(log, 'feat_proj_norm'),
-            'Model proj': _get_metric(log, 'model_proj_norm'),
+            'Prompt emb. proj.': _get_metric(log, 'prompt_emb_proj_norm'),
+            'Features proj.': _get_metric(log, 'feat_proj_norm'),
+            'Model emb. proj.': _get_metric(log, 'model_proj_norm'),
         },
-        'Modality Projected Norms (Training)',
+        'Input Projection Norms',
         normalize=False,
     )
 
@@ -74,12 +74,12 @@ def plot_modality_variances(axes: plt.Axes, log: TrainingLog) -> None:
     _plot_loss_components(
         axes,
         {
-            'Prompt emb proj': _get_metric(log, 'prompt_emb_proj_variance'),
-            'Feat proj': _get_metric(log, 'feat_proj_variance'),
-            'Model proj': _get_metric(log, 'model_proj_variance'),
+            'Prompt emb. proj.': _get_metric(log, 'prompt_emb_proj_variance'),
+            'Features proj.': _get_metric(log, 'feat_proj_variance'),
+            'Model emb. proj.': _get_metric(log, 'model_proj_variance'),
             'Interaction': _get_metric(log, 'interaction_variance'),
         },
-        'Modality / Interaction Variance (Training)',
+        'Input Projection Variance',
         normalize=False,
     )
 
@@ -96,7 +96,7 @@ def plot_gradient_norms(axes: plt.Axes, log: TrainingLog) -> None:
             'Projection': _get_metric(log, 'projection_grad_norm'),
             'Scoring head': _get_metric(log, 'scoring_head_grad_norm'),
         },
-        'Gradient Norms by Component (Training)',
+        'Gradient Norms by Component',
         normalize=True,
     )
 
@@ -109,7 +109,7 @@ def plot_interaction_norm(axes: plt.Axes, log: TrainingLog) -> None:
     _plot_positive_metric(
         axes,
         _get_metric(log, 'interaction_norm'),
-        'Interaction Norm (Training)',
+        'Interaction Norm',
         ylabel='log(norm)',
         show_min_line=False,
     )
@@ -132,6 +132,6 @@ def plot_grad_attr_embeddings(axes: plt.Axes, log: TrainingLog) -> None:
             'Prompt embedding': _get_metric(log, 'grad_attr_prompt_embedding'),
             'Model embedding': _get_metric(log, 'grad_attr_model_embedding'),
         },
-        'Gradient attribution — embeddings (Training)',
+        'Gradient attribution',
         normalize=False,
     )

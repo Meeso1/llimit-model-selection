@@ -76,11 +76,11 @@ def plot_gradient_norms(axes: plt.Axes, log: TrainingLog) -> None:
         axes,
         {
             'Trunk': _get_metric(log, 'trunk_grad_norm'),
-            'Prompt emb proj': _get_metric(log, 'prompt_emb_proj_grad_norm'),
-            'Prompt feat proj': _get_metric(log, 'prompt_feat_proj_grad_norm'),
-            'Model emb proj': _get_metric(log, 'model_emb_proj_grad_norm'),
-            'Model id emb': _get_metric(log, 'model_id_embedding_grad_norm'),
+            'Prompt emb. proj.': _get_metric(log, 'prompt_emb_proj_grad_norm'),
+            'Prompt feat. proj.': _get_metric(log, 'prompt_feat_proj_grad_norm'),
+            'Model emb. proj.': _get_metric(log, 'model_emb_proj_grad_norm'),
+            'Model ID emb.': _get_metric(log, 'model_id_embedding_grad_norm'),
         },
-        'Gradient Norms by Component (Training)',
+        'Gradient Norms by Component',
         normalize=True,
     )

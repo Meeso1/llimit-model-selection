@@ -57,11 +57,11 @@ def plot_modality_norms(axes: plt.Axes, log: TrainingLog) -> None:
     _plot_loss_components(
         axes,
         {
-            'Prompt emb proj': _get_metric(log, 'prompt_emb_proj_norm'),
-            'Prompt feat proj': _get_metric(log, 'prompt_feat_proj_norm'),
-            'Model emb proj': _get_metric(log, 'model_emb_proj_norm'),
+            'Prompt emb. proj.': _get_metric(log, 'prompt_emb_proj_norm'),
+            'Prompt feat. proj.': _get_metric(log, 'prompt_feat_proj_norm'),
+            'Model emb. proj.': _get_metric(log, 'model_emb_proj_norm'),
         },
-        'Input Projection Norms (Training)',
+        'Input Projection Norms',
         normalize=False,
     )
 
@@ -71,11 +71,11 @@ def plot_modality_variances(axes: plt.Axes, log: TrainingLog) -> None:
     _plot_loss_components(
         axes,
         {
-            'Prompt emb proj': _get_metric(log, 'prompt_emb_proj_variance'),
-            'Prompt feat proj': _get_metric(log, 'prompt_feat_proj_variance'),
-            'Model emb proj': _get_metric(log, 'model_emb_proj_variance'),
+            'Prompt emb. proj.': _get_metric(log, 'prompt_emb_proj_variance'),
+            'Prompt feat. proj.': _get_metric(log, 'prompt_feat_proj_variance'),
+            'Model emb. proj.': _get_metric(log, 'model_emb_proj_variance'),
         },
-        'Input Projection Variance (Training)',
+        'Input Projection Variance',
         normalize=False,
     )
 
@@ -86,11 +86,11 @@ def plot_gradient_norms(axes: plt.Axes, log: TrainingLog) -> None:
         axes,
         {
             'Trunk': _get_metric(log, 'trunk_grad_norm'),
-            'Prompt emb proj': _get_metric(log, 'prompt_emb_proj_grad_norm'),
-            'Prompt feat proj': _get_metric(log, 'prompt_feat_proj_grad_norm'),
-            'Model emb proj': _get_metric(log, 'model_emb_proj_grad_norm'),
+            'Prompt emb. proj.': _get_metric(log, 'prompt_emb_proj_grad_norm'),
+            'Prompt feat. proj.': _get_metric(log, 'prompt_feat_proj_grad_norm'),
+            'Model emb. proj.': _get_metric(log, 'model_emb_proj_grad_norm'),
         },
-        'Gradient Norms by Component (Training)',
+        'Gradient Norms by Component',
         normalize=True,
     )
 
@@ -113,7 +113,7 @@ def plot_grad_attr_embeddings(axes: plt.Axes, log: TrainingLog) -> None:
             'Prompt embedding': _get_metric(log, 'grad_attr_prompt_embedding'),
             'Model embedding': _get_metric(log, 'grad_attr_model_embedding'),
         },
-        'Gradient attribution — embeddings (Training)',
+        'Gradient attribution',
         normalize=False,
     )
 
