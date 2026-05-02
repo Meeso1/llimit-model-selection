@@ -1,0 +1,37 @@
+{
+  "model": {
+    "name": "dn-embedding-length-prediction-chatbot-arena-lr-0.001",
+    "start_state": null,
+    "spec": {
+      "model_type": "dn_embedding_length_prediction",
+      "hidden_dims": [1024, 1024, 1024, 1024, 512, 512, 512, 256, 128],
+      "dropout": 0.3,
+      "input_proj_dim": 64,
+      "optimizer": {
+        "optimizer_type": "muon",
+        "learning_rate": 0.001,
+        "lr_decay_gamma": 0.995,
+        "momentum": 0.95,
+        "nesterov": true,
+        "adamw_lr": 4e-5,
+        "weight_decay": 0.001
+      },
+      "embedding_model_name": "BAAI/bge-base-en-v1.5",
+      "load_embedding_model_from": "gradient_boosting/gradient-boosting-scoring-chatbot-arena",
+      "min_model_comparisons": 1000,
+      "embedding_model_epochs": 100,
+      "model_id_embedding_dim": 64
+    }
+  },
+  "data": {
+    "validation_split": 0.2,
+    "seed": 42,
+    "dataset": "chatbot_arena"
+  },
+  "log": {
+    "run_name": "dn-embedding-length-prediction-chatbot-arena-lr-0.001",
+    "print_every": 1
+  },
+  "epochs": 200,
+  "batch_size": 512
+}
