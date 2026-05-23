@@ -42,7 +42,7 @@ class LoggingSpecification(BaseModel):
     """Configuration for logging and console output during training."""
     run_name: str = Field(description="Name for this training run (will be used for logging)")
     print_every: int = Field(description="Print progress every N epochs")
-    # TODO: Allow to specify timing info logging here + improve how it's logged
+    # TODO: Allow to log timing info
 
 
 class TrainingSpecification(BaseModel):

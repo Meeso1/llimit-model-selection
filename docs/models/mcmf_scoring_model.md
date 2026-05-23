@@ -119,7 +119,6 @@ from src.models.mcmf_scoring_model import McmfScoringModel
 model = McmfScoringModel(
     min_model_occurrences=1000,  # Minimum times a model must appear
     print_summary=True,  # Print summary after computing scores
-    wandb_details=None,
 )
 ```
 
@@ -172,8 +171,6 @@ for model_name, score in sorted(all_scores.items(), key=lambda x: x[1], reverse=
 - `print_summary`: Whether to print a summary after computing scores (default: True)
   - Displays number of models, comparisons, accuracy, and flow metrics
   
-- `wandb_details`: Weights & Biases configuration (default: None)
-  - Optional integration for experiment tracking
 
 ### Train method
 - `data`: TrainingData with pairwise comparisons

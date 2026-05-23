@@ -24,12 +24,6 @@ The training specification is a JSON file with the following structure:
 
 ```json
 {
-  "wandb": {
-    "project": "project-name",
-    "experiment_name": "experiment-name",
-    "config_name": "config-name",
-    "artifact_name": "artifact-name"
-  },
   "model": {
     "name": "model-name",
     "start_state": null,
@@ -51,10 +45,11 @@ The training specification is a JSON file with the following structure:
   "data": {
     "dataset": "lmarena_human_preference",
     "max_samples": 10000,
-    "valiation_split": 0.2,
+    "validation_split": 0.2,
     "seed": 42
   },
   "log": {
+    "run_name": "my-experiment",
     "print_every": 10
   },
   "epochs": 10,
@@ -63,12 +58,6 @@ The training specification is a JSON file with the following structure:
 ```
 
 #### Field Descriptions
-
-**wandb**: Weights & Biases configuration
-- `project`: W&B project name
-- `experiment_name`: Name for this experiment run
-- `config_name`: Configuration name
-- `artifact_name`: Name for model artifact in W&B
 
 **model**: Model configuration
 - `name`: Name to save the model under (required)
@@ -125,6 +114,7 @@ The training specification is a JSON file with the following structure:
 - `seed`: Random seed for reproducibility
 
 **log**: Logging configuration
+- `run_name`: Name for this training run (used for local training log files; required)
 - `print_every`: Print training progress every N epochs
 
 **epochs**: Number of training epochs
@@ -186,12 +176,6 @@ For `transformer_embedding` models, the `finetuning_spec` field specifies how to
 
 ```json
 {
-  "wandb": {
-    "project": "llm-routing",
-    "experiment_name": "dense-net-v1",
-    "config_name": "default",
-    "artifact_name": "dense-net-model"
-  },
   "model": {
     "name": "dense_network_v1",
     "start_state": null,
@@ -213,10 +197,11 @@ For `transformer_embedding` models, the `finetuning_spec` field specifies how to
   "data": {
     "dataset": "lmarena_human_preference",
     "max_samples": 50000,
-    "valiation_split": 0.15,
+    "validation_split": 0.15,
     "seed": 42
   },
   "log": {
+    "run_name": "dense-net-v1",
     "print_every": 5
   },
   "epochs": 20,
@@ -284,6 +269,7 @@ For `transformer_embedding` models, the `finetuning_spec` field specifies how to
     }
   },
   "log": {
+    "run_name": "transformer-embedding-lora",
     "print_every": 1
   }
 }

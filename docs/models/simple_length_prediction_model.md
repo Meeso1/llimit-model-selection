@@ -138,7 +138,7 @@ Per-model mean (no features):
     "validation_split": 0.1,
     "seed": 42
   },
-  "log": { "run_name": null, "print_every": 1 },
+  "log": { "run_name": "simple-lp-mean", "print_every": 1 },
   "epochs": 1,
   "batch_size": 32
 }
@@ -163,7 +163,7 @@ Per-model regression from word count:
     "validation_split": 0.1,
     "seed": 42
   },
-  "log": { "run_name": null, "print_every": 1 },
+  "log": { "run_name": "simple-lp-word-count", "print_every": 1 },
   "epochs": 1,
   "batch_size": 32
 }

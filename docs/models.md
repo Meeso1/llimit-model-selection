@@ -4,15 +4,9 @@ This directory contains documentation for different model implementations.
 
 ## Implemented Models
 
-### Dense Network Model
-- **File**: [dense_network_model.md](models/dense_network_model.md)
-- **Type**: Feedforward neural network with learned model embeddings
-- **Input**: Fixed-size prompt embeddings + 45 prompt features + Model IDs
-- **Output**: Scores in [-1, 1] for each (prompt, model) combination
-- **Training**: Margin ranking loss on pairwise comparisons
-- **Inference**: Can score any number of models simultaneously
+### Prompt-invariant
 
-### Simple Scoring Model
+#### Simple Scoring Model
 - **File**: [simple_scoring_model.md](models/simple_scoring_model.md)
 - **Type**: Simple baseline with one learnable score per model (prompt-agnostic)
 - **Input**: Model IDs only (ignores prompts)
@@ -20,7 +14,7 @@ This directory contains documentation for different model implementations.
 - **Training**: Neural network with margin ranking loss + tie/both_bad penalties
 - **Inference**: Very fast (lookup table)
 
-### ELO Scoring Model
+#### ELO Scoring Model
 - **File**: [elo_scoring_model.md](models/elo_scoring_model.md)
 - **Type**: ELO rating system baseline (prompt-agnostic)
 - **Input**: Model IDs only (ignores prompts)
@@ -28,9 +22,45 @@ This directory contains documentation for different model implementations.
 - **Training**: Iterative ELO rating updates (no neural network)
 - **Inference**: Very fast (lookup table)
 
-### TODO: Add missing models
+#### Greedy Ranking Model
+- **File**: [greedy_ranking_model.md](models/greedy_ranking_model.md)
+- **Type**: Non-iterative ranking via greedy net-wins algorithm (prompt-agnostic)
+- **Input**: Model IDs only
+- **Output**: Rank-derived scores
+- **Training**: Single-pass (non-iterative)
 
-### Transformer Embedding Model
+#### MCMF Scoring Model (L1 criterion minimization)
+- **File**: [mcmf_scoring_model.md](models/mcmf_scoring_model.md)
+- **Type**: Min-Cost-Max-Flow graph optimization (prompt-agnostic)
+- **Input**: Model IDs only
+- **Output**: Flow-derived scores
+- **Training**: Single-pass optimization (non-iterative)
+
+#### Least Squares Scoring Model (L2 criterion minimization)
+- **File**: [least_squares_scoring_model.md](models/least_squares_scoring_model.md)
+- **Type**: Closed-form least-squares fitting of win-rate differences (prompt-agnostic)
+- **Input**: Model IDs only
+- **Output**: Scores minimizing squared error to pairwise win rates
+- **Training**: Single-pass (non-iterative)
+
+### Prompt-based
+
+#### DN Embedding Model
+- **File**: [dn_embedding_model.md](models/dn_embedding_model.md)
+- **Type**: Dense network with pre-trained model embeddings
+- **Input**: Prompt embeddings + 45 prompt features + Model embeddings
+- **Output**: Scores in [-1, 1] for each (prompt, model) combination
+- **Training**: Margin ranking or Bradley-Terry loss; optionally residual on a base model
+- **Inference**: Fast batched predictions
+
+#### Gradient Boosting Model
+- **File**: [gradient_boosting_model.md](models/gradient_boosting_model.md)
+- **Type**: XGBoost ensemble with learned model embeddings
+- **Input**: Prompt embeddings + 45 prompt features + Model embeddings
+- **Output**: Scores for each (prompt, model) combination
+- **Training**: Incremental tree boosting with configurable pairwise ranking loss
+
+#### Transformer Embedding Model
 - **File**: [transformer_embedding_model.md](models/transformer_embedding_model.md)
 - **Type**: Fine-tuned transformer with learned model embeddings
 - **Input**: Prompt text (tokenized) + 45 prompt features + Model embeddings
@@ -38,7 +68,7 @@ This directory contains documentation for different model implementations.
 - **Training**: Fine-tunes transformer with LoRA/QLoRA, margin ranking loss
 - **Inference**: Slower than frozen embeddings but potentially more accurate
 
-### Response Predictive Model
+#### Response Predictive Model
 - **File**: [response_predictive_model.md](models/response_predictive_model.md)
 - **Type**: Three-component model with explicit response prediction (experimental)
 - **Input**: Prompt embeddings + 45 prompt features + Model embeddings + (during training) Response embeddings + 32 response features
@@ -49,15 +79,26 @@ This directory contains documentation for different model implementations.
 
 ## Response Length Prediction
 
-In addition to scoring models, we also provide models for predicting response lengths.
+In addition to scoring models, we also provide models for predicting response lengths. See [length_prediction.md](length_prediction.md) for full details.
 
-### Dense Network Length Prediction Model
-- **File**: [length_prediction.md](length_prediction.md)
-- **Type**: Feedforward neural network for regression
-- **Input**: Prompt embeddings + 45 prompt features + Model embeddings (from scoring models)
+### Dense Network Length Prediction Model (`dn_embedding_length_prediction`)
+- **Type**: Residual feedforward network with input projection layers
+- **Input**: Prompt embeddings + 45 prompt features + Model embeddings + learned model ID embedding
 - **Output**: Predicted response length in tokens for each (prompt, model) combination
-- **Training**: Mean Squared Error (MSE) loss on actual response lengths
-- **Inference**: Fast batched predictions
+- **Training**: MSE loss on standardized log-lengths, learns residuals relative to per-model average
+
+### Gradient Boosting Length Prediction Model (`gb_length_prediction`)
+- **Type**: XGBoost ensemble for regression
+- **Input**: Configurable — any subset of prompt embeddings, prompt features, model embeddings, one-hot model ID
+- **Output**: Predicted response length in tokens for each (prompt, model) combination
+- **Training**: XGBoost with MSE objective on standardized log-length residuals; best-epoch tracking
+
+### Simple Length Prediction Model (`simple_length_prediction`)
+- **File**: [simple_length_prediction_model.md](models/simple_length_prediction_model.md)
+- **Type**: Per-model OLS linear regression (non-iterative baseline)
+- **Input**: Configurable subset of the 45 prompt features (or intercept-only)
+- **Output**: Predicted response length in tokens
+- **Training**: Single-pass closed-form OLS; no model embeddings required
 
 ## Embedding Model Reuse
 

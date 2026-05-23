@@ -10,7 +10,6 @@ def run_list_models(args: Any) -> None:
     list_models(list_checkpoints=list_checkpoints)
 
 
-# TODO: this prints model checkpoints separately, since they have '@[epoch]' suffix - improve
 def list_models(list_checkpoints: bool = False) -> None:
     all_model_names = Jars.models.object_names()
     timestamps_per_model = {

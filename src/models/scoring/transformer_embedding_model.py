@@ -137,7 +137,7 @@ class TransformerEmbeddingModel(ScoringModelBase):
         prompt_features_dim: int,
     ) -> None:
         self._prompt_features_dim = prompt_features_dim
-        self._tokenizer = AutoTokenizer.from_pretrained(self.transformer_model_name, use_fast=("deberta" not in self.transformer_model_name)) # TODO: Fix this - fast tokenizer fails for deberta models
+        self._tokenizer = AutoTokenizer.from_pretrained(self.transformer_model_name, use_fast=("deberta" not in self.transformer_model_name)) # TODO: Fast tokenizer fails for deberta models
         self._pooling_method = detect_pooling_method(self.transformer_model_name)
         
         if self.print_every is not None:

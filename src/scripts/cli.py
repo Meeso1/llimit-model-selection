@@ -10,7 +10,7 @@ def main():
     tr.add_argument("--spec-file", type=str, help="Path to JSON file containing training specification. If not provided, training specification is read from stdin.")
     tr.set_defaults(func=train.run_train)
 
-    # TODO: Maybe improve passing prompts to command
+    # TODO: Passing prompts to command like this might not be too user friendly
     inf = subparsers.add_parser("infer")
     inf.add_argument("--model", type=str, required=True, help="Type and name of the saved model to load (e.g. 'dense_network/model_name')")
     inf.add_argument("--models-to-score", type=str, nargs="+", required=True, help="List of model names to score")

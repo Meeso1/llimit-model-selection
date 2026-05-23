@@ -335,7 +335,7 @@ class TripletFrozenEncoderPreprocessor:
         
         return result
 
-    # TODO: Instead of doing that, call the model.encode() once with all texts
+    # TODO: Call model.encode() once with all texts instead of this, for efficiency
     def _embed_or_get_cached(self, text: str, model: SentenceTransformer, cache: dict[str, np.ndarray]) -> np.ndarray:
         if text in cache:
             return cache[text]

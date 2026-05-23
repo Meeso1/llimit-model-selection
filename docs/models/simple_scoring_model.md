@@ -108,7 +108,6 @@ model = SimpleScoringModel(
     print_every=1,
     tie_both_bad_epsilon=1e-2,  # Threshold for tie/both_bad score targets
     non_ranking_loss_coeff=0.01,  # Weight for tie/both_bad loss relative to ranking loss
-    wandb_details=None,
 )
 ```
 
@@ -159,7 +158,6 @@ for model_name, score in sorted(all_scores.items(), key=lambda x: x[1], reverse=
   - Controls the importance of tie/both_bad comparisons vs ranking comparisons
   - Lower values focus more on ranking accuracy
   - Higher values focus more on absolute score calibration
-- `wandb_details`: Weights & Biases configuration (default: None)
 
 ### Train method
 - `data`: TrainingData with pairwise comparisons

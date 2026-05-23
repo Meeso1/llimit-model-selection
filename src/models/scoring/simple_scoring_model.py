@@ -567,7 +567,6 @@ class SimpleScoringModel(ScoringModelBase):
         else:
             loss_components["tie_loss"] = 0.0
         
-        # TODO: This might be wrong - loss gets smaller with both_bad acc going to 0
         # For both_bad: both models should have negative scores
         if both_bad_mask.any():
             bad_scores_a = scores_a[both_bad_mask]  # [n_bad]

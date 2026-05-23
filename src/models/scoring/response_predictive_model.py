@@ -797,7 +797,7 @@ class ResponsePredictiveModel(ScoringModelBase):
                 score_consistency_loss: torch.Tensor = (
                     F.mse_loss(score_pred_a, score_real_a.detach())
                     + F.mse_loss(score_pred_b, score_real_b.detach())
-                ) # TODO: Does it make sense to have real scores detached?
+                )
 
                 # 9. Distribution-matching KL: symmetric KL between pred and real repr distributions
                 all_pred_reprs = torch.cat([pred_repr_a, pred_repr_b], dim=0)  # [2*batch, response_repr_dim]
